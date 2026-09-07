@@ -5,6 +5,7 @@
 import type { UserProfile } from "@/types/user";
 import { netease as neteaseApi } from "@/apis/netease";
 import type { QrLoginAdapter, QrLoginState } from "./platform";
+import { isAndroid, neteaseRestCall } from "@/services/bridge";
 
 interface LoginStatusBody {
   code?: number | string;
@@ -16,12 +17,30 @@ interface LoginStatusBody {
   account?: { id?: number };
 }
 
+/** login_qr_key 响应体 */
+interface QrKeyBody {
+  data?: { unikey?: string };
+  code?: number;
+}
+
+/** login_qr_check 响应体 */
+interface QrCheckBody {
+  code?: number;
+  cookie?: string;
+  nickname?: string;
+  avatarUrl?: string;
+}
+
 /**
  * 生成扫码登录二维码 key
+ * Android 端直接走 /api/netease/login_qr_key REST 路由，绕过 /api/apis/call RPC 包装，
+ * 确保 response body 中的 cookie 字段完整传递（参考 SPlayer-for-Android 实现）
  * @returns 二维码 key
  */
 export const qrKey = async (): Promise<string> => {
-  const body = await neteaseApi.login_qr_key({ timestamp: Date.now() });
+  const body = isAndroid
+    ? await neteaseRestCall<QrKeyBody>("login_qr_key", { timestamp: Date.now() })
+    : await neteaseApi.login_qr_key<QrKeyBody>({ timestamp: Date.now() });
   const unikey = body?.data?.unikey;
   if (!unikey) throw new Error("qr key missing");
   return unikey;
@@ -39,11 +58,14 @@ export interface QrCheckResult {
 /**
  * 轮询扫码状态
  * - 800 已过期 / 801 待扫码 / 802 待确认 / 803 已确认（含 cookie）
+ * Android 端直接走 /api/netease/login_qr_check REST 路由，确保 cookie 完整返回
  * @param key 二维码 key
  * @returns 扫码状态和结果
  */
 export const qrCheck = async (key: string): Promise<QrCheckResult> => {
-  const body = await neteaseApi.login_qr_check({ key, timestamp: Date.now() });
+  const body = isAndroid
+    ? await neteaseRestCall<QrCheckBody>("login_qr_check", { key, timestamp: Date.now() })
+    : await neteaseApi.login_qr_check<QrCheckBody>({ key, timestamp: Date.now() });
   const code = (body?.code ?? 801) as QrStatusCode;
   return {
     code,
@@ -77,6 +99,106 @@ export const neteaseQrLoginAdapter: QrLoginAdapter = {
             : "waiting";
     return { state, nickname: result.nickname, avatarUrl: result.avatarUrl };
   },
+};
+
+/** captcha/sent 响应体 */
+interface CaptchaSentBody {
+  code?: number;
+  data?: boolean;
+}
+
+/** login/cellphone 响应体 */
+interface LoginCellphoneBody {
+  code?: number;
+  cookie?: string;
+  profile?: { nickname?: string; avatarUrl?: string; userId?: number };
+}
+
+/** countries/code/list 国家列表条目 */
+export interface CountryEntry {
+  zh?: string;
+  en?: string;
+  code?: string;
+}
+export interface CountryGroup {
+  label: string;
+  countryList: CountryEntry[];
+}
+
+/** 发送短信验证码
+ * @param phone 手机号（不含区号）
+ * @param ctcode 国家代码，默认 86
+ */
+export const sendCaptcha = async (phone: string, ctcode = 86): Promise<boolean> => {
+  const body = isAndroid
+    ? await neteaseRestCall<CaptchaSentBody>("captcha_sent", {
+        phone,
+        ctcode,
+        timestamp: Date.now(),
+      })
+    : await neteaseApi.captcha_sent<CaptchaSentBody>({ phone, ctcode, timestamp: Date.now() });
+  return body?.code === 200;
+};
+
+/** 验证短信验证码
+ * @param phone 手机号
+ * @param captcha 验证码
+ * @param ctcode 国家代码
+ */
+export const verifyCaptcha = async (
+  phone: string,
+  captcha: string,
+  ctcode = 86,
+): Promise<boolean> => {
+  const body = isAndroid
+    ? await neteaseRestCall<{ code?: number }>("captcha_verify", {
+        phone,
+        captcha,
+        ctcode,
+        timestamp: Date.now(),
+      })
+    : await neteaseApi.captcha_verify<{ code?: number }>({
+        phone,
+        captcha,
+        ctcode,
+        timestamp: Date.now(),
+      });
+  return body?.code === 200;
+};
+
+/** 手机号 + 验证码登录
+ * @param phone 手机号
+ * @param captcha 验证码
+ * @param ctcode 国家代码
+ * @returns 登录结果，code 200 时 cookie 包含 MUSIC_U
+ */
+export const loginCellphone = async (
+  phone: string,
+  captcha: string,
+  ctcode = 86,
+): Promise<{ code: number; cookie?: string }> => {
+  const body = isAndroid
+    ? await neteaseRestCall<LoginCellphoneBody>("login_cellphone", {
+        phone,
+        captcha,
+        ctcode,
+        timestamp: Date.now(),
+      })
+    : await neteaseApi.login_cellphone<LoginCellphoneBody>({
+        phone,
+        captcha,
+        ctcode,
+        timestamp: Date.now(),
+      });
+  return { code: body?.code ?? 0, cookie: body?.cookie };
+};
+
+/** 获取国家区号列表（缓存到 localStorage） */
+export const fetchCountryList = async (): Promise<CountryGroup[]> => {
+  const body = isAndroid
+    ? await neteaseRestCall<{ data?: CountryGroup[] }>("countries_code_list")
+    : await neteaseApi.countries_code_list<{ data?: CountryGroup[] }>();
+  return body?.data ?? [];
 };
 
 /**

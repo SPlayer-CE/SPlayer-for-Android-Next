@@ -9,6 +9,7 @@ import IconLucideFileText from "~icons/lucide/file-text";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideDatabase from "~icons/lucide/database";
 import { useCacheStats } from "@/composables/useCacheStats";
+import bridge from "@/services/bridge";
 
 defineOptions({ inheritAttrs: false });
 
@@ -37,7 +38,7 @@ const requestClear = async (id: string): Promise<void> => {
   if (!confirmed) return;
   clearingId.value = id;
   try {
-    await window.api.cache.clear(id);
+    await bridge.cache.clear(id);
     await refresh();
   } finally {
     clearingId.value = null;
@@ -53,7 +54,7 @@ const requestClearAll = async (): Promise<void> => {
   if (!confirmed) return;
   clearingKind.value = "db";
   try {
-    await window.api.cache.clearAllByKind("db");
+    await bridge.cache.clearAllByKind("db");
     await refresh();
   } finally {
     clearingKind.value = null;

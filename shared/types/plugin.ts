@@ -323,7 +323,10 @@ export interface HostRequestOptions {
 
 export interface HostRequestResult {
   status: number;
+  statusText?: string;
   headers: Record<string, string>;
+  url?: string;
+  redirected?: boolean;
   body: unknown;
 }
 

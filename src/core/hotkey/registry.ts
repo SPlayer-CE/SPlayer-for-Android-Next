@@ -5,6 +5,7 @@
  */
 
 import type { HotkeyActionId } from "@shared/types/hotkey";
+import bridge from "@/services/bridge";
 import { useStatusStore } from "@/stores/status";
 import * as player from "@/core/player";
 
@@ -56,17 +57,17 @@ export const buildRegistry = (): void => {
   handlers.set("player.cycleRepeat", () => player.cycleRepeatMode());
   // 随机模式
   handlers.set("player.toggleShuffle", () => player.toggleShuffleMode());
-  // 桌面歌词
+  // 桌面歌词（Android 端 bridge 返回 false，等效 no-op）
   handlers.set("window.toggleDesktopLyric", () => {
-    window.api.window.toggleDesktopLyric().catch(() => {});
+    bridge.window.toggleDesktopLyric().catch(() => {});
   });
   // 灵动岛
   handlers.set("window.toggleDynamicIsland", () => {
-    window.api.window.toggleDynamicIsland().catch(() => {});
+    bridge.window.toggleDynamicIsland().catch(() => {});
   });
   // 任务栏歌词
   handlers.set("window.toggleTaskbarLyric", () => {
-    window.api.window.toggleTaskbarLyric().catch(() => {});
+    bridge.window.toggleTaskbarLyric().catch(() => {});
   });
   // 打开播放器
   handlers.set("view.openPlayer", () => {

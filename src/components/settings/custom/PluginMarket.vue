@@ -37,13 +37,19 @@ const cardStates = computed(() => {
   return states;
 });
 
-/** 拉取市场列表 */
+/** 拉取市场列表（finally 保底落 loading：Android 端 bridge 抛错时也不许无限转圈） */
 const refresh = async (force = false): Promise<void> => {
   loading.value = true;
   errored.value = false;
-  const res = await pluginsStore.fetchMarket(force);
-  errored.value = !res.ok;
-  loading.value = false;
+  try {
+    const res = await pluginsStore.fetchMarket(force);
+    errored.value = !res.ok;
+  } catch {
+    // Android 端 embedded API 未就绪时 fetchMarket 直接抛错，转错误态给重试按钮
+    errored.value = true;
+  } finally {
+    loading.value = false;
+  }
 };
 
 onMounted(() => void refresh());

@@ -62,6 +62,7 @@ const appearanceCategory: SettingCategory = {
     },
     {
       id: "appearanceStyle",
+      platform: "desktop",
       items: [
         {
           key: "appearanceStyle",
@@ -125,6 +126,38 @@ const appearanceCategory: SettingCategory = {
       ],
     },
     {
+      id: "mobilePlayer",
+      platform: "android",
+      items: [
+        {
+          key: "wavyProgressBar",
+          type: "switch",
+          binding: { store: "settings", path: "appearance.wavyProgressBar" },
+          defaultValue: true,
+        },
+      ],
+    },
+    {
+      id: "appIcon",
+      platform: "android",
+      items: [
+        {
+          key: "appIcon",
+          type: "select",
+          binding: { store: "settings", path: "appearance.appIcon" },
+          options: [
+            { value: "green", labelKey: "settings.appIcon.green" },
+            { value: "red", labelKey: "settings.appIcon.red" },
+            { value: "blue", labelKey: "settings.appIcon.blue" },
+            { value: "purple", labelKey: "settings.appIcon.purple" },
+            { value: "orange", labelKey: "settings.appIcon.orange" },
+            { value: "pink", labelKey: "settings.appIcon.pink" },
+          ],
+          defaultValue: "green",
+        },
+      ],
+    },
+    {
       id: "layout",
       items: [
         {
@@ -177,7 +210,7 @@ const appearanceCategory: SettingCategory = {
           key: "showQualitySwitch",
           type: "switch",
           binding: { store: "settings", path: "appearance.showQualitySwitch" },
-          defaultValue: false,
+          defaultValue: true,
         },
       ],
     },

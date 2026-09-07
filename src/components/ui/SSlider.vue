@@ -265,7 +265,7 @@ const onPointerUp = (): void => {
     <div
       v-if="!vertical"
       ref="trackRef"
-      class="s-slider-hitbox relative flex items-center"
+      class="s-slider-hitbox relative flex items-center touch-none"
       :style="{ height: `${thumbSize}px` }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"

@@ -2,8 +2,8 @@ import type { Track } from "@shared/types/player";
 import { ErrorCode } from "@shared/types/errors";
 import type { QualityLevel } from "@/utils/quality";
 import { netease as neteaseApi, neteaseCall } from "@/apis/netease";
-import { isExplicitNeteaseAuthFailure } from "@/apis/neteaseAuth";
-import { songsToTracks } from "@/utils/format/netease";
+import { isExplicitNeteaseAuthFailure, type NeteaseFailure } from "@/apis/neteaseAuth";
+import { songsToTracks, normalizeNeteaseMediaUrl } from "@/utils/format/netease";
 
 /**
  * 按 ID 批量取歌曲详情
@@ -57,7 +57,30 @@ export const classifyNeteasePlayUrl = (item: unknown): NeteasePlayUrlResult => {
 };
 
 /**
+ * 按目标 level 生成候选回落链，对齐 Kotlin PlaybackUrlResolver.getRequestLevels
+ * 请求失败或命中试听片段时按候选列表逐个降级尝试
+ */
+const getRequestLevels = (level: string): string[] => {
+  switch (level) {
+    case "standard":
+      return ["standard"];
+    case "higher":
+      return ["higher", "exhigh"];
+    case "hires":
+      return ["hires", "lossless", "exhigh"];
+    case "lossless":
+      return ["lossless", "exhigh"];
+    case "exhigh":
+      return ["exhigh"];
+    default:
+      return [level, "hires", "lossless", "exhigh"];
+  }
+};
+
+/**
  * 解析 Track 的播放 URL
+ * 走 song_url_v1 接口（对齐 Kotlin PlaybackUrlResolver 路径），
+ * 按候选 level 链逐个降级尝试，跳过试听片段继续下一档
  * @param track - track.id 为云端 songId
  * @param songLevel - 音质偏好；实际可用级别取决于账号权限
  * @param recovery - 登录失效时的确认与恢复方法
@@ -69,12 +92,35 @@ export const resolveNeteaseUrl = async (
   recovery?: NeteaseSessionRecovery,
 ): Promise<NeteasePlayUrlResult> => {
   const request = async (): Promise<NeteasePlayUrlResult> => {
-    const body = await neteaseCall<{ data?: unknown[] }>(
-      "song_url",
-      { id: track.id, level: NETEASE_LEVEL[songLevel] },
-      { notifyAuthFailure: false },
-    );
-    return classifyNeteasePlayUrl(body?.data?.[0]);
+    let trial: NeteasePlayUrlResult | null = null;
+    let unavailable: NeteasePlayUrlResult = {
+      available: false,
+      errorCode: ErrorCode.NETEASE_UNAVAILABLE,
+    };
+    for (const level of getRequestLevels(NETEASE_LEVEL[songLevel])) {
+      let item: unknown;
+      try {
+        const body = await neteaseCall<{ data?: unknown[] }>(
+          "song_url_v1",
+          { id: track.id, level },
+          { notifyAuthFailure: false },
+        );
+        item = body?.data?.[0];
+      } catch (err) {
+        // 登录失效向上抛出，交由 recovery 流程处理；其余错误降级尝试下一档
+        if (isExplicitNeteaseAuthFailure(err as NeteaseFailure)) throw err;
+        continue;
+      }
+      const result = classifyNeteasePlayUrl(item);
+      if (result.available) {
+        const url = normalizeNeteaseMediaUrl(result.url) ?? result.url;
+        if (!result.isTrial) return { ...result, url };
+        trial = { ...result, url };
+      } else {
+        unavailable = result;
+      }
+    }
+    return trial ?? unavailable;
   };
 
   let result: NeteasePlayUrlResult | null = null;
@@ -82,7 +128,7 @@ export const resolveNeteaseUrl = async (
   try {
     result = await request();
   } catch (err) {
-    const failure = err as { status?: number; body?: unknown; message?: string };
+    const failure = err as NeteaseFailure;
     if (!recovery || !isExplicitNeteaseAuthFailure(failure)) throw err;
     authFailure = true;
   }
@@ -125,7 +171,11 @@ const fetchNeteaseDownloadSource = async (
     const body = await neteaseApi.song_download_url({ id, level });
     const item = body?.data;
     if (!item?.url) return null;
-    return { url: item.url, format: item.type, size: item.size };
+    return {
+      url: normalizeNeteaseMediaUrl(item.url) ?? item.url,
+      format: item.type,
+      size: item.size,
+    };
   } catch {
     return null;
   }
@@ -140,7 +190,11 @@ const fetchNeteasePlaySource = async (
     const body = await neteaseApi.song_url({ id, level });
     const item = body?.data?.[0];
     if (!item?.url || item.freeTrialInfo) return null;
-    return { url: item.url, format: item.type, size: item.size };
+    return {
+      url: normalizeNeteaseMediaUrl(item.url) ?? item.url,
+      format: item.type,
+      size: item.size,
+    };
   } catch {
     return null;
   }

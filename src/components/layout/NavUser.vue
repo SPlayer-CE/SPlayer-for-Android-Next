@@ -2,6 +2,7 @@
 import { useUserStore } from "@/stores/user";
 import { dialog } from "@/composables/useDialog";
 import { toast } from "@/composables/useToast";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import vipImg from "@/assets/images/vip.png";
 import IconLucideListMusic from "~icons/lucide/list-music";
 import IconLucideDisc3 from "~icons/lucide/disc-3";
@@ -10,13 +11,17 @@ import IconLucideUserRound from "~icons/lucide/user-round";
 const { t } = useI18n();
 const router = useRouter();
 const user = useUserStore();
+const { useMobileLayout } = useResponsiveLayout();
 
 const loginOpen = ref(false);
 const popoverOpen = ref(false);
 
 /** 启动时同步登录状态 */
 onMounted(() => {
-  void user.fetchStatus();
+  // 有 profile 或有 cookie 都需要校验（冷启动后 profile 可能被清空但 cookie 仍在）
+  if (user.profile || user.cookie) {
+    user.fetchStatus().catch(() => undefined);
+  }
 });
 
 const isVip = computed(() => !!user.profile?.vipType && user.profile.vipType !== 0);
@@ -91,11 +96,12 @@ const handleLogout = async (): Promise<void> => {
           />
           <IconLucideUserRound v-else class="size-4 text-on-surface-variant" />
         </span>
-        <span class="text-sm text-on-surface max-w-[7rem] truncate">
+        <span v-if="!useMobileLayout" class="text-sm text-on-surface max-w-[7rem] truncate">
           {{ user.profile?.nickname || t("login.unknownUser") }}
         </span>
-        <img v-if="isVip" :src="vipImg" alt="VIP" class="h-4 shrink-0" />
+        <img v-if="isVip && !useMobileLayout" :src="vipImg" alt="VIP" class="h-4 shrink-0" />
         <IconLucideChevronDown
+          v-if="!useMobileLayout"
           :class="[
             'size-3 text-on-surface-variant transition-transform duration-200',
             popoverOpen && 'rotate-180',

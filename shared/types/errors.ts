@@ -47,6 +47,8 @@ export enum ErrorCode {
   TAG_READ_FAILED = "TAG_READ_FAILED",
   /** 写入文件标签失败 */
   TAG_WRITE_FAILED = "TAG_WRITE_FAILED",
+  /** 目录缺少写权限，需重新选取 */
+  WRITABLE_PERMISSION_REQUIRED = "WRITABLE_PERMISSION_REQUIRED",
 
   // 扫描相关
   /** 未配置扫描目录 */

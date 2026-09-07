@@ -1,6 +1,7 @@
 import type { SettingCategory } from "@/types/settings-schema";
 import { ALL_PLATFORMS } from "@shared/types/platform";
 import { useSettingsStore } from "@/stores/settings";
+import { isAndroid } from "@/services/bridge";
 import AmllDbServerConfig from "@/components/settings/custom/AmllDbServerConfig.vue";
 import LocalLyricRepoConfig from "@/components/settings/custom/LocalLyricRepoConfig.vue";
 import LyricSourceOrderConfig from "@/components/settings/custom/LyricSourceOrderConfig.vue";
@@ -20,6 +21,14 @@ const lyricSourcePreferenceOptions = [
 
 /** 当前歌词引擎 */
 const lyricEngine = () => useSettingsStore().lyric.engine;
+/** 默认歌词引擎系（含 Android Kotlin 实现） */
+const defaultLyricEngine = () => lyricEngine() !== "amll";
+/** 内容样式页是否使用数值输入 */
+const lyricGeneralManualInput = () => useSettingsStore().lyricGeneralManualInput;
+/** 弹簧动画页是否使用数值输入 */
+const lyricSpringManualInput = () => useSettingsStore().lyricSpringManualInput;
+/** 布局与透明度页是否使用数值输入 */
+const lyricLayoutManualInput = () => useSettingsStore().lyricLayoutManualInput;
 
 const lyricCategory: SettingCategory = {
   id: "lyric",
@@ -96,7 +105,7 @@ const lyricCategory: SettingCategory = {
           key: "enableOnlineTTMLLyric",
           type: "switch",
           binding: { store: "settings", path: "system.lyric.enableOnlineTTMLLyric" },
-          defaultValue: false,
+          defaultValue: true,
           tag: { text: "Beta" },
           children: [
             {
@@ -106,6 +115,12 @@ const lyricCategory: SettingCategory = {
               binding: { store: "settings", path: "system.lyric.amllDbServer" },
             },
           ],
+        },
+        {
+          key: "enableSidecarMatch",
+          type: "switch",
+          binding: { store: "settings", path: "system.localLyric.enableSidecarMatch" },
+          defaultValue: true,
         },
         {
           key: "enableLocalTTMLOverride",
@@ -152,6 +167,7 @@ const lyricCategory: SettingCategory = {
           options: [
             { value: "physics", labelKey: "settings.lyricEngine.physics" },
             { value: "amll", labelKey: "settings.lyricEngine.amll" },
+            ...(isAndroid ? [{ value: "kotlin", labelKey: "settings.lyricEngine.kotlin" }] : []),
           ],
           defaultValue: "physics",
           confirm: {
@@ -168,9 +184,16 @@ const lyricCategory: SettingCategory = {
           defaultValue: true,
         },
         {
+          key: "lyricGeneralManualInput",
+          type: "switch",
+          binding: { store: "settings", path: "lyricGeneralManualInput" },
+          defaultValue: false,
+        },
+        {
           key: "fontSize",
           type: "slider",
           binding: { store: "settings", path: "lyric.fontSize" },
+          renderAsNumberWhen: lyricGeneralManualInput,
           min: 30,
           max: 64,
           step: 1,
@@ -178,9 +201,43 @@ const lyricCategory: SettingCategory = {
           marks: { 30: "30", 48: "48", 64: "64" },
         },
         {
+          key: "fontSizeLandscape",
+          type: "slider",
+          binding: { store: "settings", path: "lyric.fontSizeLandscape" },
+          renderAsNumberWhen: lyricGeneralManualInput,
+          min: 16,
+          max: 40,
+          step: 1,
+          defaultValue: 25,
+          marks: { 16: "16", 25: "25", 32: "32", 40: "40" },
+        },
+        {
+          key: "landscapeCoverOffsetX",
+          type: "slider",
+          binding: { store: "settings", path: "lyric.landscapeCoverOffsetX" },
+          renderAsNumberWhen: lyricGeneralManualInput,
+          min: -80,
+          max: 80,
+          step: 2,
+          defaultValue: 40,
+          marks: { "-80": "-80", 0: "0", 40: "40", 80: "80" },
+        },
+        {
+          key: "landscapeLyricPaddingX",
+          type: "slider",
+          binding: { store: "settings", path: "lyric.landscapeLyricPaddingX" },
+          renderAsNumberWhen: lyricGeneralManualInput,
+          min: -120,
+          max: 120,
+          step: 2,
+          defaultValue: 0,
+          marks: { "-120": "-120", 0: "0", 120: "120" },
+        },
+        {
           key: "fontWeight",
           type: "slider",
           binding: { store: "settings", path: "lyric.fontWeight" },
+          renderAsNumberWhen: lyricGeneralManualInput,
           min: 100,
           max: 900,
           step: 100,
@@ -209,7 +266,7 @@ const lyricCategory: SettingCategory = {
           type: "switch",
           binding: { store: "settings", path: "lyric.showRomanization" },
           defaultValue: true,
-          visible: () => lyricEngine() === "physics",
+          visible: defaultLyricEngine,
         },
         {
           key: "amllShowLineRomanization",
@@ -235,21 +292,34 @@ const lyricCategory: SettingCategory = {
           type: "switch",
           binding: { store: "settings", path: "lyric.enableWordHighlight" },
           defaultValue: true,
-          visible: () => lyricEngine() === "physics",
+          visible: defaultLyricEngine,
+        },
+        {
+          key: "androidLyricUnlockFpsLimit",
+          type: "switch",
+          binding: { store: "settings", path: "system.androidLyric.unlockFpsLimit" },
+          defaultValue: false,
+          platform: "android",
+          confirm: {
+            when: (next) => next === true,
+            titleKey: "settings.confirm.fpsUnlockTitle",
+            contentKey: "settings.confirm.fpsUnlockContent",
+            type: "warning",
+          },
         },
         {
           key: "enableFloatAnimation",
           type: "switch",
           binding: { store: "settings", path: "lyric.enableFloatAnimation" },
-          defaultValue: false,
-          visible: () => lyricEngine() === "physics",
+          defaultValue: true,
+          visible: defaultLyricEngine,
         },
         {
           key: "enableEmphasizeEffect",
           type: "switch",
           binding: { store: "settings", path: "lyric.enableEmphasizeEffect" },
-          defaultValue: false,
-          visible: () => lyricEngine() === "physics",
+          defaultValue: true,
+          visible: defaultLyricEngine,
         },
         {
           key: "enableBlur",
@@ -311,6 +381,12 @@ const lyricCategory: SettingCategory = {
       id: "lyricSpring",
       items: [
         {
+          key: "lyricSpringManualInput",
+          type: "switch",
+          binding: { store: "settings", path: "lyricSpringManualInput" },
+          defaultValue: false,
+        },
+        {
           key: "springPreset",
           type: "select",
           binding: { store: "settings", path: "lyric.springPreset" },
@@ -324,13 +400,14 @@ const lyricCategory: SettingCategory = {
             { value: "custom", labelKey: "settings.springPreset.custom" },
           ],
           defaultValue: "default",
-          visible: () => lyricEngine() === "physics",
+          visible: defaultLyricEngine,
           childrenCondition: () => useSettingsStore().lyric.springPreset === "custom",
           children: [
             {
               key: "springMass",
               type: "slider",
               binding: { store: "settings", path: "lyric.springMass" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 0.1,
               max: 5,
               step: 0.1,
@@ -341,6 +418,7 @@ const lyricCategory: SettingCategory = {
               key: "springDamping",
               type: "slider",
               binding: { store: "settings", path: "lyric.springDamping" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 1,
               max: 50,
               step: 0.5,
@@ -351,6 +429,7 @@ const lyricCategory: SettingCategory = {
               key: "springStiffness",
               type: "slider",
               binding: { store: "settings", path: "lyric.springStiffness" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 10,
               max: 300,
               step: 5,
@@ -372,6 +451,7 @@ const lyricCategory: SettingCategory = {
               key: "amllVerticalSpringMass",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllVerticalSpringMass" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 0.1,
               max: 5,
               step: 0.1,
@@ -382,6 +462,7 @@ const lyricCategory: SettingCategory = {
               key: "amllVerticalSpringDamping",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllVerticalSpringDamping" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 0,
               max: 40,
               step: 0.5,
@@ -392,6 +473,7 @@ const lyricCategory: SettingCategory = {
               key: "amllVerticalSpringStiffness",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllVerticalSpringStiffness" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 1,
               max: 300,
               step: 1,
@@ -408,6 +490,7 @@ const lyricCategory: SettingCategory = {
               key: "amllScaleSpringMass",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllScaleSpringMass" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 0.1,
               max: 5,
               step: 0.1,
@@ -418,6 +501,7 @@ const lyricCategory: SettingCategory = {
               key: "amllScaleSpringDamping",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllScaleSpringDamping" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 0,
               max: 40,
               step: 0.5,
@@ -428,6 +512,7 @@ const lyricCategory: SettingCategory = {
               key: "amllScaleSpringStiffness",
               type: "slider",
               binding: { store: "settings", path: "lyric.amllScaleSpringStiffness" },
+              renderAsNumberWhen: lyricSpringManualInput,
               min: 1,
               max: 300,
               step: 1,
@@ -448,9 +533,16 @@ const lyricCategory: SettingCategory = {
       id: "lyricLayout",
       items: [
         {
+          key: "lyricLayoutManualInput",
+          type: "switch",
+          binding: { store: "settings", path: "lyricLayoutManualInput" },
+          defaultValue: false,
+        },
+        {
           key: "alignPosition",
           type: "slider",
           binding: { store: "settings", path: "lyric.alignPosition" },
+          renderAsNumberWhen: lyricLayoutManualInput,
           min: 0.1,
           max: 0.9,
           step: 0.05,
@@ -461,6 +553,7 @@ const lyricCategory: SettingCategory = {
           key: "wordFadeWidth",
           type: "slider",
           binding: { store: "settings", path: "lyric.wordFadeWidth" },
+          renderAsNumberWhen: lyricLayoutManualInput,
           min: 0.1,
           max: 1,
           step: 0.1,
@@ -471,12 +564,13 @@ const lyricCategory: SettingCategory = {
           key: "inactiveAlpha",
           type: "slider",
           binding: { store: "settings", path: "lyric.inactiveAlpha" },
+          renderAsNumberWhen: lyricLayoutManualInput,
           min: 0,
           max: 1,
           step: 0.05,
           defaultValue: 0.2,
           marks: { 0: "0", 0.2: "0.2", 1: "1" },
-          visible: () => lyricEngine() === "physics",
+          visible: defaultLyricEngine,
         },
       ],
     },

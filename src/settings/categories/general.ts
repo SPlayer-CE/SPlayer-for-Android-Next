@@ -22,6 +22,7 @@ const generalCategory: SettingCategory = {
     },
     {
       id: "systemConfig",
+      platform: "desktop",
       items: [
         {
           key: "rememberWindowState",
@@ -84,6 +85,7 @@ const generalCategory: SettingCategory = {
     },
     {
       id: "update",
+      platform: "desktop",
       items: [
         {
           key: "updateChannel",
@@ -117,6 +119,7 @@ const generalCategory: SettingCategory = {
     },
     {
       id: "debug",
+      platform: "desktop",
       items: [
         {
           key: "showPerformanceMonitor",
@@ -128,6 +131,7 @@ const generalCategory: SettingCategory = {
     },
     {
       id: "backupReset",
+      platform: "desktop",
       items: [
         {
           key: "storageManager",

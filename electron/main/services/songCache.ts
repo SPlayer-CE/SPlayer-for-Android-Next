@@ -79,8 +79,9 @@ const sizeLimitBytes = (): number => {
   return gb > 0 ? gb * 1024 * 1024 * 1024 : Number.POSITIVE_INFINITY;
 };
 
-/** 是否启用歌曲缓存 */
-const isCacheEnabled = (): boolean => store.get("cache.songCache.enabled") === true;
+/** 是否启用歌曲缓存（同时检查总开关和歌曲缓存子开关） */
+const isCacheEnabled = (): boolean =>
+  store.get("cache.enabled") === true && store.get("cache.songCache.enabled") === true;
 
 /**
  * 用 cache_key 派生唯一文件名

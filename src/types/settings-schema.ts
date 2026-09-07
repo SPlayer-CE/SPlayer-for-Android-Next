@@ -43,6 +43,8 @@ export interface SettingItem {
   min?: number;
   max?: number;
   step?: number;
+  /** slider 是否按条件改为 number 输入 */
+  renderAsNumberWhen?: () => boolean;
   /** slider 刻度标记 */
   marks?: Record<number, string>;
   /** number 单位后缀 */
@@ -85,6 +87,8 @@ export interface SettingItem {
   hideChildren?: boolean;
   /** 标题旁的徽标 */
   tag?: SettingTag;
+  /** 仅在指定平台显示；未设置则全平台显示 */
+  platform?: "android" | "desktop";
 }
 
 /** 标题旁徽标配置 */
@@ -102,6 +106,8 @@ export interface SettingSection {
   tag?: SettingTag;
   /** 条件隐藏分区 */
   visible?: () => boolean;
+  /** 仅在指定平台显示；未设置则全平台显示 */
+  platform?: "android" | "desktop";
 }
 
 /** 设置分类 */
@@ -113,4 +119,6 @@ export interface SettingCategory {
   sections?: SettingSection[];
   /** 整页自定义组件 */
   component?: Component;
+  /** 仅在指定平台显示；未设置则全平台显示 */
+  platform?: "android" | "desktop";
 }

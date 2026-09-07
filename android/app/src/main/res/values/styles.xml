@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 主主题：无 ActionBar 的沉浸式 WebView 壳，状态栏/导航栏由 MainActivity 代码控制 -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <!-- 启动窗口主题：windowBackground 在首帧渲染前显示，避免白屏闪烁 -->
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+</resources>

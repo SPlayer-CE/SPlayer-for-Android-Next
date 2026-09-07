@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式图标背景：与源项目 SPlayer-for-Android 深色值保持同一设计语言 -->
+    <color name="ic_launcher_background">#152d19</color>
+    <color name="ic_launcher_background_red">#331110</color>
+    <color name="ic_launcher_background_blue">#0f2433</color>
+    <color name="ic_launcher_background_purple">#1f1333</color>
+    <color name="ic_launcher_background_orange">#33220d</color>
+    <color name="ic_launcher_background_pink">#330f21</color>
+</resources>

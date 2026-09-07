@@ -69,36 +69,17 @@ const emit = defineEmits<{
 }>();
 
 const isFocused = ref(false);
-const draftValue = ref(props.modelValue);
-const displayValue = computed(() =>
-  props.updateOn === "blur" ? draftValue.value : props.modelValue,
-);
-const showClear = computed(
-  () => props.clearable && displayValue.value.length > 0 && !props.disabled,
-);
-
-watch(
-  () => props.modelValue,
-  (value) => {
-    if (props.updateOn === "input" || !isFocused.value) draftValue.value = value;
-  },
-);
-
-const commitValue = (): void => {
-  if (draftValue.value !== props.modelValue) emit("update:modelValue", draftValue.value);
-};
-
-const rollbackValue = (): void => {
-  draftValue.value = props.modelValue;
-};
+const showClear = computed(() => props.clearable && props.modelValue.length > 0 && !props.disabled);
+const inputRef = ref<HTMLInputElement | null>(null);
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
 const handleInput = (value: string): void => {
-  if (props.updateOn === "input") {
-    emit("update:modelValue", value);
-    return;
-  }
-  draftValue.value = value;
+  emit("update:modelValue", value);
 };
+
+const commitValue = (): void => {};
+
+const rollbackValue = (): void => {};
 
 const handleClear = () => {
   handleInput("");
@@ -120,11 +101,18 @@ const handleEscape = (event: KeyboardEvent): void => {
   if (props.updateOn === "blur") rollbackValue();
   (event.currentTarget as HTMLInputElement).blur();
 };
+
+const focus = (): void => {
+  if (isTextarea.value) textareaRef.value?.focus();
+  else inputRef.value?.focus();
+};
+
+defineExpose({ focus });
 </script>
 
 <template>
   <div
-    class="text-on-surface border border-solid transition-[border-color,box-shadow,background-color,width,opacity] duration-250"
+    class="text-on-surface border border-solid transition-[border-color,box-shadow,background-color,width,right,opacity] duration-250"
     :class="[
       isTextarea ? 'relative block' : 'flex items-center gap-2',
       sizeClasses,
@@ -142,7 +130,8 @@ const handleEscape = (event: KeyboardEvent): void => {
     <!-- 多行 -->
     <template v-if="isTextarea">
       <textarea
-        :value="displayValue"
+        ref="textareaRef"
+        :value="modelValue"
         :placeholder="placeholder"
         :disabled="disabled"
         :readonly="readonly"
@@ -172,7 +161,8 @@ const handleEscape = (event: KeyboardEvent): void => {
       <slot name="prefix" />
 
       <input
-        :value="displayValue"
+        ref="inputRef"
+        :value="modelValue"
         :type="type"
         :placeholder="placeholder"
         :disabled="disabled"

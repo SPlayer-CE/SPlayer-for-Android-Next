@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
+import { isAndroid } from "@/services/bridge";
 import { useStatusStore } from "@/stores/status";
 import { useSettingsStore } from "@/stores/settings";
 import * as player from "@/core/player";
@@ -25,6 +26,14 @@ const { isDesktopLyricOpen } = storeToRefs(settings);
 
 const buttonType = computed<"default" | "cover">(() => (props.cover ? "cover" : "default"));
 const mutedClass = computed(() => (props.cover ? "text-cover/50" : "text-on-surface-variant"));
+
+const localVolumeOpen = ref(false);
+watch(localVolumeOpen, (val) => {
+  status.volumePopoverOpen = val;
+});
+
+/** 安卓触摸设备不支持 hover，点击仅开关 popover，不做静音切换 */
+const canClickMute = !isAndroid;
 
 const lyricButtonType = computed(() =>
   isDesktopLyricOpen.value ? (props.cover ? "cover" : "primary") : buttonType.value,
@@ -79,7 +88,13 @@ const onMoreMenuSelect = (key: string): void => {
   <div class="flex items-center gap-1">
     <!-- 在线音质 -->
     <QualityControl v-if="settings.appearance.showQualitySwitch" :cover="cover" />
-    <SPopover trigger="hover" side="top" :cover="cover" content-class="px-3 pb-2 pt-3">
+    <SPopover
+      v-model:open="localVolumeOpen"
+      trigger="hover"
+      side="top"
+      :cover="cover"
+      content-class="px-3 pb-2 pt-3"
+    >
       <template #trigger>
         <SButton
           :type="buttonType"
@@ -87,7 +102,7 @@ const onMoreMenuSelect = (key: string): void => {
           circle
           size="large"
           :class="mutedClass"
-          @click="toggleMute"
+          @click="canClickMute ? toggleMute() : undefined"
           @wheel.prevent="onVolumeWheel"
         >
           <template #icon>

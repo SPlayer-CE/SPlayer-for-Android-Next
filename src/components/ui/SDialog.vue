@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CSSProperties } from "vue";
 import { usePopupZIndex } from "@/composables/useZIndex";
+import { useBackClosable } from "@/composables/useAndroidBack";
 
 export interface SDialogProps {
   /** 控制打开状态（v-model:open） */
@@ -17,6 +18,7 @@ export interface SDialogProps {
   cover?: boolean;
   /** 宽度，支持 CSS 值（默认 460px） */
   width?: string;
+  maxWidth?: string;
   /** 高度，支持 CSS 值（默认 auto，受 max-h 限制） */
   height?: string;
   /** 距视口顶部偏移 */
@@ -29,6 +31,8 @@ export interface SDialogProps {
   destroyOnClose?: boolean;
   /** 自定义固定层级 */
   zIndex?: number;
+  /** 打开时阻止 Dialog 自动把焦点移到首个可聚焦元素 */
+  preventOpenAutoFocus?: boolean;
 }
 
 const props = withDefaults(defineProps<SDialogProps>(), {
@@ -36,17 +40,20 @@ const props = withDefaults(defineProps<SDialogProps>(), {
   closable: true,
   cover: false,
   width: "460px",
+  maxWidth: "calc(100vmin - 32px)",
   height: "auto",
   lazy: true,
   destroyOnClose: false,
+  preventOpenAutoFocus: false,
 });
 
 const DESTROY_DELAY_MS = 180;
 
 const containerStyle = computed(() => ({
   width: props.width,
+  maxWidth: props.maxWidth,
   height: props.height === "auto" ? undefined : props.height,
-  maxHeight: props.height === "auto" ? "85vh" : undefined,
+  maxHeight: props.height === "auto" ? "75vmax" : undefined,
   top: props.top,
 }));
 
@@ -99,6 +106,20 @@ const setOpen = (val: boolean): void => {
   isOpen.value = val;
   emit("update:open", val);
 };
+
+const handleOpenAutoFocus = (event: Event): void => {
+  if (props.preventOpenAutoFocus) {
+    event.preventDefault();
+  }
+};
+
+// Android 返回键关闭：onBack 调 setOpen 并返回 true（消费不重复设 ref）
+useBackClosable(isOpen, {
+  onBack: () => {
+    setOpen(false);
+    return true;
+  },
+});
 </script>
 
 <template>
@@ -132,6 +153,7 @@ const setOpen = (val: boolean): void => {
             ? 'bg-black/55 backdrop-blur-xl backdrop-saturate-160 border border-solid border-white/10 text-cover'
             : 'bg-surface-alt border border-solid border-outline-variant/30 text-on-surface',
         ]"
+        @open-auto-focus="handleOpenAutoFocus"
       >
         <!-- 标题 + 描述 -->
         <div v-if="title" class="shrink-0 px-5 pt-4 pb-3 pr-12">

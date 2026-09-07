@@ -14,8 +14,10 @@ import IconLucideUnplug from "~icons/lucide/unplug";
 import IconLucideMusic from "~icons/lucide/music";
 import IconLucideDisc3 from "~icons/lucide/disc-3";
 import IconLucideUser from "~icons/lucide/user";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconLucideListMusic from "~icons/lucide/list-music";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const router = useRouter();
 const route = useRoute();
@@ -135,7 +137,10 @@ const handleMoreMenu = (key: string): void => {
       <div class="flex items-center justify-between mt-2 mb-4 gap-4">
         <!-- 标题 + 数量统计 -->
         <div class="flex items-baseline gap-4 min-w-0">
-          <h1 class="text-3xl font-bold text-on-surface shrink-0 text-balance">
+          <h1
+            class="font-bold text-on-surface shrink-0 text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
             {{ t("nav.streaming") }}
           </h1>
           <Transition name="fade" mode="out-in">

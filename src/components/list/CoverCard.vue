@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CoverItem } from "@/types/artist";
 import artistFallback from "@/assets/images/artist.jpg";
+import { isAndroid } from "@/services/bridge";
 
 export interface CoverCardProps {
   /** 卡片数据 */
@@ -22,31 +23,52 @@ defineEmits<{ click: [] }>();
 
 const coverRounded = computed(() => (props.type === "artist" ? "rounded-full" : props.rounded));
 const actualFallback = computed(() => (props.type === "artist" ? artistFallback : props.fallback));
+const coverAspectClass = computed(() =>
+  props.item.aspect === "video" ? "aspect-video" : "aspect-square",
+);
+const cardClass = computed(() => [
+  "cursor-pointer rounded-xl transition-colors duration-300",
+  !isAndroid && "group",
+  !isAndroid && props.type !== "artist" && "hover:bg-primary/10",
+]);
+const coverImageClass = computed(() => [
+  "w-full",
+  coverAspectClass.value,
+  !isAndroid &&
+    "transition-[transform,filter] duration-300 ease-out group-hover:scale-108 group-hover:brightness-80",
+]);
+const playButtonClass = computed(() => [
+  "absolute size-9 flex items-center justify-center rounded-full",
+  isAndroid
+    ? "opacity-0"
+    : "opacity-0 transition-[opacity,transform] duration-300 group-hover:opacity-100",
+  props.type === "artist"
+    ? "inset-0 m-auto"
+    : ["right-2 bottom-2 bg-white/50", !isAndroid && "translate-y-1.5 group-hover:translate-y-0"],
+]);
 </script>
 
 <template>
-  <div
-    class="cursor-pointer group rounded-xl transition-colors duration-300"
-    :class="type !== 'artist' ? 'hover:bg-primary/10' : ''"
-    @click="$emit('click')"
-  >
+  <div :class="cardClass" @click="$emit('click')">
     <!-- 封面 -->
-    <div class="relative overflow-hidden group-hover:will-change-transform" :class="coverRounded">
+    <div class="relative overflow-hidden" :class="coverRounded">
       <SImg
         :src="item.cover"
         :fallback="actualFallback"
         :alt="item.title"
-        class="w-full aspect-square transition-[transform,filter] duration-300 ease-out group-hover:scale-108 group-hover:brightness-80"
+        cache-type="list-covers"
+        :class="coverImageClass"
       />
-      <!-- 播放按钮 -->
+      <!-- 统计 -->
       <div
-        class="absolute size-9 flex items-center justify-center rounded-full opacity-0 transition-[opacity,transform] duration-300 group-hover:opacity-100"
-        :class="
-          type === 'artist'
-            ? 'inset-0 m-auto'
-            : 'right-2 bottom-2 bg-white/50 translate-y-1.5 group-hover:translate-y-0'
-        "
+        v-if="item.badge"
+        class="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-xs font-medium text-white"
+        :class="!isAndroid && 'backdrop-blur-sm'"
       >
+        {{ item.badge }}
+      </div>
+      <!-- 播放按钮 -->
+      <div :class="playButtonClass">
         <IconLucidePlay v-if="type !== 'artist'" class="size-4.5 text-white" />
         <IconLucideUser v-else class="size-8 text-white" />
       </div>

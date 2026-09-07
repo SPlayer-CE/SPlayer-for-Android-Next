@@ -185,7 +185,11 @@ defineExpose({ playAll });
           </div>
           <!-- 信息 -->
           <div class="flex-1 min-w-0 flex items-center gap-3">
-            <SImg :src="item.track.cover" class="size-12 rounded-lg shrink-0" />
+            <SImg
+              :src="item.track.cover"
+              cache-type="list-covers"
+              class="size-12 rounded-lg shrink-0"
+            />
             <div class="flex-1 min-w-0">
               <div class="flex items-baseline gap-1.5 min-w-0">
                 <span

@@ -12,6 +12,7 @@ import {
   IS_APPX,
   COMMIT_HASH,
   COMMIT_DATE,
+  isAndroidTarget,
 } from "@/utils/config";
 import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideGithub from "~icons/lucide/github";
@@ -26,9 +27,9 @@ const update = useUpdateStore();
 /** 提交时间 */
 const commitTimeAgo = useTimeAgo(new Date(COMMIT_DATE));
 /** 当前版本 */
-const versions = window.electron.process.versions;
+const versions = isAndroidTarget ? undefined : window.electron.process.versions;
 /** 操作系统信息 */
-const osInfo = window.api.system.osInfo;
+const osInfo = isAndroidTarget ? undefined : window.api.system.osInfo;
 
 /** 检查更新中 */
 const checking = computed(() => update.phase === "checking");
@@ -43,7 +44,10 @@ const handleCheckUpdate = (): void => {
 };
 
 /** 打开日志目录 */
-const handleOpenLogs = (): void => void window.api.system.openLogsDir();
+const handleOpenLogs = (): void => {
+  if (isAndroidTarget) return;
+  void window.api.system.openLogsDir();
+};
 
 interface EnvItem {
   label: string;
@@ -62,11 +66,15 @@ const envItems = computed<EnvItem[]>(() => [
     label: t("settings.about.date"),
     value: `${COMMIT_DATE} (${commitTimeAgo.value})`,
   },
-  { label: "Electron", value: versions.electron },
-  { label: "Chromium", value: versions.chrome },
-  { label: "Node.js", value: versions.node },
-  { label: "V8", value: versions.v8 },
-  { label: "OS", value: `${osInfo.type} ${osInfo.arch} ${osInfo.release}` },
+  ...(versions
+    ? [
+        { label: "Electron", value: versions.electron },
+        { label: "Chromium", value: versions.chrome },
+        { label: "Node.js", value: versions.node },
+        { label: "V8", value: versions.v8 },
+      ]
+    : []),
+  { label: "OS", value: osInfo ? `${osInfo.type} ${osInfo.arch} ${osInfo.release}` : "Android" },
 ]);
 
 /** 复制环境信息 */
@@ -152,7 +160,7 @@ onMounted(async () => {
                   : t("settings.about.checkUpdate")
             }}
           </SButton>
-          <SButton variant="secondary" @click="handleOpenLogs">
+          <SButton v-if="!isAndroidTarget" variant="secondary" @click="handleOpenLogs">
             {{ t("settings.about.openLogs") }}
           </SButton>
         </div>

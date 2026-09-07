@@ -3,14 +3,19 @@ import type { Track } from "@shared/types/player";
 import type { SVirtualListExposed } from "@/components/ui/SVirtualList.vue";
 import { useQueuePanel } from "@/composables/useQueuePanel";
 
+defineProps<{
+  compact?: boolean;
+}>();
+
 defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 const listRef = shallowRef<SVirtualListExposed | null>(null);
 const {
-  statusStore,
   queue,
   queueLength,
+  activePlayIndex,
+  lanRemoteQueue,
   formatArtists,
   playAt,
   removeAt,
@@ -21,17 +26,17 @@ const {
 </script>
 
 <template>
-  <div class="flex flex-col h-full text-cover">
-    <div class="shrink-0 flex items-start justify-between gap-4 pl-1 pr-20 pb-4">
+  <div class="queue-panel flex flex-col h-full text-cover">
+    <div class="queue-panel-header shrink-0 flex items-start justify-between gap-4 pl-1 pr-20 pb-4">
       <div class="flex flex-col min-w-0 pl-2.5">
-        <h2 class="m-0 text-2xl font-semibold leading-tight truncate">
+        <h2 class="queue-panel-heading m-0 text-2xl font-semibold leading-tight truncate">
           {{ t("playlist.title") }}
         </h2>
         <span class="text-sm text-cover/55 mt-1">
           {{ t("common.totalSongs", { count: queueLength }) }}
         </span>
       </div>
-      <div class="shrink-0 flex items-center gap-3">
+      <div class="queue-panel-actions shrink-0 flex items-center gap-3">
         <SButton
           type="cover"
           variant="secondary"
@@ -43,6 +48,7 @@ const {
           <template #icon><IconLucideLocate /></template>
         </SButton>
         <SButton
+          v-if="!lanRemoteQueue"
           type="cover"
           variant="secondary"
           round
@@ -75,15 +81,15 @@ const {
         item-fixed
         cover
         height="100%"
-        :default-scroll-index="Math.max(0, statusStore.playIndex)"
+        :default-scroll-index="Math.max(0, activePlayIndex)"
         :get-item-key="(item: Track) => item.id"
       >
         <template #default="{ item, index }: { item: Track; index: number }">
-          <div class="relative pl-1 pr-20 py-1">
+          <div class="queue-panel-item-shell relative pl-1 pr-20 py-1">
             <div
               class="group relative flex items-center gap-3 px-2.5 h-16 rounded-xl cursor-pointer transition-[background-color] duration-150"
               :class="
-                index === statusStore.playIndex
+                index === activePlayIndex
                   ? 'bg-cover/14 text-cover'
                   : 'hover:bg-cover/8 active:bg-cover/12'
               "
@@ -91,25 +97,30 @@ const {
             >
               <!-- 当前播放：左侧 indicator -->
               <span
-                v-if="index === statusStore.playIndex"
+                v-if="index === activePlayIndex"
                 class="absolute left-0 top-3 bottom-3 w-0.5 rounded-full bg-cover"
               />
-              <SImg :src="item.cover" class="size-12 rounded-lg shrink-0" />
+              <SImg
+                :src="item.cover"
+                cache-type="list-covers"
+                class="size-12 rounded-lg shrink-0"
+              />
               <div class="flex-1 min-w-0">
                 <div class="text-base truncate font-medium leading-snug">{{ item.title }}</div>
                 <div
                   class="text-sm truncate leading-snug mt-0.5"
-                  :class="index === statusStore.playIndex ? 'text-cover/70' : 'text-cover/55'"
+                  :class="index === activePlayIndex ? 'text-cover/70' : 'text-cover/55'"
                 >
                   {{ formatArtists(item.artists) }}
                 </div>
               </div>
               <SButton
+                v-if="!lanRemoteQueue"
                 type="cover"
                 variant="ghost"
                 circle
                 size="tiny"
-                class="opacity-0 group-hover:opacity-100"
+                class="opacity-50 group-hover:opacity-100 active:opacity-100"
                 @click.stop="removeAt(index)"
               >
                 <template #icon><IconLucideX /></template>

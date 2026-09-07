@@ -36,6 +36,10 @@ export const DEFAULTS = {
   showTranslation: true,
   /** 是否显示音译歌词 */
   showRomanization: true,
+  /** 是否按词块换行 */
+  enableWordBlockSegmentation: false,
+  /** 是否解锁帧率限制：开启后普通行切换跳过全量同步，视口裁剪生效，帧率提升但发热加重 */
+  unlockFpsLimit: false,
 };
 
 /** 渲染器配置 */
@@ -74,6 +78,10 @@ export interface RendererConfig {
   showTranslation: boolean;
   /** 是否显示音译歌词（默认 true） */
   showRomanization: boolean;
+  /** 是否按词块换行（默认 false） */
+  enableWordBlockSegmentation: boolean;
+  /** 是否解锁帧率限制（默认 false，开启后普通行切换跳过全量同步，视口裁剪生效） */
+  unlockFpsLimit: boolean;
   /** 歌词行点击回调（传入该行起始时间，用于跳转播放进度） */
   onLineClick?: (timeMs: number) => void;
 }

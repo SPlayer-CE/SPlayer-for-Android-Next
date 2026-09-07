@@ -130,6 +130,12 @@ export interface LyricSettings {
   adaptiveFontSize: boolean;
   /** 歌词字号（px，自适应关闭时生效） */
   fontSize: number;
+  /** 横屏歌词字号（px，独立于竖屏） */
+  fontSizeLandscape: number;
+  /** 手机横屏封面水平偏移（px） */
+  landscapeCoverOffsetX: number;
+  /** 手机横屏与平板歌词左右边距（px，负值向外扩展） */
+  landscapeLyricPaddingX: number;
   /** 歌词字重（100~900） */
   fontWeight: number;
   /** 歌词混合模式 */
@@ -183,7 +189,7 @@ export interface LyricSettings {
   /** 用户自定义正则 */
   excludeLyricsUserRegexes: string[];
   /** 歌词引擎类型 */
-  engine: "physics" | "amll";
+  engine: "physics" | "amll" | "kotlin";
   /** AM 歌词是否启用物理回弹与缩放 */
   useAMSpring: boolean;
   /** AMLL 垂直位移弹簧参数 */
@@ -241,6 +247,8 @@ export interface PlayerSettings {
   spectrumBarWidth: number;
   /** 是否反转频谱方向（启用后低频位于频谱两端） */
   reverseSpectrum: boolean;
+  /** 频谱算法方案：pc 对齐桌面端（Hamming+无重叠+dB[0,60]偏移）；android 保留原生 Hann+50%重叠+dB[-100,-30] */
+  spectrumAlgorithm: "pc" | "android";
   /** 在线歌曲音质偏好；实际可用级别取决于账号权限 */
   songLevel: QualityLevel;
   /** 允许完整音源不可用时播放试听片段 */
@@ -293,6 +301,14 @@ export interface AppearanceSettings {
   fontFamily: string;
   /** 性能监视器悬浮卡片 */
   showPerformanceMonitor: boolean;
+  /** 波浪进度条（类 Android 13 原生风格） */
+  wavyProgressBar: boolean;
+  /** 页面缩放百分比（50-200，默认 100，仅 Android CSS 缩放生效） */
+  pageZoom: number;
+  /** Android 设备形态强制覆盖：auto 跟随自动识别；phone 强制走手机 UI；pad 强制走平板 UI */
+  androidDeviceModeOverride: "auto" | "phone" | "pad";
+  /** Android 桌面图标颜色变体（与原生 activity-alias 一一对应） */
+  appIcon: "green" | "red" | "blue" | "purple" | "orange" | "pink";
 }
 
 /** 强迫症设置 */

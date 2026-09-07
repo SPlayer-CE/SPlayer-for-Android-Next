@@ -23,8 +23,8 @@ export interface SVirtualListProps<T> {
   height?: number | string;
   /** 顶部内边距（px） */
   paddingTop?: number;
-  /** 底部内边距（px） */
-  paddingBottom?: number;
+  /** 底部内边距（px 或 CSS 长度） */
+  paddingBottom?: number | string;
   /** 上下额外渲染的缓冲项数 */
   bufferSize?: number;
   /** 初始滚动到的索引 */
@@ -64,6 +64,16 @@ const { height: scrollViewportHeight } = useElementSize(scrollRef);
 const containerHeightStyle = computed(() =>
   typeof props.height === "number" ? `${props.height}px` : props.height,
 );
+
+const paddingBottomStyle = computed(() =>
+  typeof props.paddingBottom === "number" ? `${props.paddingBottom}px` : props.paddingBottom,
+);
+
+const hasPaddingBottom = computed(() => {
+  if (typeof props.paddingBottom === "number") return props.paddingBottom > 0;
+  const value = props.paddingBottom.trim();
+  return value !== "" && value !== "0" && value !== "0px";
+});
 
 const viewportHeight = computed(() => scrollViewportHeight.value || 0);
 
@@ -415,7 +425,7 @@ defineExpose({
           <slot name="footer" />
         </div>
         <!-- 底部 spacer -->
-        <div v-if="paddingBottom > 0" class="shrink-0" :style="{ height: `${paddingBottom}px` }" />
+        <div v-if="hasPaddingBottom" class="shrink-0" :style="{ height: paddingBottomStyle }" />
       </div>
     </template>
   </div>

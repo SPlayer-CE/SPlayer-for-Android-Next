@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 允许 HTTP 明文流量：自建流媒体服务器（Subsonic/Jellyfin/Emby）与部分音源接口常见 HTTP 部署 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

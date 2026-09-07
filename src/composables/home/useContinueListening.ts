@@ -40,8 +40,8 @@ export const useContinueListening = () => {
       const top = await window.api.stats.getTopTracks(MAX_ITEMS);
       items.value = top;
       isRepeat.value = (top[0]?.playCount ?? 0) >= REPEAT_TITLE_THRESHOLD;
-    } catch (error) {
-      console.warn("[home] getTopTracks failed:", error);
+    } catch {
+      // API 不可达时静默回退
     }
   };
 

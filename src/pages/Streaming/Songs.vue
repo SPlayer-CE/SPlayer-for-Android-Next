@@ -47,18 +47,20 @@ const handlePlayAll = (): void => {
         </template>
         {{ t("common.playAll") }}
       </SButton>
-      <SInput
-        v-model="searchQuery"
-        :placeholder="t('common.search')"
-        clearable
-        round
-        class="w-40 focus-within:w-56"
-        data-search-input
-      >
-        <template #prefix>
-          <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
-        </template>
-      </SInput>
+      <div class="relative h-9 w-40 shrink-0">
+        <SInput
+          v-model="searchQuery"
+          :placeholder="t('common.search')"
+          clearable
+          round
+          class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
+          data-search-input
+        >
+          <template #prefix>
+            <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+          </template>
+        </SInput>
+      </div>
     </div>
     <div v-if="songs.length > 0" class="flex-1 min-h-0">
       <SongList :items="songs" :search-query="searchQuery" source="streaming" />

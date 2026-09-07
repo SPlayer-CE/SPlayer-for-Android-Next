@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-SPlayer-Next — desktop music player on **Electron + Vue 3 + TypeScript**, with Rust native modules (NAPI-RS) for audio decoding, system media integration, and Windows taskbar lyric. Successor to SPlayer.
+SPlayer-Next — music player on **Electron + Vue 3 + TypeScript** for desktop and **Capacitor + Android Kotlin** for Android. Desktop uses Rust native modules (NAPI-RS) for audio decoding, system media integration, and Windows taskbar lyric; Android uses Media3/ExoPlayer, Capacitor plugins, and an embedded Node.js Mobile API service.
 
 ## Commands
 
@@ -16,9 +16,21 @@ pnpm build:{win,mac,linux}# Platform packages
 pnpm typecheck            # tsc + vue-tsc (node + web targets)
 pnpm lint / format        # ESLint / Prettier
 pnpm build:native         # Rust only; add `--dev` for debug
+pnpm build:web            # Android WebView bundle to dist/capacitor
+pnpm cap:sync             # Sync dist/capacitor into android/ via Capacitor
+pnpm build:android:node   # Bundle API/mobile-entry.ts for nodejs-mobile-cordova
+pnpm prepare:android:embedded # Copy embedded Node assets/libs into android/app assets
+pnpm build:android        # build:web -> cap sync -> build:android:node -> prepare embedded
 ```
 
 `SKIP_NATIVE_BUILD=true` skips Rust during dev.
+
+Android local flow:
+
+- Web preview: `pnpm exec vite --config vite.config.android.ts --host 0.0.0.0` starts Android UI and a dev embedded API (`API/mobile-entry.ts`) on `SP_API_PORT` (default 13962 for Vite dev). Browser preview is not a native Capacitor container, so native plugins fall back to no-op or HTML audio behavior.
+- Native sync/build: run `pnpm build:android`, then build an APK from `android/` with `gradlew assembleDebug` or `gradlew assembleRelease`.
+- Release install helper: `SPlayer-for-Android-build-and-install-android-release.cmd` selects connected ADB devices, runs `pnpm build:android`, runs `gradlew assembleRelease`, signs an unsigned arm64-v8a APK with the debug keystore if needed, installs it, and launches `top.imsyy.splayer_next`.
+- Do not run `pnpm build` for Android unless you explicitly need the desktop Electron production build; Android does not depend on desktop Rust native output.
 
 `audio-engine` static-links FFmpeg via the `ffmpeg_audio` crate (vendor zip + cc-built at compile time). Zero environment dependency — no `FFMPEG_DIR` / `PKG_CONFIG_PATH`, no system FFmpeg required.
 
@@ -34,15 +46,58 @@ The development shell is Git Bash on Windows. Write all terminal commands in bas
 - **Preload** (`electron/preload/`) — `contextBridge` exposing `window.api` (player/config/system/library/streaming/lyrics)
 - **Renderer** (`src/`) — Vue 3 SPA
 - **Lyric windows** (`windows/desktop-lyric`, `dynamic-island`, `taskbar-lyric`) — independent Vue entries sharing `windows/shared/`
+- **Android WebView** (`dist/capacitor` generated from `vite.config.android.ts`) — same Vue SPA with `__SPLAYER_TARGET__ = "android"`
+- **Android native layer** (`android/app/src/main/java/top/imsyy/splayer_next/android/`) — Capacitor plugins, Media3 playback, local cache/library/lyrics, LAN server, notification/media session
+- **Embedded mobile API** (`API/`) — Node.js Mobile service for online APIs, lyrics, plugin runtime, config/stats compatibility, and routes proxied by Kotlin
 
 ### Native Modules (Rust + NAPI-RS)
 
-Four `.node` modules in `native/`, built via `scripts/build-native.ts`, lazy-loaded by `electron/main/utils/nativeLoader.ts`. NAPI-RS auto-generates `index.d.ts`, imported via path aliases `@splayer/audio-engine`, `@splayer/audio-capture`, `@splayer/media-ctrl`, `@splayer/taskbar-lyric`.
+Six `.node` modules in `native/`, built via `scripts/build-native.ts`, lazy-loaded by `electron/main/utils/nativeLoader.ts`. NAPI-RS auto-generates `index.d.ts`, imported via path aliases `@splayer/audio-engine`, `@splayer/audio-capture`, `@splayer/media-ctrl`, `@splayer/taskbar-lyric`, `@splayer/taskbar-thumbnail`, `@splayer/opencc`.
 
 - `audio-engine` — `ffmpeg_audio` decode (static FFmpeg) + rodio playback + FFT + cover extraction. URLs wrapped as `Read + Seek` via `ffmpeg_audio::HttpAudioSource` (using `HttpCancelHandle` for cancellation/reset) — TLS handled in Rust (`reqwest` + `rustls`), cross-platform with no system deps. Pushes events (state/position/ended/outputStalled) via ThreadsafeFunction. Has load_token race protection and an `HttpCancelHandle` handle injected into `HttpAudioSource` for instant stop and reset.
 - `audio-capture` — System sound / microphone capture for song recognition. Windows via WASAPI Loopback; Linux via PulseAudio (`libpulse-binding`, needs `libpulse-dev` at build time — CI `dev.yml`/`release.yml` install it). Collects 8 kHz mono f32 PCM.
 - `media-ctrl` — Cross-platform system media controls (Windows SMTC / Linux MPRIS / macOS MPNowPlaying) + Discord RPC.
 - `taskbar-lyric` — Windows taskbar lyric text rendering with RegistryWatcher / UiaWatcher / TrayWatcher.
+
+Desktop Rust native modules are not packaged into Android. Android playback and system integration are implemented in Kotlin under `android/app/src/main/java/.../playback`.
+
+### Android Runtime
+
+Android is a Capacitor target that reuses the renderer where possible and swaps platform services through `src/services/bridge.ts`:
+
+```
+Vue app -> bridge.ts -> Capacitor plugin / KotlinApiServer
+  -> AndroidNativePlaybackPlugin -> PlaybackManager -> Media3 ExoPlayer
+  -> KotlinApiServer :13962 -> Node.js Mobile API :13233 for online APIs
+```
+
+- `capacitor.config.ts` sets `webDir = dist/capacitor`, transparent background, mixed content, status bar overlay, and Android WebView debugging.
+- `vite.config.android.ts` builds a single-page WebView bundle with `base: "./"`, injects `cordova.js` for production builds, defines `__SPLAYER_TARGET__ = "android"`, and starts the embedded API dev server during Vite serve unless `SPLAYER_SKIP_EMBEDDED_API_DEV=true`.
+- **`main.ts` installs `bridge` as `window.api` on Android** (`(window as ...).api = bridge`). Existing code calling `window.api.*` therefore routes through the bridge at runtime — but typecheck validates against the preload `index.d.ts` shape, not the bridge. Adding/upstreaming a new `window.api` method requires a matching `bridge.ts` entry (no-op/fallback on Android) or it crashes on device with `is not a function` while typecheck stays green.
+- `MainActivity.kt` registers Android plugins: `AndroidNativePlayback`, `AndroidLocalLyric`, `AndroidMainLyric`, `AndroidDownload`, `AndroidCache`, `AndroidSongCache`, `AndroidLanShare`, `AndroidLibrary`, `ApiServer`, and `ExternalApi`.
+- `KotlinApiServer` listens on port 13962 in the native app. It serves health checks/static Web assets/LAN sync/cache DB/external API routes and proxies most `/api/*` routes to Node.js Mobile on 127.0.0.1:13233.
+- `API/mobile-entry.ts` is the Node.js Mobile entry. In packaged Android it defaults to `SP_API_HOST=127.0.0.1`, `SP_API_PORT=13233`, and `SP_EMBEDDED=1`; Vite dev overrides host/port for LAN preview.
+- `API/mobile-server.ts` hosts the compatibility API surface: online music/lyrics, config, streaming placeholders, stats, plugin management, lyric matching, and Kotlin cache DB access.
+
+### Android Feature Areas
+
+- Playback: `AndroidNativePlaybackPlugin.kt` exposes load/play/pause/seek/volume/speed/status, notification permission, MediaSession metadata, FFT/spectrum, equalizer, dynamic-island floating lyric controls, and app shutdown/background behavior.
+- Audio engine: `PlaybackManager.kt` owns a singleton Media3 `ExoPlayer`, `MediaSession`, foreground `PlaybackService`, notification actions, queue context, URL resolution, prefetch promotion, FFT (`FftAudioProcessor`) and EQ (`EqualizerAudioProcessor`).
+- Local library: `AndroidLibraryPlugin.kt`, `LibraryScanner.kt`, and `LibraryDatabase.kt` use SAF directory permissions and a native SQLite database to scan/query/delete local tracks.
+- Cache: `AndroidCachePlugin.kt`, `AndroidSongCachePlugin.kt`, `AudioCacheProvider.kt`, `DbCacheHelper.kt`, and `CacheStorage.kt` manage file caches, ExoPlayer audio cache, lyric/TTML/match DB caches, and bounded cleanup.
+- Lyrics: `AndroidLocalLyricPlugin.kt` handles SAF lyric directories, sidecar matching, font import, and lyric indexing; `AndroidMainLyricPlugin.kt` renders the native main-player lyric overlay; dynamic-island lyric lives under `playback/DynamicIslandService.kt`.
+- Downloads: `AndroidDownloadPlugin.kt` writes audio/lyric files through SAF and reports progress through Capacitor events.
+- LAN/external API: `AndroidLanSharePlugin.kt`, `KotlinApiServer.kt`, and `ExternalApi*` implement LAN playback sync, browser client access, restricted external API routes, WebSocket heartbeat, and token checks.
+
+### Android Folders
+
+- `android/` — Gradle Android project generated by Capacitor and customized for Kotlin plugins, Media3 playback, nodejs-mobile-cordova assets, ABI splits, signing, and Android resources.
+- `android/app/src/main/java/top/imsyy/splayer_next/android/` — native Android source grouped by `playback/`, `cache/`, `library/`, `lyric/`, `download/`, and `server/`.
+- `android/app/src/test/java/.../lyric/` — JVM tests for Android lyric parsing, timeline, word segmentation, and local lyric path mapping.
+- `API/` — embedded Node.js API source; `mobile-entry.ts` boots the service, `mobile-server.ts` owns HTTP routes, `plugins/` contains Android plugin runtime/registry/router/storage/network compatibility.
+- `src/plugins/android*.ts` — typed Capacitor plugin wrappers for renderer code.
+- `src/services/bridge.ts` — cross-platform boundary that chooses Electron APIs, Android native plugins, Android Web preview fallbacks, or embedded HTTP API calls.
+- `dist/capacitor/` — generated Android WebView output; contains `nodejs-project/` after `pnpm build:android:node` and is synchronized into Android assets by `cap sync` / `prepare:android:embedded`.
 
 ### Playback Data Flow
 
@@ -54,6 +109,18 @@ User action → status store → IPC (player:load/play/pause/seek)
   → status store updates reactive state
   → playback.ts updates non-reactive time source
 ```
+
+Android playback data flow:
+
+```
+User action -> status/media store -> bridge.ts
+  -> AndroidNativePlayback Capacitor plugin
+  -> PlaybackManager / ExoPlayer / MediaSession / PlaybackService
+  -> Capacitor events (status/progress/ended/fft) back to renderer
+  -> playback.ts keeps the non-reactive millisecond time source in sync
+```
+
+Android audio sources must be WebView/ExoPlayer-safe URLs. Do not feed cached absolute paths or raw `file://` URLs to preview/native playback; cached songs are exposed through embedded/Kotlin HTTP routes such as `/api/cache/song/play`, and LAN follower devices should use the host `/api/lanShare/audio` route instead of resolving the track locally.
 
 ### State Management
 
@@ -75,15 +142,51 @@ Server protocol clients live in the main process (`electron/main/services/stream
 - `stores/streaming.ts` — Server list, active state, and complete shallowRef arrays; main-process update events trigger SQLite snapshot reloads, with no polling or direct media-server access.
 - Credentials — `electron/main/services/streaming/config.ts` encrypts via Electron `safeStorage` to `{userData}/app-data/config/streaming.json`. `accessToken / userId` remain in the bounded main-process session cache and are re-acquired on connect.
 
-### Lyric Windows
+### Lyric System
 
-`windows/desktop-lyric`, `dynamic-island`, `taskbar-lyric` are independent Vue entries. Always use shared composables from `@windows/shared/`:
+Renderer pipeline (`src/services/lyric/`, shared by desktop and the Android WebView):
 
-- `useNowPlayingSync` — playback sync, lyric index, anchor interpolation
-- `getNowPlayingCurrentMs()` — non-reactive current time for RAF char highlight
-- Line selection: `pickPrimaryIndex` (desktop, considers overlap) vs. `pickLatestStartedIndex` (dynamic island, immediate switch)
+- `loader.ts` — the orchestration core. `loadForTrack` / `beginLoad` token guards races. Load order: preloaded lyric → local TTML repo → online by preference → plugin fallback → embedded. Platform loads wrap every online path in `withPluginPrefer` (upstream: when `preferPluginLyric` is on, the plugin result wins). The online resolver is loader-local `tryOnlineByPreference`, NOT the `resolve.ts` one — it adds: renderer `CacheManager "lyrics"` read/write cache (keyed `${platform}_${track.id}.json`), `platformCanUpgrade` prescreening (skip network when the platform's best format can't outrank the local format), smart mode parallel racing with progressive commit (first result commits, a later higher-ranked one replaces), `isLanWebClient()` guards (LAN followers receive lyrics pushed by the host — `beginLoad` skips local lyric-state reset to avoid flashing empty on track switch). `applyOnline` commits, then fires the TTML overlay attempt.
+- `resolve.ts` — `resolveOnlineByPreference` here is still consumed by `src/services/download/lyric.ts` (download-side lyric resolution). Also hosts `resolveTTMLOverlay` (TTML only when `ttml` outranks the online format and `system.lyric.enableOnlineTTMLLyric` is on) and `resolvePluginLyric`.
+- `request.ts` — thin bridge calls. `preload.ts` + `nextTrackPreloader.ts` warm the next track (desktop only; Android prefetch is native `prefetchUpcomingUrls`, so `initPlayer` skips installing the JS preload watchers when `isAndroidNative`).
 
-Don't reimplement these inside individual windows.
+Backends: desktop main (`electron/main/apis/common/lyric/{netease,qqmusic,kugou}.ts` byId/byQuery + `ttml.ts` → AMLL TTML DB); Android (`KotlinApiServer :13962` → Node `API/mobile-server.ts :13233`, same route shapes).
+
+Formats parse in `src/utils/lyric/parse*.ts` (`ttml/qrc/krc/yrc/lrc/lys/ass/srt`); `DEFAULT_LYRIC_FORMAT_ORDER` ranks `ttml` first. Parsed shape is `LyricData` (`LyricLine/LyricWord/LyricSpan` in `shared/types/lyrics.ts`).
+
+Caches: `lyricMatchCache` (fingerprint = title + artists + 5s duration bucket, 30d TTL) maps fuzzy hits to platform ids — TTML overlay for cross-source tracks depends on it; `lyricTtmlCache` (positive forever, negative 72h); renderer `CacheManager "lyrics"` namespace; local TTML repo (`matchLocalTTML`, desktop only) and sidecar files (desktop `player.readLyricFile`, Android SAF via `AndroidLocalLyricPlugin`).
+
+Render surfaces — pick by target, never mix. The main-player lyric has a three-way component chain (same chain in `FullPlayer/index.vue` and `FullPlayerMobile.vue`, which mounts it twice for portrait/landscape layouts):
+
+| Condition (first match wins) | Component | Renderer |
+|---|---|---|
+| `settings.lyric.engine === "amll"` | `Lyrics/AMLLLyrics.vue` | `@applemusic-like-lyrics/core` `LyricPlayer` (upstream library) |
+| `isAndroid` | `FullPlayer/AndroidMainLyricHost.vue` | dual-mode adapter — see below |
+| everything else (desktop default) | `Lyrics/index.vue` | self-built engine: `Lyrics/engine/` (line/word builders, springs, interlude, `renderer.css`), translation/romaji, `bg.ts`/`poster.ts` |
+
+`AndroidMainLyricHost` resolves its own `renderMode` prop (`settings.lyric.engine === "kotlin" ? "kotlin" : "legacy"`):
+
+- **kotlin** (`isAndroidNative` only) — pushes parsed `LyricLine[]` (JSON) + time/config through the `AndroidMainLyric` plugin to native `MainPlayerLyricOverlayView.kt` Canvas rendering (models in `LyricModels.kt`; JVM-tested timeline/segmentation in `android/app/src/test/.../lyric/`). JS stops its RAF tick (`usesNativeKotlinLyricClock`) — the native layer owns the clock; the host handles seek events, viewport sync, font-size sentinel (`ResizeObserver`), font-weight ×2 scaling (cap 1000), and pauses the overlay while dialogs/queue sheets cover it.
+- **legacy** — renders `Lyrics/index.vue` inside the host (same engine as desktop, Android-tuned props like `applyScrollPreroll`).
+
+Engine-setting semantics (`settings.lyric.engine`: `physics` | `amll` | `kotlin`): desktop `kotlin` migrates back to `physics` on load (`stores/settings.ts`); Android `physics` + `system.androidLyric.renderMode === "kotlin"` auto-upgrades to `kotlin`. The FullPlayer bottom bar shows plain text (`bottomBarLyricText`) in kotlin mode (native Canvas can't embed into the WebView DOM), otherwise the normal lyric component.
+
+Other surfaces:
+
+- Desktop lyric window (`windows/desktop-lyric`) — transparent always-on-top Electron window, full lines + word highlight, `pickPrimaryIndex` (overlap-aware, stays on the still-sounding line).
+- Dynamic island (`windows/dynamic-island`; Android `playback/DynamicIslandService.kt`) — compact pill, `pickLatestStartedIndex` (switch the instant the next line starts), transport controls; Android adds floating-lyric controls through the playback plugin.
+- Taskbar lyric (`windows/taskbar-lyric` + Rust `native/taskbar-lyric`, Windows only) — text embedded into the taskbar via Registry/Uia/Tray watchers.
+
+Shared rules: `windows/*` must use `useNowPlayingSync` / `getNowPlayingCurrentMs()` from `windows/shared/composables/` — never reimplement sync, index, or interpolation. Time is ms everywhere. The global TTML switch is `system.lyric.enableOnlineTTMLLyric` (per-song toggle in `QuickActionsMenu.vue`).
+
+### Android Port Traps (learned the hard way)
+
+- `apiFetch` **rejects** with `[bridge] embedded API is not ready` during Node cold start — it never resolves `{ok:false}`. Every `await` behind a loading spinner needs try/finally (see `PluginMarket.refresh`).
+- Fuzzy lyric IDs on Android persist only behind `shouldPersistLyricMatch`; same-playback TTML relies on `stashMatchedLyricId` (L1-only, 5min). Do not remove the stash, and do not "simplify" to unconditional persist (wrong songs would stick for 30 days).
+- `NativeLogConsoleBridge` forwards logcat `*:E` into `console.error("[native:error] ...")`; `FATAL_LOG` bypasses all filters — keep it first, and keep the Kotlin list in sync with `src/utils/bridgeLogFilter.ts`.
+- Ports: Kotlin `13962`, Node `13233`, Vite dev overrides host for LAN. SAF `content://` URIs are not file paths. Feed ExoPlayer only WebView-safe URLs (`/api/cache/song/play`, `/api/lanShare/audio`).
+- `scripts/build-android-node.ts` (embedded API bundle): alias resolution must verify candidates with `stat().isFile()` — `access()` succeeds on directories (Windows) and esbuild then fails with `Incorrect function`. Electron main-process imports pulled into `API/` (e.g. kugou `config.ts` → `@main/store`) need an `embedded-*-stub` plugin registered BEFORE the generic `@main/` alias plugin — the store can't run under Node.js Mobile (top-level `electron` import).
+- `postinstall` is a three-step chain: `node node_modules/electron/install.js && electron-rebuild -f -w better-sqlite3 && tsx scripts/patch-nodejs-mobile-cordova.ts`. The patch step is mandatory for Android builds — losing it breaks `build:android`. Run `pnpm install` in a regular terminal (not sandboxed), or the patch fails with EPERM.
 
 ### Type System
 
@@ -107,7 +210,7 @@ Declarative — defined in `src/settings/schema.ts`, types in `src/types/setting
 │   ├── streaming.json      # Streaming credentials (safeStorage encrypted)
 │   └── lastfm.json         # Last.fm credentials (safeStorage encrypted)
 ├── database/library.db     # Music library (better-sqlite3, WAL)
-├── cache/                  # covers/ (cover:// protocol) + artists/ backgrounds/ songs/
+├── cache/                  # covers/ (cache:// protocol) + artists/ backgrounds/ songs/
 ├── logs/                   # App logs + native/
 └── plugins/                # scripts/ data/ logs/
 
@@ -116,6 +219,12 @@ Declarative — defined in `src/settings/schema.ts`, types in `src/types/setting
 
 Renderer IndexedDB (localforage): `splayer/library`, `splayer/queue`. Local playlists are stored in
 SQLite through the main-process playlist service; the old `splayer/playlists` store is migration-only.
+
+Android storage:
+
+- Web assets live under Android app assets after Capacitor sync; embedded Node project is copied to `android/app/src/main/assets/www/nodejs-project`.
+- Kotlin cache/library/lyric DB data lives in app-private storage and is accessed through Android plugins or `KotlinApiServer` routes; SAF-selected music/lyric/download directories are represented by persisted `content://` URI permissions.
+- Node.js Mobile config/stats compatibility defaults under the embedded API config directory; Android routes proxy sensitive config/session operations only for local requests.
 
 ### Cover Image
 
@@ -137,9 +246,21 @@ Renderer uses `vue-i18n` with `src/i18n/locales/{zh-CN,en-US}.json`. Main proces
 @main/                 → electron/main/         (main, tsconfig.node.json)
 @windows/              → windows/               (lyric windows)
 @splayer/audio-engine  → native/audio-engine    (main)
+@splayer/audio-capture → native/audio-capture   (main)
 @splayer/media-ctrl    → native/media-ctrl      (main)
 @splayer/taskbar-lyric → native/taskbar-lyric   (main)
+@splayer/taskbar-thumbnail → native/taskbar-thumbnail (main, thumbnail toolbar)
+@splayer/opencc        → native/opencc          (CJK conversion)
 ```
+
+Android Vite also defines `@root` -> repository root for Android-only Web builds.
+
+### Android Audio Dependencies
+
+- Desktop audio decoding: Rust `audio-engine` uses `ffmpeg_audio` + statically built FFmpeg + `rodio`; this is desktop-only.
+- Android native playback: Kotlin uses `androidx.media3:media3-exoplayer:1.8.0`, `androidx.media3:media3-session:1.8.0`, `androidx.media:media:1.7.0`, custom `AudioProcessor`s for FFT/EQ, and a foreground `PlaybackService`.
+- Embedded API runtime: `nodejs-mobile-cordova` provides Node.js in the Android app; `@neteasecloudmusicapienhanced/api` is copied and patched into the packaged vendor tree by `scripts/build-android-node.ts`.
+- Local HTTP/WebSocket: `org.nanohttpd:nanohttpd` and `nanohttpd-websocket` power `KotlinApiServer`, LAN sync, cache DB proxy, and external API access.
 
 ## Conventions
 
@@ -194,6 +315,18 @@ Use scoped loggers from `@main/utils/logger` (`coreLog / playerLog / mediaLog / 
 ### IPC Listeners
 
 In preload's `onEvent`, always `ipcRenderer.removeAllListeners()` before adding a new listener (HMR accumulates otherwise). Renderer composables call the returned `unsubscribe` in `onBeforeUnmount`.
+
+### Popup Layers (SDialog / SDrawer / SPopover)
+
+Every popup combines two systems that must stay co-present: upstream's unified stacking via `usePopupZIndex` (from `@/composables/useZIndex`; components pass `zIndex`/report `onOpenChange`, fixing #227) and the Android adaptations — `useBackClosable` (back button closes the popup, `@/composables/useAndroidBack`), `preventOpenAutoFocus` (SDialog), and hover→click trigger downgrade on Android (`effectiveTrigger`, SPopover). When editing these components, keep both sides; don't "simplify" either away.
+
+### Android Boundaries
+
+- Keep Android-specific native APIs behind Capacitor plugins or `src/services/bridge.ts`; do not import Android plugin wrappers directly into unrelated shared modules.
+- Keep desktop Electron IPC and Android HTTP/Capacitor behavior aligned at the `Window["api"]` shape where practical, but document unsupported Android methods with explicit no-op/fallback behavior.
+- Preserve the port split: Kotlin app server `13962`, packaged Node.js Mobile `13233`, Vite dev embedded API host `0.0.0.0` with `SP_API_PORT` defaulting to `13962`.
+- Browser Android preview (`isAndroidPreview`) is not a native container: native plugin calls must degrade to HTML audio/no-op behavior and must not assume SAF, MediaSession, ExoPlayer, or app-private storage.
+- LAN requests must stay gated: sensitive Node routes (`/api/apis/call`, cookie/session/login routes) remain local-only unless a dedicated external API route performs its own token/allowLan checks.
 
 ### Prettier
 

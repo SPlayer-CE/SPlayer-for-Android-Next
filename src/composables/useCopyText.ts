@@ -16,7 +16,8 @@ export const useCopyText = () => {
       return;
     }
     try {
-      await navigator.clipboard.writeText(text);
+      // Android WebView 的 navigator.clipboard 写入常被权限门控拒绝，统一走原生/桌面剪贴板通道
+      await window.api.system.writeClipboardText(text);
       toast.success(t("common.copied"));
     } catch {
       toast.error(t("common.copyFailed"));

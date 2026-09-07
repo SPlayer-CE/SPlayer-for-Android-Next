@@ -65,6 +65,8 @@ export interface InterludeState {
   anchorIndex: number;
   /** 圆点相对锚定行的 Y 偏移 */
   anchorOffset: number;
+  /** 跟随锚定歌词行的字号 */
+  fontSizePx: number;
 }
 
 /** 间奏圆点渲染器的样式缓存 */
@@ -158,11 +160,13 @@ export const renderInterludeDots = (
 
   // 容器 transform
   const origin = state.alignRight ? "right center" : "left center";
+  const fontSize = `${state.fontSizePx.toFixed(1)}px`;
   const transformStr = `translate(${state.x.toFixed(1)}px,${state.y.toFixed(1)}px) scale(${scale.toFixed(4)})`;
-  const styleKey = transformStr + origin;
+  const styleKey = `${transformStr}|${origin}|${opacity.toFixed(3)}|${fontSize}`;
   if (cache.containerStyle !== styleKey) {
     cache.containerStyle = styleKey;
     dotsContainer.style.opacity = String(opacity);
+    dotsContainer.style.fontSize = fontSize;
     dotsContainer.style.transform = transformStr;
     dotsContainer.style.transformOrigin = origin;
   }

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import defaultFallback from "@/assets/images/song.jpg";
+import { useCoverCache, type CoverCacheType } from "@/composables/useCoverCache";
+import { normalizeNeteaseMediaUrl } from "@/utils/format/netease";
 
 export interface SImgProps {
   /** 图片地址 */
@@ -8,11 +10,14 @@ export interface SImgProps {
   fallback?: string;
   /** alt 文字 */
   alt?: string;
+  /** Android 本地缓存分类 */
+  cacheType?: CoverCacheType;
 }
 
 const props = withDefaults(defineProps<SImgProps>(), {
   fallback: defaultFallback,
   alt: "",
+  cacheType: "covers",
 });
 
 const emit = defineEmits<{
@@ -20,6 +25,17 @@ const emit = defineEmits<{
 }>();
 
 const isLoaded = ref(false);
+
+const normalizedSrc = computed(() => {
+  const src = normalizeNeteaseMediaUrl(props.src) ?? props.src;
+  if (!src) return src;
+  if (location.protocol !== "https:") return src;
+  if (!src.startsWith("http://")) return src;
+  return `https://${src.slice("http://".length)}`;
+});
+
+/** Android 封面缓存：命中本地返 blob URL，未命中返原 URL 并后台下载 */
+const cachedSrc = useCoverCache(normalizedSrc, props.cacheType);
 
 const onLoad = (e: Event) => {
   const target = e.target as HTMLImageElement;
@@ -54,9 +70,9 @@ watch(
       enter-from-class="opacity-0"
       leave-to-class="opacity-0"
     >
-      <div v-if="src" :key="src" class="absolute inset-0 z-1">
+      <div v-if="cachedSrc" :key="cachedSrc" class="absolute inset-0 z-1">
         <img
-          :src="src"
+          :src="cachedSrc"
           :alt="alt"
           class="w-full h-full object-cover opacity-0 transition-opacity duration-200"
           decoding="async"

@@ -18,9 +18,12 @@ import IconLucideHourglass from "~icons/lucide/hourglass";
 import IconLucideMusic from "~icons/lucide/music";
 import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
 import IconLucideListChecks from "~icons/lucide/list-checks";
+import IconLucideChevronDown from "~icons/lucide/chevron-down";
 import IconMaterialSymbolsFavoriteRounded from "~icons/material-symbols/favorite-rounded";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconMaterialSymbolsFavoriteOutlineRounded from "~icons/material-symbols/favorite-outline-rounded";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -131,6 +134,7 @@ loadArtist();
 
 onBeforeUnmount(() => {
   loadAbort?.abort();
+  document.removeEventListener("pointerdown", onDocumentPointerDown, true);
 });
 
 /** 总时长 */
@@ -179,6 +183,15 @@ const handleToggleSubscribe = async (): Promise<void> => {
 };
 
 const searchQuery = ref("");
+const mobileSearchExpanded = ref(false);
+const mobileSearchWrapperRef = ref<HTMLElement | null>(null);
+const mobileSearchInputRef = ref<{ focus: () => void } | null>(null);
+
+const mobileSearchStyle = computed(() => ({
+  width: mobileSearchExpanded.value ? "calc(var(--page-zoom-100vw, 100vw) - 32px)" : "100%",
+  left: "0",
+  height: "2.75rem",
+}));
 
 /** 歌曲列表引用 */
 const songListRef = shallowRef<InstanceType<typeof SongList> | null>(null);
@@ -204,12 +217,43 @@ const activeTab = computed<ArtistTab>(() => {
     : "songs";
 });
 
+const expandMobileSearch = (): void => {
+  if (activeTab.value !== "songs") return;
+  mobileSearchExpanded.value = true;
+  nextTick(() => mobileSearchInputRef.value?.focus());
+};
+
+const collapseMobileSearch = (): void => {
+  mobileSearchExpanded.value = false;
+};
+
+const collapseMobileSearchInput = (): void => {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) activeElement.blur();
+  collapseMobileSearch();
+};
+
+const onDocumentPointerDown = (event: PointerEvent): void => {
+  if (!mobileSearchExpanded.value) return;
+  if (mobileSearchWrapperRef.value?.contains(event.target as Node)) return;
+  collapseMobileSearch();
+};
+
 const onTabSwitch = (key: string): void => {
   router.replace({ query: { ...route.query, tab: key } });
 };
 
 watch(activeTab, (tab) => {
   if (tab === "albums") collapsed.value = true;
+  if (tab !== "songs") collapseMobileSearch();
+});
+
+watch(mobileSearchExpanded, (expanded) => {
+  if (expanded) {
+    nextTick(() => document.addEventListener("pointerdown", onDocumentPointerDown, true));
+  } else {
+    document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+  }
 });
 
 const tabs = computed(() => {
@@ -232,28 +276,48 @@ const albumItems = computed<CoverItem[]>(() => {
 <template>
   <div class="flex flex-col h-full">
     <!-- 头部信息 -->
-    <div v-if="artist" class="shrink-0 px-5 pb-2">
+    <div v-if="artist" class="shrink-0" :class="useMobileLayout ? 'px-4 pb-1' : 'pb-2 px-5'">
       <div
         class="flex mt-2 transition-[gap,margin] duration-300"
-        :class="collapsed ? 'gap-3 mb-3' : 'gap-5 mb-4'"
+        :class="[
+          collapsed
+            ? useMobileLayout
+              ? 'gap-2 mb-2'
+              : 'gap-3 mb-3'
+            : useMobileLayout
+              ? 'gap-2 mb-2'
+              : 'gap-5 mb-4',
+        ]"
       >
         <!-- 头像 -->
         <SImg
           :src="artist.avatar ?? fallbackTrackCover"
           :fallback="artistFallback"
           :alt="artist.name"
+          cache-type="list-covers"
           class="shrink-0 rounded-full transition-[width,height] duration-300"
-          :class="collapsed ? 'size-20' : 'size-40'"
+          :class="[
+            collapsed
+              ? useMobileLayout
+                ? 'size-14'
+                : 'size-20'
+              : useMobileLayout
+                ? 'size-20'
+                : 'size-40',
+          ]"
         />
         <!-- 信息 -->
         <div class="flex-1 flex flex-col min-w-0 py-1">
           <div
             class="flex flex-col transition-[gap] duration-300"
-            :class="collapsed ? 'gap-0.5' : 'gap-2'"
+            :class="collapsed ? 'gap-0.5' : useMobileLayout ? 'gap-0.5' : 'gap-2'"
           >
             <h1
               class="font-bold text-on-surface truncate lh-normal transition-[font-size,line-height] duration-300"
-              :class="collapsed ? 'text-xl' : 'text-3xl'"
+              :class="[
+                useMobileLayout && !collapsed ? 'text-2xl' : 'text-3xl',
+                collapsed ? (useMobileLayout ? '!text-lg' : '!text-xl') : '',
+              ]"
             >
               {{ artist.name }}
             </h1>
@@ -262,7 +326,8 @@ const albumItems = computed<CoverItem[]>(() => {
               :class="collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'"
             >
               <div
-                class="overflow-hidden flex items-center gap-3 text-sm leading-none text-on-surface-variant/50"
+                class="overflow-hidden flex items-center leading-none text-on-surface-variant/50"
+                :class="[useMobileLayout ? 'flex-wrap gap-x-2 text-xs' : 'gap-3 text-sm']"
               >
                 <span class="flex items-center gap-1">
                   <IconLucideListMusic class="shrink-0" />
@@ -280,8 +345,8 @@ const albumItems = computed<CoverItem[]>(() => {
             </div>
           </div>
           <!-- 操作栏 -->
-          <div class="mt-auto flex items-center justify-between gap-4">
-            <div class="flex items-center gap-3">
+          <div v-if="!useMobileLayout" class="mt-auto flex items-center justify-between gap-4">
+            <div class="flex items-center gap-1.5">
               <SButton
                 type="primary"
                 variant="secondary"
@@ -322,28 +387,114 @@ const albumItems = computed<CoverItem[]>(() => {
                 </template>
               </SDropdownMenu>
             </div>
-            <SInput
-              v-model="searchQuery"
-              :placeholder="t('common.search')"
-              :disabled="activeTab !== 'songs'"
-              clearable
-              round
-              class="w-40 focus-within:w-56"
-              data-search-input
-            >
-              <template #prefix>
-                <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
-              </template>
-            </SInput>
+            <div class="relative h-9 shrink-0" :class="useMobileLayout ? 'w-full' : 'w-40'">
+              <SInput
+                v-model="searchQuery"
+                :placeholder="t('common.search')"
+                :disabled="activeTab !== 'songs'"
+                clearable
+                round
+                class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
+                data-search-input
+              >
+                <template #prefix>
+                  <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+                </template>
+              </SInput>
+            </div>
           </div>
         </div>
+      </div>
+      <div
+        v-if="useMobileLayout"
+        class="grid grid-cols-[2.75rem_minmax(0,1fr)_4.75rem_4.75rem] gap-2 transition-[margin] duration-300"
+        :class="collapsed ? 'mt-2 mb-2' : 'mt-3 mb-3'"
+      >
+        <div
+          ref="mobileSearchWrapperRef"
+          class="relative h-11 min-w-0 z-10"
+          @click="expandMobileSearch"
+        >
+          <SInput
+            ref="mobileSearchInputRef"
+            v-model="searchQuery"
+            :placeholder="mobileSearchExpanded ? t('common.search') : ''"
+            clearable
+            round
+            class="artist-mobile-search absolute left-0 top-0 overflow-hidden transition-[border-color,box-shadow,background-color,width,right,opacity] duration-250"
+            :class="
+              mobileSearchExpanded
+                ? 'z-50 backdrop-blur-lg bg-surface/80 shadow-lg ring-2 ring-primary/20'
+                : 'artist-mobile-search--collapsed'
+            "
+            :disabled="activeTab !== 'songs'"
+            :style="mobileSearchStyle"
+            @keydown.escape="collapseMobileSearch"
+          >
+            <template #prefix>
+              <IconLucideSearch class="size-4 shrink-0" />
+            </template>
+            <template v-if="mobileSearchExpanded" #suffix>
+              <button
+                type="button"
+                class="artist-mobile-search__collapse"
+                :aria-label="t('common.close')"
+                @pointerdown.stop
+                @click.stop="collapseMobileSearchInput"
+              >
+                <IconLucideChevronDown class="size-4.5" />
+              </button>
+            </template>
+          </SInput>
+        </div>
+        <button
+          type="button"
+          class="artist-mobile-action artist-mobile-action--primary"
+          :disabled="artist.tracks.length === 0 || activeTab !== 'songs'"
+          @click="handlePlayAll"
+        >
+          <IconLucidePlay class="size-4 shrink-0" />
+          <span class="artist-mobile-action__label">{{ t("common.playAll") }}</span>
+        </button>
+        <button
+          v-if="canSubscribeArtist"
+          type="button"
+          class="artist-mobile-action artist-mobile-action--compact"
+          :disabled="artistSubBusy"
+          @click="handleToggleSubscribe"
+        >
+          <IconMaterialSymbolsFavoriteRounded v-if="isArtistSubscribed" class="size-4 shrink-0" />
+          <IconMaterialSymbolsFavoriteOutlineRounded v-else class="size-4 shrink-0" />
+          <span class="artist-mobile-action__label">
+            {{ t(isArtistSubscribed ? "collection.unsubscribe" : "collection.subscribe") }}
+          </span>
+        </button>
+        <div v-else />
+        <SDropdownMenu
+          :items="moreMenuItems"
+          :disabled="activeTab !== 'songs'"
+          align="end"
+          @select="handleMoreMenu"
+        >
+          <template #trigger>
+            <button
+              type="button"
+              class="artist-mobile-action artist-mobile-action--compact w-full"
+              :disabled="activeTab !== 'songs'"
+            >
+              <IconLucideEllipsis class="size-4 shrink-0" />
+              <span class="artist-mobile-action__label">{{ t("common.more") }}</span>
+            </button>
+          </template>
+        </SDropdownMenu>
       </div>
       <!-- Tab 切换 -->
       <STabs
         :model-value="activeTab"
         :tabs="tabs"
-        type="bar"
-        size="large"
+        :type="useMobileLayout ? 'segment' : 'bar'"
+        :size="useMobileLayout ? undefined : 'large'"
+        :round="useMobileLayout"
         @update:model-value="onTabSwitch"
       />
     </div>
@@ -411,3 +562,111 @@ const albumItems = computed<CoverItem[]>(() => {
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.artist-mobile-action {
+  height: 2.75rem;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: 9999px;
+  background: rgb(var(--s-on-surface) / 0.1);
+  color: rgb(var(--s-on-surface));
+  appearance: none;
+  cursor: pointer;
+  transition:
+    background-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.artist-mobile-action:not(:disabled):active {
+  transform: scale(0.96);
+  background: rgb(var(--s-on-surface) / 0.16);
+}
+
+.artist-mobile-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.artist-mobile-action--primary {
+  background: rgb(var(--s-primary) / 0.16);
+  color: rgb(var(--s-primary));
+}
+
+.artist-mobile-action--primary:not(:disabled):active {
+  background: rgb(var(--s-primary) / 0.24);
+}
+
+.artist-mobile-action--compact {
+  gap: 0.25rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.artist-mobile-action__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.artist-mobile-search {
+  cursor: pointer;
+  transition:
+    border-color 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    right 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.artist-mobile-search--collapsed {
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-color: transparent;
+  background: rgb(var(--s-on-surface) / 0.1);
+  color: rgb(var(--s-on-surface));
+}
+
+.artist-mobile-search--collapsed :deep(input) {
+  flex: 0 0 0;
+  width: 0;
+  opacity: 0;
+}
+
+.artist-mobile-search__collapse {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: rgb(var(--s-on-surface-variant) / 0.7);
+  appearance: none;
+  cursor: pointer;
+  transition:
+    background-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.artist-mobile-search__collapse:active {
+  background: rgb(var(--s-on-surface) / 0.16);
+  color: rgb(var(--s-on-surface));
+}
+</style>

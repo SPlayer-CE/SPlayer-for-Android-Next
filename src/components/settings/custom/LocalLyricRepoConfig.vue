@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { safDirName } from "@/utils/safUri";
 import IconLucideFolder from "~icons/lucide/folder";
 import IconLucideFolderPlus from "~icons/lucide/folder-plus";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
@@ -12,10 +13,7 @@ const { t } = useI18n();
 
 const open = ref(false);
 
-const folderName = (dir: string): string => {
-  const parts = dir.replace(/\\/g, "/").split("/").filter(Boolean);
-  return parts[parts.length - 1] || dir;
-};
+const folderName = safDirName;
 
 const choose = async () => {
   const dir = await window.api.lyrics.pickLyricRepoDir();

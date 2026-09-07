@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { usePopupZIndex } from "@/composables/useZIndex";
+import { useBackClosable } from "@/composables/useAndroidBack";
 
 export interface SDrawerProps {
   /** 控制打开状态（v-model:open） */
@@ -49,6 +50,14 @@ const setOpen = (val: boolean): void => {
   isOpen.value = val;
   emit("update:open", val);
 };
+
+// Android 返回键关闭
+useBackClosable(isOpen, {
+  onBack: () => {
+    setOpen(false);
+    return true;
+  },
+});
 
 const contentClass = computed(() => {
   const base = [

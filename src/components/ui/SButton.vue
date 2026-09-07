@@ -38,7 +38,7 @@ const props = withDefaults(defineProps<SButtonProps>(), {
 
 const isDisabled = computed(() => props.disabled || props.loading);
 
-const enableRipple = computed(() => props.ripple && !props.disabled && !props.loading);
+const enableRipple = computed(() => props.ripple === true && !props.disabled && !props.loading);
 
 const pressScale = computed(() => (props.static ? undefined : "not-disabled:active:scale-96"));
 
@@ -213,7 +213,7 @@ const variantClass = computed(() => {
   <button
     v-ripple="enableRipple"
     :disabled="isDisabled"
-    class="s-button inline-flex items-center gap-1.5 font-sans select-none outline-none cursor-pointer transition-[color,background-color,border-color,opacity,transform] duration-200 disabled:cursor-not-allowed disabled:op-50"
+    class="s-button inline-flex shrink-0 items-center justify-center gap-1.5 font-sans select-none outline-none cursor-pointer transition-[color,background-color,border-color,opacity,transform] duration-200 disabled:cursor-not-allowed disabled:op-50"
     :class="[
       block && 'w-full',
       strong && 'font-semibold',
@@ -242,6 +242,8 @@ const variantClass = computed(() => {
 :where(.s-button) {
   border: none;
   background: transparent;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 :where(.s-button.has-border) {

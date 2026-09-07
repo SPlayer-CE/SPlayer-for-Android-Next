@@ -9,11 +9,13 @@ import { useContinueListening } from "@/composables/home/useContinueListening";
 import { useQuickActions } from "@/composables/home/useQuickActions";
 import { useHomeDiscover } from "@/composables/home/useHomeDiscover";
 import { useFloatingPlayerBar } from "@/composables/useFloatingPlayerBar";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import { navigateToPlaylist, navigateToArtist, navigateToAlbum } from "@/utils/navigate";
 import * as player from "@/core/player";
 
 const { t } = useI18n();
 const { isFloatingBar } = useFloatingPlayerBar();
+const { useMobileLayout } = useResponsiveLayout();
 
 /** 头部 */
 const { greetingTitle, greetingSub, headerStats, load: loadHeader } = useHomeHeader();
@@ -77,18 +79,23 @@ const openAlbum = (item: CoverItem): void => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto">
+  <div class="h-full">
     <div
-      class="mx-auto flex max-w-[1400px] flex-col gap-6 px-6 pt-6"
-      :class="isFloatingBar ? 'pb-28' : 'pb-10'"
+      class="mx-auto flex max-w-[1400px] flex-col gap-6 pt-6"
+      :class="[isFloatingBar ? 'pb-28' : 'pb-4', useMobileLayout ? 'px-4 gap-4 pt-4' : 'px-6']"
     >
       <!-- 问候 -->
-      <header class="flex items-start justify-between gap-6">
+      <header class="flex flex-col md:flex-row md:items-start justify-between gap-4 md:gap-6">
         <div class="min-w-0">
-          <h1 class="text-3xl font-bold text-on-surface text-balance">{{ greetingTitle }}</h1>
+          <h1
+            class="font-bold text-on-surface text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
+            {{ greetingTitle }}
+          </h1>
           <p class="mt-2 text-sm text-on-surface-variant/70">{{ greetingSub }}</p>
         </div>
-        <div class="shrink-0 flex items-center gap-6">
+        <div class="shrink-0 flex items-center gap-6" :class="useMobileLayout ? 'gap-4' : ''">
           <div v-for="stat in headerStats" :key="stat.label" class="text-right">
             <div class="flex items-baseline justify-end gap-0.5">
               <span class="text-2xl font-bold text-on-surface tabular-nums">{{ stat.value }}</span>
@@ -100,24 +107,64 @@ const openAlbum = (item: CoverItem): void => {
       </header>
       <!-- Hero -->
       <SCard v-if="heroLoading || hero" radius="xl" flush class="min-h-40 -mb-3">
-        <div class="flex items-stretch gap-4 p-4">
+        <div
+          class="flex items-stretch gap-4 p-4"
+          :class="useMobileLayout ? 'flex-col items-center p-3 gap-3' : ''"
+        >
           <!-- 封面 -->
-          <div class="size-32 shrink-0 self-center overflow-hidden rounded-lg">
-            <SImg :src="hero?.cover" :alt="hero?.title" class="size-full" />
+          <div
+            class="shrink-0 self-center overflow-hidden rounded-xl"
+            :class="useMobileLayout ? 'size-24' : 'size-32'"
+          >
+            <SImg
+              :src="hero?.cover"
+              :alt="hero?.title"
+              cache-type="list-covers"
+              class="size-full"
+            />
           </div>
           <!-- 信息 -->
-          <div class="flex min-w-0 flex-1 flex-col justify-center gap-1.5">
-            <STag v-if="hero" type="default" round size="small" class="self-start">
+          <div
+            class="flex min-w-0 flex-1 flex-col justify-center gap-1.5"
+            :class="useMobileLayout ? 'items-center text-center' : ''"
+          >
+            <STag
+              v-if="hero"
+              type="default"
+              round
+              size="small"
+              :class="useMobileLayout ? 'self-center' : 'self-start'"
+            >
               {{ hero.tag }}
             </STag>
-            <h2 class="truncate text-xl font-bold text-on-surface">{{ hero?.title }}</h2>
+            <h2
+              class="truncate font-bold text-on-surface"
+              :class="useMobileLayout ? 'text-lg' : 'text-xl'"
+            >
+              {{ hero?.title }}
+            </h2>
             <p class="truncate text-sm text-on-surface-variant/70">{{ hero?.subtitle }}</p>
-            <div class="mt-0.5 flex items-center gap-2">
-              <SButton type="primary" round :disabled="heroLoading" @click="playHero">
+            <div
+              class="mt-0.5 flex items-center gap-2"
+              :class="useMobileLayout ? 'flex-wrap justify-center' : ''"
+            >
+              <SButton
+                type="primary"
+                round
+                :size="useMobileLayout ? 32 : undefined"
+                :disabled="heroLoading"
+                @click="playHero"
+              >
                 <template #icon><IconLucidePlay /></template>
                 {{ t("home.hero.play") }}
               </SButton>
-              <SButton variant="secondary" round :disabled="heroLoading" @click="addHeroToQueue">
+              <SButton
+                variant="secondary"
+                round
+                :size="useMobileLayout ? 32 : undefined"
+                :disabled="heroLoading"
+                @click="addHeroToQueue"
+              >
                 <template #icon><IconLucidePlus /></template>
                 {{ t("home.hero.addQueue") }}
               </SButton>
@@ -126,7 +173,7 @@ const openAlbum = (item: CoverItem): void => {
           <!-- 队列预览 -->
           <ul
             v-if="heroPreview.length > 0"
-            class="w-100 shrink-0 flex-col border-l border-on-surface/8 pl-4 lg:flex"
+            class="hidden w-100 shrink-0 flex-col border-l border-on-surface/8 pl-4 lg:flex"
           >
             <li
               v-for="(track, index) in heroPreview"
@@ -145,7 +192,7 @@ const openAlbum = (item: CoverItem): void => {
         </div>
       </SCard>
       <!-- 快捷入口 -->
-      <section class="grid grid-cols-4 gap-3">
+      <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <SCard
           v-for="action in quickActions"
           :key="action.title"
@@ -166,14 +213,20 @@ const openAlbum = (item: CoverItem): void => {
         </SCard>
       </section>
       <!-- 继续聆听 / 反复聆听 -->
-      <section class="flex flex-col gap-3">
+      <section
+        class="flex flex-col gap-3"
+        style="content-visibility: auto; contain-intrinsic-size: 0 300px"
+      >
         <div>
           <h3 class="text-lg font-semibold text-on-surface">{{ continueTitle }}</h3>
           <p v-if="continueSubtitle" class="mt-0.5 text-xs text-on-surface-variant/50">
             {{ continueSubtitle }}
           </p>
         </div>
-        <div v-if="continueItems.length > 0" class="grid grid-cols-3 gap-3">
+        <div
+          v-if="continueItems.length > 0"
+          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+        >
           <SCard
             v-for="(item, index) in continueItems"
             :key="`${item.track.source}:${item.track.id}`"
@@ -189,7 +242,12 @@ const openAlbum = (item: CoverItem): void => {
               {{ trackNo(index) }}
             </span>
             <div class="relative size-12 shrink-0">
-              <SImg :src="item.track.cover" :alt="item.track.title" class="size-12 rounded-lg" />
+              <SImg
+                :src="item.track.cover"
+                :alt="item.track.title"
+                cache-type="list-covers"
+                class="size-12 rounded-lg"
+              />
               <div
                 class="absolute inset-0 flex items-center justify-center rounded-lg bg-black/45 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
               >
@@ -216,7 +274,11 @@ const openAlbum = (item: CoverItem): void => {
         </div>
       </section>
       <!-- 推荐歌单 / 专属歌单 -->
-      <section v-if="recommendPlaylists.length > 0" class="flex flex-col gap-3">
+      <section
+        v-if="recommendPlaylists.length > 0"
+        class="flex flex-col gap-3"
+        style="content-visibility: auto; contain-intrinsic-size: 0 500px"
+      >
         <div>
           <h3 class="text-lg font-semibold text-on-surface">{{ recommendTitle }}</h3>
           <p class="mt-0.5 text-xs text-on-surface-variant/50">{{ recommendSubtitle }}</p>
@@ -224,7 +286,11 @@ const openAlbum = (item: CoverItem): void => {
         <CoverList :items="recommendPlaylists" :virtual="false" :gap="16" @click="openPlaylist" />
       </section>
       <!-- 雷达歌单 -->
-      <section v-if="radarPlaylists.length > 0" class="flex flex-col gap-3">
+      <section
+        v-if="radarPlaylists.length > 0"
+        class="flex flex-col gap-3"
+        style="content-visibility: auto; contain-intrinsic-size: 0 500px"
+      >
         <div>
           <h3 class="text-lg font-semibold text-on-surface">{{ t("home.radar.title") }}</h3>
           <p class="mt-0.5 text-xs text-on-surface-variant/50">{{ t("home.radar.subtitle") }}</p>
@@ -232,7 +298,11 @@ const openAlbum = (item: CoverItem): void => {
         <CoverList :items="radarPlaylists" :virtual="false" :gap="16" @click="openPlaylist" />
       </section>
       <!-- 歌手推荐 -->
-      <section v-if="artists.length > 0" class="flex flex-col gap-3">
+      <section
+        v-if="artists.length > 0"
+        class="flex flex-col gap-3"
+        style="content-visibility: auto; contain-intrinsic-size: 0 400px"
+      >
         <div>
           <h3 class="text-lg font-semibold text-on-surface">{{ t("home.artists.title") }}</h3>
           <p class="mt-0.5 text-xs text-on-surface-variant/50">{{ t("home.artists.subtitle") }}</p>
@@ -247,7 +317,11 @@ const openAlbum = (item: CoverItem): void => {
         />
       </section>
       <!-- 新碟上架 -->
-      <section v-if="newAlbums.length > 0" class="flex flex-col gap-3">
+      <section
+        v-if="newAlbums.length > 0"
+        class="flex flex-col gap-3"
+        style="content-visibility: auto; contain-intrinsic-size: 0 500px"
+      >
         <div>
           <h3 class="text-lg font-semibold text-on-surface">{{ t("home.albums.title") }}</h3>
           <p class="mt-0.5 text-xs text-on-surface-variant/50">{{ t("home.albums.subtitle") }}</p>

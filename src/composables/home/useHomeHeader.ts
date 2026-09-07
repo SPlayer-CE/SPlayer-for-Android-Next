@@ -37,6 +37,7 @@ export const useHomeHeader = () => {
 
   /** 时长格式化：X 小时 Y 分钟 */
   const formatHm = (ms: number): string => {
+    if (!Number.isFinite(ms) || ms < 0) ms = 0;
     const totalMin = Math.round(ms / 60000);
     const hours = Math.floor(totalMin / 60);
     const minutes = totalMin % 60;
@@ -67,9 +68,11 @@ export const useHomeHeader = () => {
   /** 右侧三项统计 */
   const headerStats = computed<HeaderStat[]>(() => {
     const data = stats.value;
+    const weekHours =
+      data && Number.isFinite(data.weekListenedMs) ? data.weekListenedMs / 3600000 : 0;
     return [
       {
-        value: data ? (data.weekListenedMs / 3600000).toFixed(1) : "0",
+        value: weekHours.toFixed(1),
         unit: t("home.stats.unitHour"),
         label: t("home.stats.weekDuration"),
       },
@@ -133,8 +136,8 @@ export const useHomeHeader = () => {
     await history.load();
     try {
       stats.value = await window.api.stats.getStatsSummary();
-    } catch (error) {
-      console.warn("[home] getStatsSummary failed:", error);
+    } catch {
+      // API 不可达时静默回退，避免控制台噪音
     }
     subtitlePick.value = pickRandom(buildSubtitles());
   };

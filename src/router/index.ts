@@ -33,6 +33,11 @@ const router = createRouter({
           component: () => import("@/pages/Liked.vue"),
         },
         {
+          path: "playlists",
+          name: "playlists",
+          component: () => import("@/pages/MyPlaylists.vue"),
+        },
+        {
           path: "history",
           name: "history",
           component: () => import("@/pages/History.vue"),

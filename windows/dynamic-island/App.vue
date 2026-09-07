@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { DynamicIslandSettings } from "@shared/types/settings";
 import type { LyricLine } from "@shared/types/lyrics";
-import { DYNAMIC_ISLAND_BASE_HEIGHT } from "@shared/defaults/settings";
 import DEFAULT_COVER from "@/assets/images/song.jpg";
 import IslandLyricLine from "./components/IslandLyricLine.vue";
 import { pickAdvanceOnEndIndex } from "@shared/utils/lyricSync";
@@ -11,21 +10,36 @@ import { isMac } from "@/utils/config";
 import { formatArtists } from "@shared/utils/track";
 
 const config = reactive<DynamicIslandSettings>({
-  scale: 1,
+  height: 40,
+  fontSize: 24,
   fontWeight: 500,
   fontFamily: "",
   wordByWord: true,
   transition: "bounce",
+  autoGenerateWordByWord: true,
   playedColor: "rgba(255, 255, 255, 1)",
   unplayedColor: "rgba(255, 255, 255, 0.5)",
+  strokeColor: "rgba(0, 0, 0, 0.5)",
   backgroundColor: "rgba(0, 0, 0, 1)",
+  backgroundMask: false,
+  backgroundMaskColor: "rgba(0, 0, 0, 0.3)",
   alwaysOnTop: true,
   snapCentered: true,
   notchFusion: false,
   nonOcclusive: false,
   doubleLine: false,
   showTranslation: false,
+  align: "center",
+  animation: true,
+  locked: false,
+  dragByLongPress: true,
   useCSSDrag: false,
+  limitBounds: false,
+  alwaysShowSongInfo: false,
+  // 以下四项仅 Android 端使用，PC 端保持默认值
+  posX: 0,
+  posY: 0,
+  maxWidth: 0,
 });
 
 const NOTCH_WIDTH = 181;
@@ -41,7 +55,7 @@ const MIN_LYRIC_SCALE = 0.78;
 const hovering = ref(false);
 
 /* 窗口尺寸计算 */
-const mainRowHeight = computed(() => Math.round(DYNAMIC_ISLAND_BASE_HEIGHT * config.scale));
+const mainRowHeight = computed(() => Math.round(config.height));
 
 /* 主元素尺寸 */
 const padX = computed(() => Math.round(mainRowHeight.value * 0.4));
@@ -347,7 +361,7 @@ watch([() => config.doubleLine, () => config.showTranslation], () => {
 });
 
 /* 尺寸/字重变化：重测宽度，不走 swap 动画 */
-watch([() => config.scale, () => config.fontWeight, () => config.fontFamily], () => {
+watch([() => config.height, () => config.fontWeight, () => config.fontFamily], () => {
   if (phase !== "idle") return;
   const targetPx = measureTarget();
   applyMeasuredWidth(targetPx);

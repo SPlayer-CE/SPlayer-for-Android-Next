@@ -13,6 +13,7 @@ const adapter = neteaseQrLoginAdapter;
 const panelRef = useTemplateRef("panelRef");
 const loading = ref(false);
 const cookieDialogOpen = ref(false);
+const phoneDialogOpen = ref(false);
 
 const finishLogin = async (): Promise<boolean> => {
   const ok = await user.fetchStatus();
@@ -63,8 +64,21 @@ const openManualCookie = (): void => {
   cookieDialogOpen.value = true;
 };
 
+/** cookie 弹窗关闭后恢复扫码轮询 */
 const onCookieDialogOpen = (open: boolean): void => {
   cookieDialogOpen.value = open;
+  if (!open && props.open) panelRef.value?.resume();
+};
+
+/** 打开手机验证码登录（暂停扫码轮询） */
+const openPhoneLogin = (): void => {
+  panelRef.value?.pause();
+  phoneDialogOpen.value = true;
+};
+
+/** 验证码登录弹窗关闭后恢复扫码轮询 */
+const onPhoneDialogOpen = (open: boolean): void => {
+  phoneDialogOpen.value = open;
   if (!open && props.open) panelRef.value?.resume();
 };
 </script>
@@ -84,6 +98,11 @@ const onCookieDialogOpen = (open: boolean): void => {
         @success="handleQrSuccess"
       />
       <div class="flex items-center gap-2 pt-1">
+        <SButton variant="ghost" size="small" :disabled="loading" @click="openPhoneLogin">
+          <template #icon><IconLucideSmartphone /></template>
+          {{ t("login.phoneLogin") }}
+        </SButton>
+        <div class="h-3 w-px bg-outline-variant/40" />
         <SButton variant="ghost" size="small" :disabled="loading" @click="startAutoFetch">
           <template #icon><IconLucideScanLine /></template>
           {{ t("login.autoFetch") }}
@@ -102,6 +121,12 @@ const onCookieDialogOpen = (open: boolean): void => {
       </SButton>
     </template>
   </SDialog>
+  <!-- 验证码登录 -->
+  <LoginPhoneDialog
+    :open="phoneDialogOpen"
+    @update:open="onPhoneDialogOpen"
+    @success="emit('update:open', false)"
+  />
   <LoginCookieDialog
     :open="cookieDialogOpen"
     @update:open="onCookieDialogOpen"

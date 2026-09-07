@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { settingsSchema } from "@/settings/schema";
+import { isPlatformVisible } from "@/settings/platformFilter";
 
 const emit = defineEmits<{
   select: [categoryId: string, itemKey: string];
@@ -27,11 +28,14 @@ const results = computed<SearchResult[]>(() => {
   if (!q) return [];
   const out: SearchResult[] = [];
   for (const cat of settingsSchema) {
+    if (!isPlatformVisible(cat.platform)) continue;
     for (const sec of cat.sections ?? []) {
       if (sec.visible && !sec.visible()) continue;
+      if (!isPlatformVisible(sec.platform)) continue;
       for (const item of sec.items) {
         if (item.visible && !item.visible()) continue;
         if (item.searchable === false) continue;
+        if (!isPlatformVisible(item.platform)) continue;
         const label = t(`settings.${item.key}.label`);
         const desc = item.hideDescription ? "" : t(`settings.${item.key}.description`);
         const kw = item.keywords?.map((k) => t(k)).join(" ") ?? "";

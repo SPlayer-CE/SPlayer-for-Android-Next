@@ -1,0 +1,82 @@
+# detekt 配置：在默认规则基础上调优阈值
+# 项目使用 buildUponDefaultConfig = true，此文件仅覆盖需要调整的规则
+
+style:
+  # 魔法数字：忽略常见值，减少噪声
+  MagicNumber:
+    active: true
+    ignoreNumbers:
+      - "-1"
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+      - "4"
+      - "5"
+      - "8"
+      - "10"
+      - "16"
+      - "60"
+      - "80"
+      - "100"
+      - "127"
+      - "1500"
+      - "180"
+      - "200"
+      - "255"
+      - "256"
+      - "280"
+      - "500"
+      - "1000"
+      - "1024"
+      - "2048"
+      - "4096"
+      - "8192"
+      - "10000"
+      - "30000"
+      - "60000"
+      - "32767"
+      - "32768"
+      - "44100"
+      - "48000"
+      - "0.5"
+      - "0.54"
+      - "0.46"
+      - "0.9"
+      - "0.85"
+      - "0.28"
+      - "0.999"
+      - "1e-3"
+    ignoreLocalVariableDeclaration: true
+    ignorePropertyDeclaration: true
+    ignoreConstantDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+    ignoreAnnotation: true
+    ignoreNamedArgument: true
+    ignoreEnums: true
+    ignoreRanges: true
+    ignoreHashCodeFunction: true
+
+  # 返回语句数：复杂函数允许最多 8 个 return，HTTP 路由处理器单独 suppress
+  ReturnCount:
+    active: true
+    max: 8
+
+  # 行宽：适配现代屏幕
+  MaxLineLength:
+    active: true
+    maxLineLength: 140
+    excludePackageStatements: false
+    excludeImportStatements: false
+    excludeCommentStatements: true
+
+  # 循环内跳转语句：复杂遍历允许 4 个 break/continue
+  LoopWithTooManyJumpStatements:
+    active: true
+    maxJumpCount: 4
+
+# 命名规则：包名含下划线由 Android applicationId（top.imsyy.splayer_next）决定，豁免该包树
+naming:
+  PackageNaming:
+    active: true
+    excludes: ["**/splayer_next/**"]

@@ -115,7 +115,12 @@ const handlePick = async (playlistId: string): Promise<void> => {
         :class="submitting ? 'pointer-events-none opacity-50' : ''"
         @click="handlePick(entry.id)"
       >
-        <SImg :src="entry.cover" :alt="entry.name" class="size-12 rounded-md shrink-0" />
+        <SImg
+          :src="entry.cover"
+          :alt="entry.name"
+          cache-type="list-covers"
+          class="size-12 rounded-md shrink-0"
+        />
         <div class="flex-1 min-w-0 flex flex-col gap-0.5">
           <span class="text-sm text-on-surface truncate">{{ entry.name }}</span>
           <span class="text-xs text-on-surface-variant/60 tabular-nums">

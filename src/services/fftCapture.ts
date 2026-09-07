@@ -6,6 +6,9 @@
  * 避免一个组件卸载时误关掉另一个仍在使用的推送。
  */
 
+import { useSettingsStore } from "@/stores/settings";
+import { isAndroid } from "@/services/bridge";
+
 /** 当前持有 FFT 推送的消费者数量 */
 let refCount = 0;
 
@@ -14,6 +17,11 @@ export const acquireFft = (): void => {
   refCount++;
   if (refCount === 1) {
     window.api.player.setFftEnabled(true);
+    // Android：同步当前频谱算法方案到原生层，避免开机后默认值与用户设置不一致
+    if (isAndroid) {
+      const mode = useSettingsStore().player.spectrumAlgorithm;
+      window.api.player.setSpectrumAlgorithm(mode).catch(() => {});
+    }
   }
 };
 

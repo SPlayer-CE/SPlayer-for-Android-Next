@@ -65,7 +65,7 @@ export const startServer = (): Promise<ExternalApiStatus> => {
       return;
     }
 
-    const port = store.get("externalApi.port");
+    const port = store.get("externalApi.port") ?? 6688;
     // 默认仅本机可访问；服务自身无鉴权，开放局域网需用户显式开启
     const hostname = store.get("externalApi.allowLan") ? "0.0.0.0" : "127.0.0.1";
 

@@ -11,15 +11,12 @@ interface Props {
   height?: number;
   /** bar 圆角（px），默认 2 */
   radius?: number;
-  /** 最大画布宽度（px），默认 1920 */
-  maxWidth?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   show: true,
   height: 80,
   radius: 2,
-  maxWidth: 1920,
 });
 
 const status = useStatusStore();
@@ -27,23 +24,21 @@ const settings = useSettingsStore();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 
-/** 后端推送数据长度 */
-const FFT_SIZE = 128;
 /** 极低频跳过的段数（噪声多） */
 const SKIP_LOW = 8;
 /** bar 之间的固定间隙（px） */
 const BAR_GAP = 3;
-/** 后端推送间隔（ms），用于时间插值 */
+/** 后端推送间隔（ms），用于时间插值；两端均对齐 PC 20Hz=50ms 节奏 */
 const PUSH_INTERVAL = 50;
 
-/** 上一帧推送数据 */
-const prev = [new Float32Array(FFT_SIZE), new Float32Array(FFT_SIZE)];
+/** 上一帧推送数据（双声道，缓冲按平台推送长度动态分配：PC 128 bins、Android 256 bins） */
+let prev = [new Float32Array(0), new Float32Array(0)];
 /** 当前帧推送数据 */
-const curr = [new Float32Array(FFT_SIZE), new Float32Array(FFT_SIZE)];
+let curr = [new Float32Array(0), new Float32Array(0)];
 /** 实际渲染显示值（经过指数平滑） */
-const display = [new Float32Array(FFT_SIZE), new Float32Array(FFT_SIZE)];
+let display = [new Float32Array(0), new Float32Array(0)];
 /** 双声道显示值 */
-const stereoDisplay = new Float32Array(FFT_SIZE * 2);
+let stereoDisplay = new Float32Array(0);
 /** 上一次推送数据的引用，用于检测新帧到达 */
 let lastRef: readonly [number[], number[]] = [[], []];
 /** 上一次推送到达的时间戳 */
@@ -54,7 +49,8 @@ const resizeCanvas = (): void => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
-  const cssWidth = Math.min(document.body.clientWidth, props.maxWidth);
+  // 直接跟随视口宽度，避免 zoom out 时被硬上限截断导致两侧露出空白
+  const cssWidth = document.body.clientWidth;
   canvas.style.width = `${cssWidth}px`;
   canvas.style.height = `${props.height}px`;
   canvas.width = Math.round(cssWidth * dpr);
@@ -74,14 +70,25 @@ const draw = (): void => {
   const data = getFftFrame();
   if (data !== lastRef) {
     lastRef = data;
+    // PC 推 128 bins、Android 推 256 bins，长度变化时重配双声道缓冲
+    const len = data[0].length;
+    if (len !== curr[0].length) {
+      prev = [new Float32Array(len), new Float32Array(len)];
+      curr = [new Float32Array(len), new Float32Array(len)];
+      display = [new Float32Array(len), new Float32Array(len)];
+      stereoDisplay = new Float32Array(len * 2);
+    }
     prev[0].set(curr[0]);
     prev[1].set(curr[1]);
-    for (let i = 0; i < FFT_SIZE; i++) {
+    for (let i = 0; i < len; i++) {
       curr[0][i] = data[0][i] ?? 0;
       curr[1][i] = data[1][i] ?? 0;
     }
     lastUpdate = performance.now();
   }
+
+  const fftSize = display[0].length;
+  if (fftSize <= SKIP_LOW) return;
 
   // 时间插值：在 prev → curr 之间按时间平滑过渡，消除 20Hz stair-step
   const t = Math.min((performance.now() - lastUpdate) / PUSH_INTERVAL, 1);
@@ -91,7 +98,7 @@ const draw = (): void => {
 
   // 处理双声道
   for (let c = 0; c < 2; c++) {
-    for (let i = 0; i < FFT_SIZE; i++) {
+    for (let i = 0; i < fftSize; i++) {
       const target = prev[c][i] + (curr[c][i] - prev[c][i]) * t;
       if (target > display[c][i]) {
         display[c][i] = display[c][i] + (target - display[c][i]) * ATTACK;
@@ -101,14 +108,14 @@ const draw = (): void => {
     }
   }
   // 直接写入预分配缓冲区，避免 RAF 热路径产生临时数组
-  const channelLength = FFT_SIZE - SKIP_LOW;
+  const channelLength = fftSize - SKIP_LOW;
   const reverse = settings.player.reverseSpectrum;
   for (let i = 0; i < channelLength; i++) {
     if (reverse) {
-      stereoDisplay[channelLength + i] = display[0][FFT_SIZE - 1 - i];
+      stereoDisplay[channelLength + i] = display[0][fftSize - 1 - i];
       stereoDisplay[i] = display[1][SKIP_LOW + i];
     } else {
-      stereoDisplay[i] = display[0][FFT_SIZE - 1 - i];
+      stereoDisplay[i] = display[0][fftSize - 1 - i];
       stereoDisplay[channelLength + i] = display[1][SKIP_LOW + i];
     }
   }
@@ -184,12 +191,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeCanvas);
   stopCapture();
-  prev[0].fill(0);
-  prev[1].fill(0);
-  curr[0].fill(0);
-  curr[1].fill(0);
-  display[0].fill(0);
-  display[1].fill(0);
+  prev = [new Float32Array(0), new Float32Array(0)];
+  curr = [new Float32Array(0), new Float32Array(0)];
+  display = [new Float32Array(0), new Float32Array(0)];
+  stereoDisplay = new Float32Array(0);
   lastRef = [[], []];
 });
 </script>

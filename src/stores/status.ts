@@ -12,6 +12,7 @@ import type { PersonalFmOptions } from "@/types/netease";
 export type { RepeatMode, ShuffleMode } from "@shared/types/player";
 export type { SortField, SortOrder } from "@/types/list";
 import * as queue from "./queue";
+import { isAndroid } from "@/services/bridge";
 
 export const useStatusStore = defineStore(
   "status",
@@ -36,6 +37,10 @@ export const useStatusStore = defineStore(
     const outerQueueOpen = ref(false);
     /** 播放器播放队列 */
     const fullQueueOpen = ref(false);
+    /** 移动端独立播放队列浮层（不依赖全屏播放器） */
+    const mobileQueueOpen = ref(false);
+    /** 音量弹层展开状态 */
+    const volumePopoverOpen = ref(false);
     /** 搜索弹窗状态 */
     const searchOpen = ref(false);
     /** 评论弹窗状态 */
@@ -44,6 +49,8 @@ export const useStatusStore = defineStore(
     const commentsTrack = shallowRef<Track | null>(null);
     /** 全屏播放器是否展示歌词 */
     const showLyric = ref(true);
+    /** 移动端全屏播放器当前页 */
+    const mobileFullPlayerPage = ref<"info" | "lyric">("info");
     /** 当前播放索引 */
     const playIndex = ref(-1);
     /** 循环模式 */
@@ -80,10 +87,10 @@ export const useStatusStore = defineStore(
     const lyricOffsetMs = ref(0);
     /** 搜索页选中的平台 */
     const searchPlatform = ref<Platform>("netease");
-    /** 侧栏「我的歌单」当前展示来源 */
-    const myPlaylistSource = ref<ContentScope>("local");
-    /** 「我喜欢的音乐」页当前 tab */
-    const likedPageTab = ref<ContentScope>("local");
+    /** 侧栏「我的歌单」当前展示来源（Android 端无本地库，默认在线） */
+    const myPlaylistSource = ref<ContentScope>(isAndroid ? "online" : "local");
+    /** 「我喜欢的音乐」页当前 tab（Android 端无本地库，默认在线） */
+    const likedPageTab = ref<ContentScope>(isAndroid ? "online" : "local");
     /** 设置弹窗上次手动选择的大分类 */
     const settingsCategory = ref("");
     /** 歌曲列表排序字段 */
@@ -127,10 +134,13 @@ export const useStatusStore = defineStore(
       isPlayerExpanded,
       outerQueueOpen,
       fullQueueOpen,
+      mobileQueueOpen,
+      volumePopoverOpen,
       searchOpen,
       commentsOpen,
       commentsTrack,
       showLyric,
+      mobileFullPlayerPage,
       outputDevices,
       playIndex,
       repeatMode,

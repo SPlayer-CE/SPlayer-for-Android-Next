@@ -12,6 +12,10 @@ const props = withDefaults(
     lyricLines: LyricLine[];
     /** 是否正在播放（默认 true） */
     playing?: boolean;
+    /** 歌词字重（100~900），直接设在渲染容器上绕过 contain:strict 继承阻断 */
+    fontWeight?: number;
+    /** 歌词字体族，直接设在渲染容器上绕过 contain:strict 继承阻断 */
+    fontFamily?: string;
     /**
      * 激活行在容器中的对齐位置
      * @range 0 ~ 1（0 = 顶部，1 = 底部）
@@ -91,11 +95,17 @@ const props = withDefaults(
     showTranslation?: boolean;
     /** 是否显示音译歌词 @default true */
     showRomanization?: boolean;
+    /** 是否按词块换行 @default false */
+    enableWordBlockSegmentation?: boolean;
+    /** 是否解锁帧率限制 @default false */
+    unlockFpsLimit?: boolean;
     /** 挂载时的初始播放时间（毫秒）@default 0 */
     initialTime?: number;
   }>(),
   {
     playing: false,
+    fontWeight: 700,
+    fontFamily: undefined,
     alignPosition: DEFAULTS.alignPosition,
     wordFadeWidth: DEFAULTS.wordFadeWidth,
     scrollResetDelay: DEFAULTS.scrollResetDelay,
@@ -111,6 +121,8 @@ const props = withDefaults(
     enableEmphasizeEffect: DEFAULTS.enableEmphasizeEffect,
     showTranslation: true,
     showRomanization: true,
+    enableWordBlockSegmentation: false,
+    unlockFpsLimit: DEFAULTS.unlockFpsLimit,
     initialTime: 0,
   },
 );
@@ -124,6 +136,7 @@ const emit = defineEmits<Emits>();
 
 const containerRef = ref<HTMLElement>();
 const bottomLineEl = ref<HTMLElement>();
+
 let renderer: LyricRenderer | null = null;
 /** 冻结状态标志 */
 let isFrozen = false;
@@ -136,8 +149,9 @@ let pendingLyrics: LyricLine[] | null = null;
  * 由外部播放器在每帧或定时器中调用，驱动歌词滚动与逐字高亮动画。
  *
  * @param time - 当前播放时间（毫秒）
+ * @param _isSeek - 是否为 seek 跳转（AMLLLyrics 用于立即同步，本引擎忽略）
  */
-const setCurrentTime = (time: number) => {
+const setCurrentTime = (time: number, _isSeek?: boolean) => {
   renderer?.setCurrentTime(time);
 };
 
@@ -154,8 +168,15 @@ const resume = () => {
   }
   renderer?.resume();
 };
+const refreshLayout = () => {
+  renderer?.refreshLayout();
+};
 
-defineExpose({ setCurrentTime, freeze, resume });
+const suppressTapSeek = () => {
+  renderer?.requestSuppressTapSeek();
+};
+
+defineExpose({ setCurrentTime, freeze, resume, refreshLayout, suppressTapSeek });
 
 const handleLineClick = (timeMs: number) => {
   emit("seek", timeMs);
@@ -296,12 +317,41 @@ watch(
     rebuildLyrics();
   },
 );
+
+watch(
+  () => props.enableWordBlockSegmentation,
+  (v) => {
+    renderer?.setConfig({ enableWordBlockSegmentation: v });
+    rebuildLyrics();
+  },
+);
+
+watch(
+  () => props.unlockFpsLimit,
+  (v) => renderer?.setConfig({ unlockFpsLimit: v }),
+);
 </script>
 
 <template>
-  <div ref="containerRef">
+  <!-- Android WebView 对中文字体默认不做 weight 合成，需显式启用，
+       否则 700 / 900 在多数设备上视觉无差异（平板看着粗、手机不够粗）。 -->
+  <div
+    ref="containerRef"
+    class="lyrics-container"
+    :style="{
+      fontWeight: String(props.fontWeight),
+      fontFamily: props.fontFamily || undefined,
+    }"
+  >
     <Teleport v-if="bottomLineEl" :to="bottomLineEl">
       <slot name="bottom" />
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.lyrics-container {
+  font-synthesis: weight style;
+  -webkit-font-synthesis: weight style;
+}
+</style>

@@ -10,6 +10,7 @@ import { applyLyricExclude } from "@/utils/lyric/lyricStripper";
 import { normalizeLyricLines } from "@/utils/lyric/normalize";
 import { applyProfanityUncensor } from "@/utils/preset/profanity";
 import { applyLyricCjkTransform } from "@/utils/lyric/cjkTransform";
+import { isAndroid, pushDynamicIslandData, pushDynamicIslandSongInfo } from "@/services/bridge";
 
 export const useMediaStore = defineStore("media", () => {
   watchLyricPreference();
@@ -52,10 +53,34 @@ export const useMediaStore = defineStore("media", () => {
         lyric: toRaw(parsedLyric.value),
         source: activeLyric.value ? toRaw(activeLyric.value) : null,
       };
-      window.api.nowPlaying.update(payload);
+      window.api?.nowPlaying.update(payload);
     } catch (error) {
       console.error("[media] syncToMain failed", error);
     }
+    // Android 灵动岛：推送歌词数据 + 歌曲信息
+    if (isAndroid) {
+      pushDynamicIslandFromMedia();
+    }
+  };
+
+  /**
+   * 将当前歌词与歌曲信息推送到原生灵动岛。
+   * 逐字歌词（任一行 words 长度 > 1）走 yrcJson，行级歌词走 lrcJson，
+   * 与 DynamicIslandService.activeLines 的 wordMode && yrcLines 非空判断对齐。
+   */
+  const pushDynamicIslandFromMedia = (): void => {
+    const lines = toRaw(parsedLyric.value);
+    const hasWordLyric = lines.some((line) => line.words.length > 1);
+    const json = JSON.stringify(lines);
+    pushDynamicIslandData(hasWordLyric ? "[]" : json, hasWordLyric ? json : "[]");
+    const t = track.value;
+    pushDynamicIslandSongInfo(
+      t?.title ?? "",
+      t?.artists
+        ?.map((a) => a.name)
+        .filter(Boolean)
+        .join("、") ?? "",
+    );
   };
 
   /**

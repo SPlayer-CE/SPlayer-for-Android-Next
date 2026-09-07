@@ -15,6 +15,7 @@ import { formatTime } from "@/utils/time";
 import { formatFileSize } from "@/utils/format";
 import { isLosslessQuality, getQualityLabel } from "@/utils/quality";
 import { navigateToAlbum, navigateToArtist } from "@/utils/navigate";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import type { SVirtualListExposed } from "@/components/ui/SVirtualList.vue";
 import * as player from "@/core/player";
 import IconArrowUpDown from "~icons/lucide/arrow-up-down";
@@ -85,8 +86,28 @@ const media = useMediaStore();
 const status = useStatusStore();
 const settings = useSettingsStore();
 const fav = useFavorite();
+const { useMobileLayout } = useResponsiveLayout();
 
 const { isFloatingBar: isFloatingPlayerBar, PLAYER_BAR_GAP } = useFloatingPlayerBar();
+
+/** 列表底部留白，避开移动端底栏 / 播放栏 */
+const listPaddingBottom = computed<number | string>(() => {
+  if (useMobileLayout.value) {
+    if (!media.track) return "calc(var(--phone-nav-total-height) + 8px)";
+    return "calc(var(--phone-nav-total-height) + var(--phone-player-height) + var(--phone-player-gap) + var(--phone-content-gap))";
+  }
+  return isFloatingPlayerBar.value ? PLAYER_BAR_GAP : 80;
+});
+
+/** 右下角浮动按钮底部位置，避开移动端底栏 / 播放栏 */
+const floatingActionsBottomStyle = computed(() => {
+  if (!useMobileLayout.value) return undefined;
+  if (!media.track) return { bottom: "calc(var(--phone-nav-total-height) + 12px)" };
+  return {
+    bottom:
+      "calc(var(--phone-nav-total-height) + var(--phone-player-height) + var(--phone-player-gap) + var(--phone-content-gap))",
+  };
+});
 
 /** 排序器 默认使用 base 敏感度，忽略大小写 */
 const textCollator = new Intl.Collator(undefined, {
@@ -229,6 +250,19 @@ const batch = useMultiSelect(sortedItems, {
 });
 const { deleteConfirmOpen, deleteDialogTitle, deleteDialogContent } = batch;
 
+/** 触发歌曲行的播放入口 */
+const activateTrack = (item: Track, index: number): void => {
+  if (batch.active.value) {
+    batch.toggle(item.id);
+    return;
+  }
+  if (playingId.value === item.id) {
+    player.togglePlay();
+    return;
+  }
+  player.playFrom(sortedItems.value, index, props.playbackContext);
+};
+
 /** 添加到歌单相关 */
 const {
   open: pickerOpen,
@@ -304,7 +338,11 @@ defineExpose({
       <template #header>
         <div v-if="contextTrack">
           <div class="flex items-center gap-1.5 px-1 py-1">
-            <SImg :src="contextTrack.cover" class="size-9 rounded-md shrink-0" />
+            <SImg
+              :src="contextTrack.cover"
+              cache-type="list-covers"
+              class="size-9 rounded-md shrink-0"
+            />
             <div class="flex-1 min-w-0">
               <div class="text-xs font-medium truncate">
                 {{ contextTrack.title }}
@@ -319,8 +357,8 @@ defineExpose({
       <SVirtualList
         ref="virtualListRef"
         :items="sortedItems"
-        :item-height="88"
-        :padding-bottom="isFloatingPlayerBar ? PLAYER_BAR_GAP : 80"
+        :item-height="useMobileLayout ? 76 : 88"
+        :padding-bottom="listPaddingBottom"
         :get-item-key="(item: Track) => item.id"
         item-fixed
         height="100%"
@@ -348,7 +386,10 @@ defineExpose({
               v-if="batch.active.value"
               class="flex items-center gap-2 pl-3 pr-3 mx-3 h-10 text-sm"
             >
-              <div v-if="showIndex" class="w-8 shrink-0 flex items-center justify-center">
+              <div
+                v-if="showIndex"
+                class="w-8 shrink-0 flex items-center justify-center song-list-batch-checkbox"
+              >
                 <SCheckbox
                   :checked="batch.isAllSelected.value"
                   :indeterminate="batch.isPartial.value"
@@ -441,7 +482,7 @@ defineExpose({
             </div>
             <!-- 普通模式 -->
             <div
-              v-else
+              v-else-if="!useMobileLayout"
               class="flex items-center gap-3 pl-3 pr-6 mx-3 h-10 text-sm text-on-surface-variant/60"
             >
               <div v-if="showIndex" class="w-8 shrink-0 flex items-center justify-center">
@@ -512,26 +553,27 @@ defineExpose({
         </template>
         <!-- 列表项 -->
         <template #default="{ item, index }: { item: Track; index: number }">
-          <div class="px-3 pb-3">
+          <div :class="useMobileLayout ? 'song-list-mobile-item-wrap pb-2' : 'px-3 pb-3'">
             <div
               data-song-item
-              class="group flex items-center gap-3 pl-3 pr-6 h-19 rounded-xl cursor-pointer border-2 border-solid transition-[background-color,border-color] duration-200"
-              :class="
+              class="group flex items-center rounded-xl cursor-pointer border-2 border-solid transition-[background-color,border-color] duration-200"
+              :class="[
+                useMobileLayout ? 'gap-2 pl-2 pr-2 h-17' : 'gap-3 pl-3 pr-6 h-19',
                 batch.active.value
                   ? batch.selectedIds.value.has(item.id)
                     ? 'bg-primary/10 border-primary/30'
                     : 'bg-surface-panel border-primary/12 hover:border-primary/20 hover:bg-on-surface/5'
                   : playingId === item.id
                     ? 'bg-primary/16 border-primary/40'
-                    : 'bg-surface-panel border-primary/12 hover:border-primary/30 hover:bg-on-surface/8 active:bg-on-surface/12'
-              "
+                    : 'bg-surface-panel border-primary/12 hover:border-primary/30 hover:bg-on-surface/8 active:bg-on-surface/12',
+              ]"
               @click="batch.active.value ? batch.toggle(item.id) : undefined"
               @dblclick="onTrackDblClick(item, index)"
               @contextmenu="contextTrack = item"
             >
               <!-- 序号 / 多选 -->
               <div
-                v-if="showIndex"
+                v-if="showIndex && !useMobileLayout"
                 class="w-8 shrink-0 flex items-center justify-center relative"
                 :class="
                   batch.active.value
@@ -540,13 +582,7 @@ defineExpose({
                       ? 'text-primary'
                       : 'text-on-surface-variant'
                 "
-                @click.stop="
-                  batch.active.value
-                    ? batch.toggle(item.id)
-                    : playingId === item.id
-                      ? player.togglePlay()
-                      : player.playNow(item, props.playbackContext)
-                "
+                @click.stop="activateTrack(item, index)"
               >
                 <!-- 多选模式 -->
                 <SCheckbox
@@ -580,13 +616,60 @@ defineExpose({
                 </template>
               </div>
               <!-- 信息 -->
-              <div class="flex-1 min-w-0 flex items-center gap-3">
-                <SImg :src="item.cover" class="size-12 rounded-lg shrink-0" />
+              <div
+                class="flex-1 min-w-0 flex items-center"
+                :class="useMobileLayout ? 'gap-2.5' : 'gap-3'"
+              >
+                <div
+                  class="relative shrink-0"
+                  :class="useMobileLayout && showIndex ? 'cursor-pointer' : ''"
+                  @click.stop="
+                    useMobileLayout && showIndex ? activateTrack(item, index) : undefined
+                  "
+                >
+                  <SImg
+                    :src="item.cover"
+                    cache-type="list-covers"
+                    class="rounded-lg shrink-0"
+                    :class="useMobileLayout ? 'size-10' : 'size-12'"
+                  />
+                  <div
+                    v-if="useMobileLayout && showIndex"
+                    class="absolute left-0 top-0 z-2 flex items-center justify-center rounded-br-md rounded-tl-lg border border-solid border-white/10 bg-surface-panel/90 text-[10px] font-bold leading-none text-on-surface shadow-sm"
+                    :class="batch.active.value ? 'h-6 w-6' : 'h-4 min-w-4 px-0.5'"
+                  >
+                    <SCheckbox
+                      v-if="batch.active.value"
+                      :checked="batch.selectedIds.value.has(item.id)"
+                      class="song-list-batch-checkbox"
+                      size="small"
+                      @update:checked="batch.toggle(item.id)"
+                      @click.stop
+                    />
+                    <template v-else>
+                      <IconLucideMusic v-if="playingId === item.id" class="size-3" />
+                      <span v-else class="tabular-nums">{{ index + 1 }}</span>
+                    </template>
+                  </div>
+                  <div
+                    v-if="useMobileLayout && showIndex && !batch.active.value"
+                    class="absolute inset-0 flex items-center justify-center rounded-lg bg-surface-panel/55 text-on-surface opacity-0 transition-[opacity,transform] duration-200 group-hover:opacity-100 group-hover:scale-100 scale-95"
+                  >
+                    <IconLucidePause
+                      v-if="playingId === item.id && status.isPlaying"
+                      class="size-4.5"
+                    />
+                    <IconLucidePlay v-else class="size-4.5" />
+                  </div>
+                </div>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-baseline gap-1.5 min-w-0">
                     <span
-                      class="text-base font-medium truncate"
-                      :class="playingId === item.id ? 'text-primary' : ''"
+                      class="font-medium truncate"
+                      :class="[
+                        useMobileLayout ? 'text-sm' : 'text-base',
+                        playingId === item.id ? 'text-primary' : '',
+                      ]"
                     >
                       {{ item.title }}
                     </span>
@@ -599,17 +682,21 @@ defineExpose({
                     />
                     <span
                       v-if="item.comment && settings.preset.showSubtitle"
-                      class="flex-1 min-w-0 text-base truncate"
-                      :class="
-                        playingId === item.id ? 'text-primary/60' : 'text-on-surface-variant/60'
-                      "
+                      class="flex-1 min-w-0 truncate"
+                      :class="[
+                        useMobileLayout ? 'text-sm' : 'text-base',
+                        playingId === item.id ? 'text-primary/60' : 'text-on-surface-variant/60',
+                      ]"
                     >
                       ({{ item.comment }})
                     </span>
                   </div>
                   <div
-                    class="text-sm mt-1 truncate flex items-center gap-1"
-                    :class="playingId === item.id ? 'text-primary/70' : 'text-on-surface-variant'"
+                    class="mt-1 truncate flex items-center gap-1"
+                    :class="[
+                      useMobileLayout ? 'text-xs' : 'text-sm',
+                      playingId === item.id ? 'text-primary/70' : 'text-on-surface-variant',
+                    ]"
                   >
                     <span
                       v-if="item.quality && !settings.preset.hideQualityTag"
@@ -658,7 +745,7 @@ defineExpose({
               </div>
               <!-- 专辑 -->
               <div
-                v-if="showAlbum"
+                v-if="showAlbum && !useMobileLayout"
                 class="flex-1 min-w-0 truncate text-sm"
                 :class="playingId === item.id ? 'text-primary/70' : 'text-on-surface'"
               >
@@ -670,9 +757,38 @@ defineExpose({
                   {{ item.album?.name || t("collection.unknownAlbum") }}
                 </span>
               </div>
+              <div
+                v-if="useMobileLayout"
+                class="w-9 shrink-0 flex flex-col items-center justify-center gap-0.5"
+                @click.stop
+              >
+                <SButton
+                  v-if="!batch.active.value"
+                  type="primary"
+                  variant="text"
+                  circle
+                  :size="24"
+                  :icon-size="18"
+                  @click="fav.toggle(item)"
+                >
+                  <template #icon>
+                    <SIconSwap :active="fav.isLiked(item)">
+                      <template #on><IconFavorite /></template>
+                      <template #off><IconFavoriteOutline /></template>
+                    </SIconSwap>
+                  </template>
+                </SButton>
+                <div
+                  v-if="showDuration"
+                  class="text-[11px] tabular-nums leading-none text-center"
+                  :class="playingId === item.id ? 'text-primary/60' : 'text-on-surface-variant'"
+                >
+                  {{ formatTime(item.duration) }}
+                </div>
+              </div>
               <!-- 红心：批量模式下隐藏，其余始终显示 -->
               <div
-                v-if="!batch.active.value"
+                v-if="!useMobileLayout && !batch.active.value"
                 class="w-7 shrink-0 flex items-center justify-center"
                 @click.stop
               >
@@ -692,12 +808,15 @@ defineExpose({
                   </template>
                 </SButton>
               </div>
-              <div v-else class="w-7 shrink-0" />
+              <div v-else-if="!useMobileLayout" class="w-7 shrink-0" />
               <!-- 时长 -->
               <div
-                v-if="showDuration"
-                class="w-16 shrink-0 text-center text-sm tabular-nums"
-                :class="playingId === item.id ? 'text-primary/60' : 'text-on-surface-variant'"
+                v-if="showDuration && !useMobileLayout"
+                class="shrink-0 text-center text-sm tabular-nums"
+                :class="[
+                  useMobileLayout ? 'w-12' : 'w-16',
+                  playingId === item.id ? 'text-primary/60' : 'text-on-surface-variant',
+                ]"
               >
                 {{ formatTime(item.duration) }}
               </div>
@@ -734,7 +853,8 @@ defineExpose({
     <!-- 浮动按钮 -->
     <div
       class="absolute right-6 z-20 flex flex-col gap-3 transition-[bottom] duration-300"
-      :class="isFloatingPlayerBar ? 'bottom-26' : 'bottom-5'"
+      :class="!useMobileLayout && (isFloatingPlayerBar ? 'bottom-26' : 'bottom-5')"
+      :style="floatingActionsBottomStyle"
     >
       <!-- 回到顶部 -->
       <Transition name="fade">
@@ -783,3 +903,10 @@ defineExpose({
     <TagEditorDialog v-model:open="tagEditorOpen" :track="tagEditorTrack" />
   </div>
 </template>
+
+<style scoped>
+.song-list-mobile-item-wrap {
+  padding-left: 15px;
+  padding-right: 9px;
+}
+</style>

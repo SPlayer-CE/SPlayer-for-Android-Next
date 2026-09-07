@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SettingCategory } from "@/types/settings-schema";
 import type { SMenuItem } from "@/components/ui/SMenu.vue";
+import { isCategoryVisible } from "@/settings/platformFilter";
 
 const props = defineProps<{
   categories: SettingCategory[];
@@ -14,11 +15,14 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const menuItems = computed<SMenuItem[]>(() =>
-  props.categories.map((cat) => ({
-    key: cat.id,
-    label: t(`settings.group.${cat.id}`),
-    icon: cat.icon,
-  })),
+  props.categories
+    .filter((cat) => isCategoryVisible(cat))
+    .map((cat) => ({
+      key: cat.id,
+      label: t(`settings.group.${cat.id}`),
+      icon: cat.icon,
+      trailing: undefined,
+    })),
 );
 </script>
 

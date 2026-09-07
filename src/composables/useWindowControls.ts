@@ -1,3 +1,4 @@
+import { isAndroid } from "@/services/bridge";
 import { dialog } from "@/composables/useDialog";
 import { useSettingsStore } from "@/stores/settings";
 import SRadio from "@/components/ui/SRadio.vue";
@@ -12,14 +13,30 @@ export const useWindowControls = () => {
   const isFullscreen = ref(false);
   const isBorderless = computed(() => settings.system.system.borderlessWindow);
 
-  const minimize = (): void => window.api.window.minimize();
-  const toggleMaximize = (): void => window.api.window.toggleMaximize();
-  const toggleFullscreen = (): void => window.api.window.toggleFullscreen();
-  const hide = (): void => window.api.window.hide();
-  const quit = (): void => window.api.window.quit();
+  const minimize = (): void => {
+    if (isAndroid) return;
+    window.api.window.minimize();
+  };
+  const toggleMaximize = (): void => {
+    if (isAndroid) return;
+    window.api.window.toggleMaximize();
+  };
+  const toggleFullscreen = (): void => {
+    if (isAndroid) return;
+    window.api.window.toggleFullscreen();
+  };
+  const hide = (): void => {
+    if (isAndroid) return;
+    window.api.window.hide();
+  };
+  const quit = (): void => {
+    if (isAndroid) return;
+    window.api.window.quit();
+  };
 
   /** 点击关闭：已记忆走设置，未记忆弹窗询问 */
   const close = async (): Promise<void> => {
+    if (isAndroid) return;
     const { appearance } = settings;
     if (appearance.rememberCloseChoice) {
       appearance.closeAction === "hide" ? hide() : quit();
@@ -63,6 +80,7 @@ export const useWindowControls = () => {
   let offFs: (() => void) | null = null;
 
   onMounted(() => {
+    if (isAndroid) return;
     window.api.window.isMaximized().then((m) => (isMaximized.value = m));
     window.api.window.isFullscreen().then((f) => (isFullscreen.value = f));
     offMax = window.api.window.onMaximizeChange((m) => (isMaximized.value = m));

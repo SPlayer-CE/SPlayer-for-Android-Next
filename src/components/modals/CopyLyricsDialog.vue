@@ -88,8 +88,12 @@ const invertSelection = (): void => {
     .filter((index) => !picked.has(index));
 };
 
+/** 复制中，防重复点击；bridge 层超时兜底保证状态有界 */
+const copying = ref(false);
+
 /** 复制歌词 */
 const handleCopy = async (): Promise<void> => {
+  if (copying.value) return;
   const separator = selectedFilters.value.includes("emptyLine") ? "\n\n" : "\n";
   let content = displayLyrics.value
     .filter((line) => pickedSet.value.has(line.index))
@@ -106,13 +110,24 @@ const handleCopy = async (): Promise<void> => {
     toast.warning(t("player.copyLyric.empty"));
     return;
   }
-  await copy(content);
+  copying.value = true;
+  try {
+    await copy(content);
+  } finally {
+    copying.value = false;
+  }
 };
 
 /** 复制歌词原文 */
 const handleCopyRaw = async (): Promise<void> => {
   const content = media.lyricContent?.content;
-  if (content) await copy(content);
+  if (!content || copying.value) return;
+  copying.value = true;
+  try {
+    await copy(content);
+  } finally {
+    copying.value = false;
+  }
 };
 
 /** 导出中，防重复点击 */
@@ -141,7 +156,7 @@ const handleExport = async (): Promise<void> => {
     const fileName = `${track.title} - ${artist} - ${suffixName}.png`.replace(/[\\/:*?"<>|]/g, " ");
     const res = await window.api.system.saveFile(await blob.arrayBuffer(), fileName);
     if (res.success && res.path) toast.success(t("player.copyLyric.saved"));
-    else if (!res.success) toast.error(t("player.copyLyric.exportFailed"));
+    else toast.error(t("player.copyLyric.exportFailed"));
   } catch {
     toast.error(t("player.copyLyric.exportFailed"));
   } finally {
@@ -196,6 +211,7 @@ const handleExport = async (): Promise<void> => {
             variant="secondary"
             size="tiny"
             class="ml-auto shrink-0"
+            :loading="copying"
             :disabled="!media.lyricContent"
             @click="handleCopyRaw"
           >
@@ -223,7 +239,12 @@ const handleExport = async (): Promise<void> => {
       >
         {{ t("player.copyLyric.exportImage") }}
       </SButton>
-      <SButton type="primary" :disabled="!selectedLines.length" @click="handleCopy">
+      <SButton
+        type="primary"
+        :loading="copying"
+        :disabled="!selectedLines.length"
+        @click="handleCopy"
+      >
         {{ t("player.copyLyric.copy") }}
       </SButton>
     </template>

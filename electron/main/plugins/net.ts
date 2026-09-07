@@ -131,7 +131,14 @@ export const hostRequest = async (
       responseBody = await resp.text();
     }
 
-    return { status: resp.status, headers, body: responseBody };
+    return {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers,
+      url: resp.url,
+      redirected: resp.redirected,
+      body: responseBody,
+    };
   } catch (err) {
     if ((err as Error).name === "AbortError") {
       throw Object.assign(new Error("request timeout"), {

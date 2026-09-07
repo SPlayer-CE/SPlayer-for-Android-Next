@@ -34,17 +34,11 @@ let resyncPending = false;
  */
 let speed = 1.0;
 
-/**
- * 主进程推送位置与本地插值之间的容差（毫秒）
- * 偏差小于此值视作 IPC 延迟 / 解码抖动，保留插值避免可见跳跃；
- * 大于此值视作真实跳变（漏拦截的 seek、跳曲等），直接采用推送值
- */
+/** 主进程推送位置与本地插值之间的跳变阈值（毫秒） */
 const SYNC_TOLERANCE_MS = 1000;
 
-/**
- * 小幅偏差时向推送位置收敛的比例
- */
-const SYNC_CONVERGE_RATE = 0.2;
+/** 逐词歌词可感知的时钟偏差阈值（毫秒） */
+const VISUAL_SYNC_TOLERANCE_MS = 40;
 
 /** 获取当前播放位置（毫秒），播放中按 speed 插值，seek 中冻结 */
 export const getCurrentTime = (): number => {
@@ -61,6 +55,10 @@ export const isPlaying = (): boolean => playing;
 
 /**
  * 同步主进程推送的位置
+ *
+ * 默认对极小偏差应用单调防护；对可感知偏差重建基准，
+ * 避免逐词歌词长期跟随本地插值漂移。
+ *
  * @param ms 主进程推送的位置（毫秒）
  * @param options.force 强制采用 ms（如 load 重置、seek 跳转）
  * @returns 实际生效的位置
@@ -68,10 +66,18 @@ export const isPlaying = (): boolean => playing;
 export const setCurrentTime = (ms: number, options: { force?: boolean } = {}): number => {
   if (!options.force && !resyncPending && !seeking && totalDurationMs > 0) {
     const interpolated = getCurrentTime();
-    if (Math.abs(interpolated - ms) < SYNC_TOLERANCE_MS) {
-      currentTimeMs = interpolated + (ms - interpolated) * SYNC_CONVERGE_RATE;
+    const drift = ms - interpolated;
+    const absDrift = Math.abs(drift);
+    if (absDrift < VISUAL_SYNC_TOLERANCE_MS) {
+      currentTimeMs = interpolated;
       lastSyncAt = performance.now();
       return currentTimeMs;
+    }
+    if (absDrift < SYNC_TOLERANCE_MS) {
+      const adjusted = interpolated + drift * 0.35;
+      currentTimeMs = adjusted;
+      lastSyncAt = performance.now();
+      return adjusted;
     }
   }
   resyncPending = false;
@@ -127,6 +133,20 @@ export const setFftFrame = (ldata: number[], rdata: number[]): void => {
 
 /** RAF 循环读取最新频谱帧 */
 export const getFftFrame = (): readonly [number[], number[]] => fftFrame;
+
+/**
+ * 原生推送的低频鼓点能量值 [0, 1]（Android 端 FftAudioProcessor 平方扩展 + EMA 平滑后结果）
+ * PC 端无此推送，undefined 时由消费方走前端自算路径
+ */
+let lowFreqValue: number | undefined;
+
+/** 主进程推送 FFT 数据时同步更新 lowFreq（PC 端传 undefined） */
+export const setLowFreq = (value: number | undefined): void => {
+  lowFreqValue = value;
+};
+
+/** RAF 循环读取原生 lowFreq；返回 undefined 表示无原生推送，消费方需走自算路径 */
+export const getLowFreq = (): number | undefined => lowFreqValue;
 
 /** 重置位置/时长/播放标志 */
 export const reset = (): void => {

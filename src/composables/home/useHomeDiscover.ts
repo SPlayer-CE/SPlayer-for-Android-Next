@@ -1,5 +1,9 @@
 import type { CoverItem } from "@/types/artist";
 import { useUserStore } from "@/stores/user";
+import { useSettingsStore } from "@/stores/settings";
+import { useCacheManager } from "@/core/resource/CacheManager";
+import { isAndroid } from "@/services/bridge";
+import { prefetchListCovers } from "@/composables/useCoverCache";
 import {
   fetchRecommendPlaylists,
   fetchRadarPlaylists,
@@ -23,12 +27,9 @@ interface DiscoverCache {
 /** 模块级缓存，跨页面 / 重新挂载复用 */
 let cache: DiscoverCache | null = null;
 
-/** 包裹拉取：失败记日志并回退空数组，单区块失败不影响整体 */
-const safe = (label: string, task: Promise<CoverItem[]>): Promise<CoverItem[]> =>
-  task.catch((error) => {
-    console.warn(`[home] ${label} failed:`, error);
-    return [];
-  });
+/** 包裹拉取：失败静默回退空数组，单区块失败不影响整体 */
+const safe = (_label: string, task: Promise<CoverItem[]>): Promise<CoverItem[]> =>
+  task.catch(() => []);
 
 /**
  * 首页推荐内容
@@ -69,9 +70,39 @@ export const useHomeDiscover = () => {
   /** 拉取首页推荐内容 */
   const load = async (): Promise<void> => {
     const loggedIn = user.isLoggedIn;
+    const cacheKey = `home-rec-${loggedIn ? (user.profile?.userId ?? "user") : "guest"}.json`;
     if (cache && cache.loggedIn === loggedIn && Date.now() - cache.at < CACHE_TTL) {
       apply(cache);
       return;
+    }
+    const cacheEnabled = isAndroid && useSettingsStore().system.cache?.enabled === true;
+    let diskCache: DiscoverCache | null = null;
+    if (cacheEnabled) {
+      try {
+        const result = await useCacheManager().get("list-data", cacheKey);
+        if (result.success && result.data) {
+          const data = JSON.parse(new TextDecoder().decode(result.data)) as DiscoverCache;
+          if (
+            Array.isArray(data.recommend) &&
+            Array.isArray(data.radar) &&
+            Array.isArray(data.artists) &&
+            Array.isArray(data.albums)
+          ) {
+            diskCache = data;
+          }
+        }
+      } catch {
+        diskCache = null;
+      }
+      if (diskCache && diskCache.loggedIn === loggedIn) {
+        cache = diskCache;
+        apply(diskCache);
+        prefetchListCovers(diskCache.recommend, "list-covers", 20, "m");
+        prefetchListCovers(diskCache.radar, "list-covers", 20, "m");
+        prefetchListCovers(diskCache.artists, "list-covers", 20, "m");
+        prefetchListCovers(diskCache.albums, "list-covers", 20, "m");
+        if (Date.now() - diskCache.at < CACHE_TTL) return;
+      }
     }
     const [recommend, radar, artistList, albums] = await Promise.all([
       safe("recommend playlists", fetchRecommendPlaylists(loggedIn)),
@@ -79,8 +110,24 @@ export const useHomeDiscover = () => {
       safe("artists", fetchArtists()),
       safe("new albums", fetchNewAlbums()),
     ]);
-    cache = { at: Date.now(), loggedIn, recommend, radar, artists: artistList, albums };
+    const next = { at: Date.now(), loggedIn, recommend, radar, artists: artistList, albums };
+    if (
+      diskCache &&
+      next.recommend.length + next.radar.length + next.artists.length + next.albums.length === 0
+    ) {
+      return;
+    }
+    cache = next;
     apply(cache);
+    if (cacheEnabled) {
+      useCacheManager()
+        .set("list-data", cacheKey, JSON.stringify(cache))
+        .catch(() => {});
+      prefetchListCovers(cache.recommend, "list-covers", 20, "m");
+      prefetchListCovers(cache.radar, "list-covers", 20, "m");
+      prefetchListCovers(cache.artists, "list-covers", 20, "m");
+      prefetchListCovers(cache.albums, "list-covers", 20, "m");
+    }
   };
 
   // 登录态变化

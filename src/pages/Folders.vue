@@ -16,8 +16,10 @@ import IconLucideChevronRight from "~icons/lucide/chevron-right";
 import IconLucidePlay from "~icons/lucide/play";
 import IconLucideListChecks from "~icons/lucide/list-checks";
 import IconLucideListPlus from "~icons/lucide/list-plus";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconLucideEllipsis from "~icons/lucide/ellipsis";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const router = useRouter();
 const libraryStore = useLibraryStore();
@@ -114,7 +116,12 @@ onMounted(async () => {
   <div class="flex flex-col h-full">
     <div class="shrink-0 px-5 pb-2">
       <div class="flex items-baseline gap-4 mt-2 mb-4">
-        <h1 class="text-3xl font-bold text-on-surface text-balance">{{ t("folder.label") }}</h1>
+        <h1
+          class="font-bold text-on-surface text-balance"
+          :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+        >
+          {{ t("folder.label") }}
+        </h1>
         <div
           v-if="trackCount > 0"
           class="flex items-center gap-3 text-sm text-on-surface-variant/50"

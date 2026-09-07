@@ -1,5 +1,6 @@
 import localforage from "localforage";
 import type { PlaybackContext, PlaybackQueueItem, Track } from "@shared/types/player";
+import { normalizeNeteaseTrackMediaUrls } from "@/utils/format/netease";
 
 /** 持久化存储实例 */
 const db = localforage.createInstance({ name: "splayer", storeName: "queue" });
@@ -36,6 +37,9 @@ export const originalQueue = shallowRef<PlaybackQueueItem[] | null>(null);
 /** 队列中的歌曲总数 */
 export const queueLength = computed(() => queue.value.length);
 
+const normalizeTracks = (items: readonly Track[] | null | undefined): Track[] =>
+  (items ?? []).map((item) => normalizeNeteaseTrackMediaUrls(item));
+
 /** 保存当前播放列表数据 */
 const save = (): void => {
   db.setItem("playList", toRaw(queueEntries.value)).catch(console.error);
@@ -50,8 +54,13 @@ export const restoreQueue = async (): Promise<void> => {
       db.getItem<PersistedQueueItem[] | null>("originalPlayList"),
     ]);
     if (!list?.length) return;
-    queueEntries.value = list.map(restoreQueueItem);
-    originalQueue.value = original?.map(restoreQueueItem) ?? null;
+    const restoreEntries = (items: PersistedQueueItem[]): PlaybackQueueItem[] =>
+      items.map((value) => {
+        const item = restoreQueueItem(value);
+        return { ...item, track: normalizeNeteaseTrackMediaUrls(item.track) };
+      });
+    queueEntries.value = restoreEntries(list);
+    originalQueue.value = original ? restoreEntries(original) : null;
   } catch (e) {
     console.error("[queue] 恢复持久化数据失败:", e);
   }
@@ -63,7 +72,7 @@ export const restoreQueue = async (): Promise<void> => {
  * @param context - 队列中曲目共用的播放来源上下文
  */
 export const setQueue = (items: readonly Track[], context?: PlaybackContext): void => {
-  queueEntries.value = items.map((track) => createQueueItem(track, context));
+  queueEntries.value = normalizeTracks(items).map((track) => createQueueItem(track, context));
   originalQueue.value = null;
   save();
 };
@@ -75,7 +84,7 @@ export const setQueue = (items: readonly Track[], context?: PlaybackContext): vo
  * @param context - 播放来源上下文
  */
 export const insertToQueue = (item: Track, index: number, context?: PlaybackContext): void => {
-  const entry = createQueueItem(item, context);
+  const entry = createQueueItem(normalizeNeteaseTrackMediaUrls(item), context);
   const safeIndex = Math.max(0, Math.min(index, queueEntries.value.length));
   const next = [...queueEntries.value];
   next.splice(safeIndex, 0, entry);
@@ -98,7 +107,7 @@ export const insertManyToQueue = (
   context?: PlaybackContext,
 ): void => {
   if (items.length === 0) return;
-  const entries = items.map((track) => createQueueItem(track, context));
+  const entries = normalizeTracks(items).map((track) => createQueueItem(track, context));
   const list = queueEntries.value;
   const safeIndex = Math.max(0, Math.min(index, list.length));
   queueEntries.value = [...list.slice(0, safeIndex), ...entries, ...list.slice(safeIndex)];
@@ -114,7 +123,8 @@ export const insertManyToQueue = (
  */
 export const updateQueueTracks = (updates: readonly Track[]): void => {
   if (updates.length === 0) return;
-  const byId = new Map(updates.map((item) => [item.id, item]));
+  const normalizedUpdates = normalizeTracks(updates);
+  const byId = new Map(normalizedUpdates.map((item) => [item.id, item]));
   const touched =
     queueEntries.value.some((item) => byId.has(item.track.id)) ||
     (originalQueue.value?.some((item) => byId.has(item.track.id)) ?? false);

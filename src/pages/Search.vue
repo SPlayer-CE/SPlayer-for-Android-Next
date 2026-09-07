@@ -8,8 +8,10 @@ import { searchSongs, searchAlbums, searchArtists, searchPlaylists } from "@/api
 import SongList from "@/components/list/SongList.vue";
 import CoverList from "@/components/list/CoverList.vue";
 import { useStatusStore } from "@/stores/status";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import { navigateToAlbum, navigateToArtist, navigateToPlaylist } from "@/utils/navigate";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -202,7 +204,10 @@ const playbackContext = computed<PlaybackContext>(() => ({
     <div class="shrink-0 px-5 pb-2">
       <div class="mt-2 mb-4 flex items-end justify-between gap-4">
         <h1 class="min-w-0 flex items-baseline pr-3">
-          <span class="min-w-0 truncate text-3xl font-bold text-on-surface">
+          <span
+            class="min-w-0 truncate font-bold text-on-surface"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
             {{ keyword || t("search.title") }}
           </span>
           <span

@@ -5,9 +5,10 @@ import {
   BackgroundRender as CoreBackgroundRender,
   MeshGradientRenderer,
 } from "@applemusic-like-lyrics/core";
-import { getFftFrame } from "@/services/playback";
+import { getFftFrame, getLowFreq } from "@/services/playback";
 import { acquireFft, releaseFft } from "@/services/fftCapture";
 import { getBassPulse, toAmllLowFreqVolume } from "@/services/audioFeatures";
+import { useSettingsStore } from "@/stores/settings";
 
 export interface BackgroundRenderProps {
   /** 专辑封面资源 URL */
@@ -39,6 +40,7 @@ const props = withDefaults(defineProps<BackgroundRenderProps>(), {
 });
 
 const wrapperRef = ref<HTMLDivElement | null>(null);
+const settings = useSettingsStore();
 
 // 外部渲染器实例引用
 const bgRenderRef = shallowRef<AbstractBaseRenderer>();
@@ -81,12 +83,24 @@ const BASS_DECAY = 0.14;
 
 // 低频平滑后脉冲
 let smoothedPulse = 0;
+// 原生低频直传缓存
+let smoothedVolume = 0;
 let lastFftFrame: readonly [number[], number[]] = [[], []];
 
 /**
  * 从最新 FFT 帧数据计算低频音量能量值 [0.0 - 1.0]
+ *
+ * Android 原生方案优先消费原生 lowFreq；PC 对齐方案与桌面端一致，使用 fftFrame 前端自算。
  */
 const updateLowFreqVolume = () => {
+  const nativeLowFreq = getLowFreq();
+  if (settings.player.spectrumAlgorithm === "android" && typeof nativeLowFreq === "number") {
+    // 原生已做完整处理，直接消费避免二次平滑稀释冲击感
+    smoothedVolume = nativeLowFreq;
+    bgRenderRef.value?.setLowFreqVolume(smoothedVolume);
+    return;
+  }
+
   const data = getFftFrame();
   if (!data || data[0].length === 0) return;
   if (data === lastFftFrame) return;

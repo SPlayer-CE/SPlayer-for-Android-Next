@@ -1,5 +1,5 @@
 import type { Album, Artist, AudioQuality, Playlist, Track } from "@shared/types/player";
-import type { UserSubcount } from "@/types/user";
+import type { UserSubcount, UserVideoFavorite, UserRadioFavorite } from "@/types/user";
 import type { NeteaseSong } from "@/types/netease";
 
 interface NeteaseError {
@@ -21,14 +21,60 @@ export const ensureOk = <T>(body: T): T => {
 };
 
 /**
+ * Android 端默认禁用明文 HTTP；服务商返回的资源链接偶尔仍是 http，需要就地升到 https。
+ * @param url - 原始资源 URL
+ * @returns 可直接用于前端/原生消费的安全 URL
+ */
+export const normalizeNeteaseMediaUrl = (url: string | undefined): string | undefined => {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" && parsed.hostname.endsWith(".music.126.net")) {
+      parsed.protocol = "https:";
+      return parsed.toString();
+    }
+  } catch {
+    return url;
+  }
+  return url;
+};
+
+/**
+ * 归一化 Track 里的服务商资源地址。
+ * 队列/历史等持久化数据可能残留旧的 http 链接，这里统一在恢复时修正。
+ * @param track - 原始 Track
+ * @returns 归一化后的 Track
+ */
+export const normalizeNeteaseTrackMediaUrls = (track: Track): Track => {
+  if (track.source !== "netease") return track;
+  const cover = normalizeNeteaseMediaUrl(track.cover) ?? track.cover;
+  const coverOriginal = normalizeNeteaseMediaUrl(track.coverOriginal) ?? track.coverOriginal;
+  const albumCover = track.album
+    ? (normalizeNeteaseMediaUrl(track.album.cover) ?? track.album.cover)
+    : undefined;
+  const changed =
+    cover !== track.cover ||
+    coverOriginal !== track.coverOriginal ||
+    albumCover !== track.album?.cover;
+  if (!changed) return track;
+  return {
+    ...track,
+    cover,
+    coverOriginal,
+    album: track.album ? { ...track.album, cover: albumCover } : undefined,
+  };
+};
+
+/**
  * 给封面 URL 拼尺寸
  * @param url - 封面原始 URL
  * @param size - 期望像素边长，默认 300
  */
 export const withPicSize = (url: string | undefined, size = 300): string | undefined => {
-  if (!url) return undefined;
-  if (url.includes("?param=")) return url;
-  return `${url}?param=${size}y${size}`;
+  const normalized = normalizeNeteaseMediaUrl(url);
+  if (!normalized) return undefined;
+  if (normalized.includes("?param=")) return normalized;
+  return `${normalized}?param=${size}y${size}`;
 };
 
 /**
@@ -134,9 +180,34 @@ export const toArtist = (raw: any): Artist => ({
   albumCount: raw.albumSize,
 });
 
+/** 收藏 MV（/mv/sublist 元素）→ 轻量展示模型 */
+export const toUserMvFavorite = (raw: any): UserVideoFavorite => ({
+  id: String(raw.id ?? raw.vid),
+  name: raw.name ?? raw.title ?? "",
+  cover: withPicSize(raw.cover ?? raw.coverUrl ?? raw.imgurl),
+  artist:
+    raw.artistName ??
+    raw.artist?.name ??
+    raw.artists?.map((artist: { name: string }) => artist.name).join(" / "),
+  playCount: raw.playCount,
+  duration: raw.duration ?? raw.playTime,
+});
+
+/** 收藏播客（/dj/sublist 元素）→ 轻量展示模型 */
+export const toUserDjFavorite = (raw: any): UserRadioFavorite => ({
+  id: String(raw.id),
+  name: raw.name ?? raw.title ?? "",
+  cover: withPicSize(raw.picUrl ?? raw.coverUrl ?? raw.cover),
+  creator: raw.dj?.nickname ?? raw.creator?.nickname ?? raw.creator?.name,
+  programCount: raw.programCount,
+  subCount: raw.subCount,
+});
+
 /** 订阅计数（/user/subcount）→ 应用层 UserSubcount */
 export const toSubcount = (raw: any): UserSubcount => ({
   createdPlaylistCount: raw.createdPlaylistCount ?? 0,
   subPlaylistCount: raw.subPlaylistCount ?? 0,
   artistCount: raw.artistCount ?? 0,
+  mvCount: raw.mvCount ?? 0,
+  djRadioCount: raw.djRadioCount ?? 0,
 });

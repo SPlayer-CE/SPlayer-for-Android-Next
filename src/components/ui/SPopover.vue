@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { usePopupZIndex } from "@/composables/useZIndex";
+import { isAndroid } from "@/services/bridge";
+import { useBackClosable } from "@/composables/useAndroidBack";
 
 export interface SPopoverProps {
   /** 弹出位置 */
@@ -45,6 +47,12 @@ const emit = defineEmits<{
 
 const { zIndex, onOpenChange } = usePopupZIndex();
 
+// 触摸设备检测：安卓设备不支持 CSS hover，自动将 hover 降级为 click
+const supportsHover = !isAndroid;
+const effectiveTrigger = computed(() =>
+  props.trigger === "hover" && !supportsHover ? "click" : props.trigger,
+);
+
 const isOpen = ref(props.open ?? false);
 
 // 同步外部 open prop
@@ -62,6 +70,14 @@ const setOpen = (val: boolean): void => {
   emit("update:open", val);
 };
 
+// Android 返回键关闭（hover/focus 触发时 isOpen 不变化，自然不注册 handler）
+useBackClosable(isOpen, {
+  onBack: () => {
+    setOpen(false);
+    return true;
+  },
+});
+
 // hover 触发的延时器
 let openTimer: ReturnType<typeof setTimeout> | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -78,24 +94,24 @@ const clearTimers = (): void => {
 };
 
 const handlePointerEnter = (): void => {
-  if (props.trigger !== "hover") return;
+  if (effectiveTrigger.value !== "hover") return;
   clearTimers();
   openTimer = setTimeout(() => setOpen(true), props.openDelay);
 };
 
 const handlePointerLeave = (): void => {
-  if (props.trigger !== "hover") return;
+  if (effectiveTrigger.value !== "hover") return;
   clearTimers();
   closeTimer = setTimeout(() => setOpen(false), props.closeDelay);
 };
 
 const handleFocus = (): void => {
-  if (props.trigger !== "focus") return;
+  if (effectiveTrigger.value !== "focus") return;
   setOpen(true);
 };
 
 const handleBlur = (): void => {
-  if (props.trigger !== "focus") return;
+  if (effectiveTrigger.value !== "focus") return;
   setOpen(false);
 };
 
@@ -104,7 +120,7 @@ onUnmounted(clearTimers);
 // hover 桥：用伪元素把弹层命中区延伸到「朝向触发器」的那一侧，覆盖 sideOffset 间隙
 // data-side 由 reka-ui 在 PopoverContent 上自动设置，表示弹层相对触发器的位置
 const bridgeClasses = computed(() =>
-  props.trigger === "hover"
+  effectiveTrigger.value === "hover"
     ? [
         `before:content-[''] before:absolute`,
         // 弹层在触发器上方 → 桥铺在弹层底部
@@ -121,7 +137,10 @@ const bridgeClasses = computed(() =>
 </script>
 
 <template>
-  <PopoverRoot :open="isOpen" @update:open="trigger === 'click' ? setOpen($event) : undefined">
+  <PopoverRoot
+    :open="isOpen"
+    @update:open="effectiveTrigger === 'click' ? setOpen($event) : undefined"
+  >
     <PopoverTrigger as-child>
       <span
         :class="block ? 'flex w-full' : 'inline-flex'"

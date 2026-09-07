@@ -3,8 +3,8 @@ import { defaultPluginsConfig } from "./plugin-api";
 import { defaultHotkeyConfig } from "./hotkeys";
 
 /**
- * 灵动岛基准高度（缩放比例 = 1 时的物理像素，等于"主行高度")
- * 主行高度 = DYNAMIC_ISLAND_BASE_HEIGHT * scale
+ * 灵动岛基准高度（dp，等于 DynamicIslandSettings.height 的默认值）
+ * 主行高度 = config.height（用户可调，默认 40）
  * 双行模式下窗口最终高度 = 主行高度 + 副行高度
  * 主进程按渲染端上报的最终高度 setBounds
  */
@@ -61,21 +61,35 @@ export const defaultSystemConfig: SystemConfig = {
     useCSSDrag: false,
   },
   dynamicIsland: {
-    scale: 1,
+    height: 40,
+    fontSize: 24,
     fontWeight: 500,
     fontFamily: "",
     wordByWord: true,
     transition: "bounce",
-    playedColor: "rgba(255, 255, 255, 1)",
-    unplayedColor: "rgba(255, 255, 255, 0.5)",
+    autoGenerateWordByWord: true,
+    playedColor: "rgb(23, 113, 191)",
+    unplayedColor: "rgba(171, 171, 171, 0.5)",
+    strokeColor: "rgba(0, 0, 0, 0.5)",
     backgroundColor: "rgba(0, 0, 0, 1)",
+    backgroundMask: false,
+    backgroundMaskColor: "rgba(0, 0, 0, 0.3)",
     alwaysOnTop: true,
     snapCentered: true,
     notchFusion: false,
     nonOcclusive: false,
     doubleLine: false,
     showTranslation: false,
+    align: "center",
+    animation: true,
+    locked: false,
+    dragByLongPress: true,
     useCSSDrag: false,
+    limitBounds: false,
+    alwaysShowSongInfo: false,
+    posX: 0,
+    posY: 0,
+    maxWidth: 0,
   },
   taskbarLyric: {
     position: "auto",
@@ -95,17 +109,23 @@ export const defaultSystemConfig: SystemConfig = {
     fontFamily: "",
   },
   lyric: {
-    enableOnlineTTMLLyric: false,
+    enableOnlineTTMLLyric: true,
     amllDbServer: "https://amlldb.bikonoo.com/%p/%s.ttml",
   },
   localLyric: {
+    enableSidecarMatch: true,
     enableLocalTTMLOverride: false,
     repoDir: "",
   },
+  androidLyric: {
+    renderMode: "legacy",
+    unlockFpsLimit: false,
+  },
   cache: {
+    enabled: true,
     dir: null,
     songCache: {
-      enabled: false,
+      enabled: true,
       cacheStreaming: false,
       sizeLimitGb: 10,
     },
@@ -138,7 +158,7 @@ export const defaultSystemConfig: SystemConfig = {
     enabled: false,
     wsEnabled: false,
     allowLan: false,
-    port: 14558,
+    port: 6688,
   },
   mcp: {
     enabled: false,

@@ -12,7 +12,10 @@ import IconLucideUserRound from "~icons/lucide/user-round";
 import IconLucideImagePlus from "~icons/lucide/image-plus";
 import IconLucideMusic from "~icons/lucide/music";
 import IconLucideDatabase from "~icons/lucide/database";
+import IconLucideFileText from "~icons/lucide/file-text";
+import IconLucideList from "~icons/lucide/list";
 import { useCacheStats } from "@/composables/useCacheStats";
+import bridge, { isAndroid } from "@/services/bridge";
 
 defineOptions({ inheritAttrs: false });
 
@@ -25,6 +28,9 @@ const iconMap: Record<string, Component> = {
   artists: IconLucideUserRound,
   backgrounds: IconLucideImagePlus,
   songs: IconLucideMusic,
+  lyrics: IconLucideFileText,
+  "list-covers": IconLucideImage,
+  "list-data": IconLucideList,
 };
 
 const fileStats = computed(() => stats.value.filter((stat) => stat.kind === "file"));
@@ -40,7 +46,7 @@ const handlePickDir = async (): Promise<void> => {
     confirmText: t("settings.cacheDir.switchConfirmOk"),
   });
   if (!confirmed) return;
-  const result = await window.api.cache.pickDir();
+  const result = await bridge.cache.pickDir();
   if (!result.ok) {
     if (result.reason === "notEmpty") toast.error(t("settings.cacheDir.notEmpty"));
     return;
@@ -57,12 +63,12 @@ const handleResetDir = async (): Promise<void> => {
     type: "warning",
   });
   if (!confirmed) return;
-  setCacheDir(await window.api.cache.resetDir());
+  setCacheDir(await bridge.cache.resetDir());
   await refresh();
 };
 
 const handleOpenDir = (): void => {
-  if (cacheDir.value) void window.api.system.showInExplorer(cacheDir.value);
+  if (cacheDir.value) void bridge.system.showInExplorer(cacheDir.value);
 };
 
 const requestClear = async (id: string): Promise<void> => {
@@ -76,7 +82,7 @@ const requestClear = async (id: string): Promise<void> => {
   if (!confirmed) return;
   clearingId.value = id;
   try {
-    await window.api.cache.clear(id);
+    await bridge.cache.clear(id);
     await refresh();
   } finally {
     clearingId.value = null;
@@ -92,7 +98,7 @@ const requestClearAll = async (): Promise<void> => {
   if (!confirmed) return;
   clearingKind.value = "file";
   try {
-    await window.api.cache.clearAllByKind("file");
+    await bridge.cache.clearAllByKind("file");
     await refresh();
   } finally {
     clearingKind.value = null;
@@ -108,15 +114,13 @@ const requestClearAll = async (): Promise<void> => {
     >
       <div class="min-w-0 flex-1">
         <div class="text-base">{{ t("settings.cacheDir.label") }}</div>
-        <div class="text-sm text-on-surface-variant/70 mt-0.5 truncate font-mono" :title="cacheDir">
-          {{ cacheDir || "—" }}
-        </div>
       </div>
       <div class="shrink-0 flex items-center gap-2">
         <SButton variant="ghost" circle :title="t('settings.cacheDir.open')" @click="handleOpenDir">
           <template #icon><IconLucideFolderOpen /></template>
         </SButton>
         <SButton
+          v-if="!isAndroid"
           variant="ghost"
           circle
           :title="t('settings.cacheDir.reset')"
@@ -124,7 +128,7 @@ const requestClearAll = async (): Promise<void> => {
         >
           <template #icon><IconLucideRotateCcw /></template>
         </SButton>
-        <SButton variant="secondary" @click="handlePickDir">
+        <SButton v-if="!isAndroid" variant="secondary" @click="handlePickDir">
           {{ t("settings.cacheDir.change") }}
         </SButton>
       </div>
@@ -161,7 +165,7 @@ const requestClearAll = async (): Promise<void> => {
               class="size-4 shrink-0 text-on-surface-variant"
             />
             <div class="flex-1 min-w-0">
-              <div class="text-sm">{{ t(`settings.cacheCategory.${stat.id}`) }}</div>
+              <div class="text-sm truncate">{{ t(`settings.cacheCategory.${stat.id}`) }}</div>
               <div class="text-xs text-on-surface-variant/60 truncate font-mono" :title="stat.path">
                 {{ stat.path || "—" }}
               </div>
