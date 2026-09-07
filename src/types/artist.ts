@@ -12,6 +12,10 @@ export interface CoverItem {
   subtitle?: string;
   /** 歌曲数量 */
   trackCount: number;
+  /** 封面比例 */
+  aspect?: "square" | "video";
+  /** 右上角统计 */
+  badge?: string;
 }
 
 /** 歌手详情 */

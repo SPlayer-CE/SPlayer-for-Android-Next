@@ -1,7 +1,15 @@
 import type { Album, Artist, Playlist } from "@shared/types/player";
-import type { UserSubcount } from "@/types/user";
+import type { UserRadioFavorite, UserSubcount, UserVideoFavorite } from "@/types/user";
 import { netease as neteaseApi } from "@/apis/netease";
-import { ensureOk, toAlbum, toArtist, toPlaylist, toSubcount } from "@/utils/format/netease";
+import {
+  ensureOk,
+  toAlbum,
+  toArtist,
+  toPlaylist,
+  toSubcount,
+  toUserDjFavorite,
+  toUserMvFavorite,
+} from "@/utils/format/netease";
 
 const PAGE_SIZE = 50;
 
@@ -62,6 +70,21 @@ export const fetchUserArtists = (): Promise<Artist[]> =>
     return { data: body?.data, hasMore: body?.hasMore };
   }, toArtist);
 
+/** 用户收藏 MV */
+export const fetchUserMvs = (): Promise<UserVideoFavorite[]> =>
+  fetchAllPages(async (offset, limit) => {
+    const body = await neteaseApi.mv_sublist({ limit, offset });
+    return { data: body?.data, hasMore: body?.hasMore };
+  }, toUserMvFavorite);
+
+/** 用户收藏播客 */
+export const fetchUserDjs = (): Promise<UserRadioFavorite[]> =>
+  fetchAllPages(async (offset, limit) => {
+    const body = await neteaseApi.dj_sublist({ limit, offset });
+    const list = body?.djRadios ?? body?.data;
+    return { data: list, hasMore: body?.hasMore };
+  }, toUserDjFavorite);
+
 /**
  * 切换红心状态
  * 优先调用新版 like_v1，失败时自动降级到旧版 like
@@ -69,11 +92,13 @@ export const fetchUserArtists = (): Promise<Artist[]> =>
  * @param like - true 为红心，false 为取消红心
  */
 export const toggleLikeSong = async (trackId: string, like: boolean): Promise<void> => {
+  // API 层只把字符串 "false" 识别为取消红心，boolean false 会被误转成 true
+  const likeParam = like ? "true" : "false";
   try {
-    const res = await neteaseApi.like_v1<{ code?: number }>({ id: trackId, like });
+    const res = await neteaseApi.like_v1<{ code?: number }>({ id: trackId, like: likeParam });
     if (res && (res.code === 200 || Number(res.code) === 200)) return;
   } catch {}
-  ensureOk(await neteaseApi.like({ id: trackId, like }));
+  ensureOk(await neteaseApi.like({ id: trackId, like: likeParam }));
 };
 
 /** 用户等级 */

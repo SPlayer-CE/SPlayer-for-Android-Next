@@ -1,4 +1,4 @@
-import type { Track, TrackSource } from "@shared/types/player";
+import type { AudioQuality, Track, TrackSource } from "@shared/types/player";
 import type { Platform } from "@shared/types/platform";
 import type { QualityLevel } from "@/utils/quality";
 import { useStreamingStore } from "@/stores/streaming";
@@ -8,10 +8,12 @@ import { useUserStore } from "@/stores/user";
 import { resolveNeteaseUrl } from "@/apis/song/netease";
 import { resolveQQMusicUrl } from "@/apis/song/qqmusic";
 import { resolveKugouUrl } from "@/apis/song/kugou";
+import { normalizeNeteaseMediaUrl } from "@/utils/format/netease";
 import { ErrorCode } from "@shared/types/errors";
 import { handleError } from "@/utils/errors";
+import bridge, { isAndroid } from "@/services/bridge";
 
-/** 在线平台 source → 插件 source key */
+/** 在线平台 source 与?插件 source key */
 const PLATFORM_TO_PLUGIN_SOURCE: Record<Platform, string> = {
   netease: "wy",
   qqmusic: "tx",
@@ -22,7 +24,7 @@ const PLATFORM_TO_PLUGIN_SOURCE: Record<Platform, string> = {
 export interface ResolveTrackSourceOptions {
   /** 要跳过的插件 ID 列表 */
   skipPluginIds?: readonly string[];
-  /** 是否跳过官方在线接口，直接进入插件兜底 */
+  /** 是否跳过官方在线接口，直接进入插件兜?*/
   skipOfficialOnline?: boolean;
   /** 是否静默解析 */
   silent?: boolean;
@@ -31,8 +33,7 @@ export interface ResolveTrackSourceOptions {
 }
 
 /**
- * 检查给定 source 是否为在线平台
- * @param source - 要检查的 source
+ * 检查给?source 是否为在线平? * @param source - 要检查的 source
  */
 const isOnlinePlatform = (source: TrackSource): source is Platform =>
   source === "netease" || source === "qqmusic" || source === "kugou";
@@ -42,7 +43,7 @@ const isOnlinePlatform = (source: TrackSource): source is Platform =>
  * netease / qqmusic 把音质档位并入键，使不同音质的同一首歌互不覆盖
  * @param track - 要解析的 track
  * @param songLevel - 在线歌曲音质档位
- * @returns 派生缓存键，如果该 track 不参与歌曲缓存则返回 null
+ * @returns 派生缓存键，如果?track 不参与歌曲缓存则返回 null
  */
 const cacheKeyForTrack = (track: Track, songLevel: QualityLevel): string | null => {
   if (track.source === "streaming" && track.serverId && track.originalId) {
@@ -67,6 +68,53 @@ export type OnlineResolveResult =
       pluginId?: string;
     }
   | { ok: false; errorCode: ErrorCode };
+
+/**
+ * 当前播放音质展示。? * 仅用于当前播?UI，对齐用户本次请求的档位，避免沿用歌曲详情里的最高可用品质? * @param songLevel - 用户设置的播放音质档? */
+const getNeteasePlaybackQuality = (songLevel: QualityLevel): AudioQuality => {
+  switch (songLevel) {
+    case "lq":
+      return {
+        codec: "mp3",
+        sampleRate: 44100,
+        bitsPerSample: 16,
+        bitRate: 128000,
+        channels: 2,
+      };
+    case "sq":
+      return {
+        codec: "mp3",
+        sampleRate: 44100,
+        bitsPerSample: 16,
+        bitRate: 192000,
+        channels: 2,
+      };
+    case "hq":
+      return {
+        codec: "mp3",
+        sampleRate: 44100,
+        bitsPerSample: 16,
+        bitRate: 320000,
+        channels: 2,
+      };
+    case "lossless":
+      return {
+        codec: "flac",
+        sampleRate: 44100,
+        bitsPerSample: 16,
+        bitRate: 999000,
+        channels: 2,
+      };
+    case "hi-res":
+      return {
+        codec: "flac",
+        sampleRate: 96000,
+        bitsPerSample: 24,
+        bitRate: 3000000,
+        channels: 2,
+      };
+  }
+};
 
 /**
  * 经插件解析在线音频源 URL
@@ -126,9 +174,31 @@ export const resolveByPlugin = async (
       hash,
     },
   };
+  if (isAndroid) {
+    try {
+      const res = await bridge.plugins.resolveUrl({
+        pluginId: candidates[0].manifest.id,
+        source: pluginSource,
+        quality,
+        musicInfo,
+      });
+      if (res?.url) {
+        return {
+          ok: true,
+          url: res.url,
+          isTrial: false,
+          provider: "plugin",
+          pluginId: candidates[0].manifest.id,
+        };
+      }
+    } catch (err) {
+      console.warn("[plugin] resolveUrl failed", candidates[0].manifest.id, err);
+    }
+    return { ok: false, errorCode: ErrorCode.URL_RESOLVE_FAILED };
+  }
   for (const plugin of candidates) {
     try {
-      const res = await window.api.plugins.resolveUrl({
+      const res = await bridge.plugins.resolveUrl({
         pluginId: plugin.manifest.id,
         source: pluginSource,
         quality,
@@ -151,7 +221,7 @@ export const resolveByPlugin = async (
 };
 
 /**
- * 解析在线音频源 URL
+ * 解析在线音频?URL
  * @param track - 要解析的 track
  * @param songLevel - 在线歌曲音质档位（仅内置官方接口生效）
  */
@@ -218,14 +288,14 @@ const resolveOnlineUrl = async (
 
 /**
  * 解析结果
- * - fromCache 为 true 时表示音源直接命中本地缓存
- * - cacheRequest 存在时表示尚未缓存，调用方应在合适时机（如播放达到阈值后）触发它
+ * - fromCache ?true 时表示音源直接命中本地缓? * - cacheRequest 存在时表示尚未缓存，调用方应在合适时机（如播放达到阈值后）触发它
  */
 export interface ResolvedTrackSource {
   source: string;
   fromCache: boolean;
   provider: "local" | "cache" | "streaming" | "official" | "plugin" | "trial";
   pluginId?: string;
+  playbackQuality?: AudioQuality;
   cacheRequest?: () => Promise<void>;
 }
 
@@ -253,13 +323,22 @@ export const resolveTrackSource = async (
   }
   const settings = useSettingsStore();
   const songLevel = settings.player.songLevel;
+  const playbackQuality =
+    track.source === "netease" ? getNeteasePlaybackQuality(songLevel) : undefined;
   const cacheKey = cacheKeyForTrack(track, songLevel);
   const cacheEnabled = settings.system.cache?.songCache?.enabled === true && cacheKey !== null;
   if (cacheEnabled) {
-    const cached = await window.api.cache.song.lookup(cacheKey!);
-    if (cached) return { source: cached, fromCache: true, provider: "cache" };
+    const cached = await bridge.cache.song.lookup(cacheKey!);
+    if (cached) {
+      return {
+        source: normalizeNeteaseMediaUrl(cached) ?? cached,
+        fromCache: true,
+        provider: "cache",
+        playbackQuality,
+      };
+    }
   }
-  // 流媒体
+  // 流媒?
   if (track.source === "streaming") {
     try {
       const store = useStreamingStore();
@@ -281,7 +360,7 @@ export const resolveTrackSource = async (
             const cacheUrl = await store.getStreamUrl(track, {
               playSessionId: crypto.randomUUID(),
             });
-            void window.api.cache.song.fetch(cacheKey, "streaming", cacheUrl);
+            void bridge.cache.song.fetch(cacheKey, "streaming", cacheUrl).catch(() => {});
           } catch (err) {
             console.warn("[cache] streaming getStreamUrl failed", err);
           }
@@ -293,7 +372,7 @@ export const resolveTrackSource = async (
       return null;
     }
   }
-  // 在线源（netease / qqmusic / kugou）
+  // 在线源（netease / qqmusic / kugou?
   if (isOnlinePlatform(track.source)) {
     try {
       const resolved = await resolveOnlineUrl(track, songLevel, options);
@@ -301,16 +380,17 @@ export const resolveTrackSource = async (
         reportLoadError(resolved.errorCode, options.silent);
         return null;
       }
-      const url = resolved.url;
+      const url = normalizeNeteaseMediaUrl(resolved.url) ?? resolved.url;
       const result: ResolvedTrackSource = {
         source: url,
         fromCache: false,
         provider: resolved.provider,
         pluginId: resolved.pluginId,
+        playbackQuality,
       };
       if (cacheEnabled && !resolved.isTrial) {
         result.cacheRequest = async () => {
-          void window.api.cache.song.fetch(cacheKey, track.source, url);
+          void bridge.cache.song.fetch(cacheKey, track.source, url).catch(() => {});
         };
       }
       return result;

@@ -21,6 +21,10 @@ export interface LyricPosterOptions {
 
 const SCALE = 3;
 const MAX_CANVAS_PX = 16000;
+/** 画布总像素上限：Android WebView 上超大画布 toBlob 会极慢甚至永不回调，限制在 1600 万像素内 */
+const MAX_TOTAL_PX = 16_000_000;
+/** toBlob 超时：部分 WebView 在资源受限时不回调，超时转为失败避免导出按钮永久转圈 */
+const TO_BLOB_TIMEOUT_MS = 20_000;
 const WIDTH = 720;
 const PAD_X = 56;
 const PAD_TOP = 64;
@@ -178,8 +182,13 @@ export const createLyricPoster = async (options: LyricPosterOptions): Promise<Bl
   const totalHeight =
     PAD_TOP + THUMB + HEADER_GAP + lyricsHeight + WATERMARK_GAP + WATERMARK_H + PAD_BOTTOM;
 
-  // 超长海报降采样，避免超出画布像素上限导致导出空白
-  const scale = Math.min(SCALE, MAX_CANVAS_PX / totalHeight);
+  // 超长海报降采样，避免超出画布像素上限导致导出空白；
+  // 同时用总像素上限约束，避免 Android WebView 上画布过大导致 toBlob 挂起
+  const scale = Math.min(
+    SCALE,
+    MAX_CANVAS_PX / totalHeight,
+    Math.sqrt(MAX_TOTAL_PX / (WIDTH * totalHeight)),
+  );
   canvas.width = WIDTH * scale;
   canvas.height = totalHeight * scale;
   ctx.scale(scale, scale);
@@ -205,7 +214,12 @@ export const createLyricPoster = async (options: LyricPosterOptions): Promise<Bl
   if (coverImg) {
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(PAD_X, PAD_TOP, THUMB, THUMB, THUMB_RADIUS);
+    // roundRect 需 Chromium 99+，旧 WebView 退化为直角避免抛错
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(PAD_X, PAD_TOP, THUMB, THUMB, THUMB_RADIUS);
+    } else {
+      ctx.rect(PAD_X, PAD_TOP, THUMB, THUMB);
+    }
     ctx.clip();
     drawCovered(ctx, coverImg, PAD_X, PAD_TOP, THUMB, THUMB);
     ctx.restore();
@@ -258,9 +272,18 @@ export const createLyricPoster = async (options: LyricPosterOptions): Promise<Bl
   ctx.fillText("Made by SPlayer Next", WIDTH / 2, totalHeight - PAD_BOTTOM - WATERMARK_H);
 
   return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("导出图片失败"))),
-      "image/png",
-    );
+    // 部分安卓 WebView 在画布过大或资源受限时 toBlob 不回调，超时兜底
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("导出图片失败"));
+    }, TO_BLOB_TIMEOUT_MS);
+    canvas.toBlob((blob) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      blob ? resolve(blob) : reject(new Error("导出图片失败"));
+    }, "image/png");
   });
 };

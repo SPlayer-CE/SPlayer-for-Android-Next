@@ -6,8 +6,11 @@ import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
 import { useHistoryStore } from "@/stores/history";
 import SongList from "@/components/list/SongList.vue";
 import * as player from "@/core/player";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
+import IconLucideChevronDown from "~icons/lucide/chevron-down";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const history = useHistoryStore();
 
@@ -18,6 +21,13 @@ const playbackContext = computed<PlaybackContext>(() => ({
 }));
 
 const searchQuery = ref("");
+const searchFocused = ref(false);
+
+const closeSearchInput = (): void => {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) activeElement.blur();
+  searchFocused.value = false;
+};
 
 const handlePlayAll = (): void => {
   if (history.tracks.length === 0) return;
@@ -55,7 +65,12 @@ onMounted(() => {
     <div class="shrink-0 px-5 pb-2">
       <div class="flex items-center justify-between mt-2 mb-4">
         <div class="flex items-baseline gap-4">
-          <h1 class="text-3xl font-bold text-on-surface text-balance">{{ t("history.title") }}</h1>
+          <h1
+            class="font-bold text-on-surface text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
+            {{ t("history.title") }}
+          </h1>
           <span
             v-if="history.tracks.length > 0"
             class="text-sm text-on-surface-variant/50 flex items-center gap-1"
@@ -89,17 +104,30 @@ onMounted(() => {
             </template>
           </SDropdownMenu>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="relative h-9 w-40 shrink-0">
           <SInput
             v-model="searchQuery"
             :placeholder="t('common.search')"
             clearable
             round
-            class="w-40 focus-within:w-56"
+            class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
             data-search-input
+            @focus="searchFocused = true"
+            @blur="searchFocused = false"
           >
             <template #prefix>
               <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+            </template>
+            <template v-if="searchFocused" #suffix>
+              <button
+                type="button"
+                class="size-7 shrink-0 inline-flex items-center justify-center rounded-full border-none bg-transparent appearance-none cursor-pointer text-on-surface-variant/70 transition-[color,background-color] duration-200 hover:bg-on-surface/10 hover:text-on-surface active:bg-on-surface/16"
+                :aria-label="t('common.close')"
+                @pointerdown.prevent.stop
+                @click.stop="closeSearchInput"
+              >
+                <IconLucideChevronDown class="size-4.5" />
+              </button>
             </template>
           </SInput>
         </div>

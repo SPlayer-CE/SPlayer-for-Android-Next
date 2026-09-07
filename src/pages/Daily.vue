@@ -7,6 +7,7 @@ import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
 import { useDataStore } from "@/stores/data";
 import { useUserStore } from "@/stores/user";
 import SongList from "@/components/list/SongList.vue";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import * as player from "@/core/player";
 import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideListChecks from "~icons/lucide/list-checks";
@@ -14,6 +15,7 @@ import IconLucideListChecks from "~icons/lucide/list-checks";
 const { t, locale } = useI18n();
 const data = useDataStore();
 const user = useUserStore();
+const { useMobileLayout } = useResponsiveLayout();
 
 /** 一天的视图模型 */
 interface DayView {
@@ -118,20 +120,30 @@ watch(
 <template>
   <div class="flex h-full flex-col">
     <!-- 顶栏 -->
-    <div class="shrink-0 px-5 pt-2 pb-3">
-      <div class="flex items-center gap-5">
+    <div class="shrink-0" :class="useMobileLayout ? 'px-4 pt-1 pb-2' : 'px-5 pt-2 pb-3'">
+      <div class="flex items-center" :class="useMobileLayout ? 'gap-3' : 'gap-5'">
         <!-- 日历磁贴 -->
         <div
-          class="flex size-28 shrink-0 flex-col items-center justify-center rounded-2xl border border-solid border-primary/15 bg-primary/8"
+          class="flex shrink-0 flex-col items-center justify-center rounded-2xl border border-solid border-primary/15 bg-primary/8"
+          :class="useMobileLayout ? 'size-20' : 'size-28'"
         >
           <template v-if="selectedDay">
-            <span class="text-xs text-on-surface-variant/60">
+            <span
+              class="text-on-surface-variant/60"
+              :class="useMobileLayout ? 'text-[10px]' : 'text-xs'"
+            >
               {{ formatDate(selectedDay.date, { month: "short" }) }}
             </span>
-            <span class="text-4xl font-bold leading-tight text-primary tabular-nums">
+            <span
+              class="font-bold leading-tight text-primary tabular-nums"
+              :class="useMobileLayout ? 'text-2xl' : 'text-4xl'"
+            >
               {{ selectedDay.date.getDate() }}
             </span>
-            <span class="text-xs text-on-surface-variant/60">
+            <span
+              class="text-on-surface-variant/60"
+              :class="useMobileLayout ? 'text-[10px]' : 'text-xs'"
+            >
               {{ formatDate(selectedDay.date, { weekday: "short" }) }}
             </span>
           </template>
@@ -141,10 +153,16 @@ watch(
         <div class="flex min-w-0 flex-1 flex-col gap-2">
           <!-- 标题 -->
           <div class="flex items-baseline gap-3">
-            <h1 class="text-3xl font-bold text-on-surface text-balance">{{ t("daily.title") }}</h1>
+            <h1
+              class="font-bold text-on-surface text-balance"
+              :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+            >
+              {{ t("daily.title") }}
+            </h1>
             <span
               v-if="selectedDay && selectedDay.tracks.length > 0"
-              class="flex items-center gap-1 text-sm text-on-surface-variant/50"
+              class="flex items-center gap-1 text-on-surface-variant/50"
+              :class="useMobileLayout ? 'text-xs' : 'text-sm'"
             >
               <IconLucideMusic class="size-3.5" />
               {{ t("common.totalSongs", { count: selectedDay.tracks.length }) }}

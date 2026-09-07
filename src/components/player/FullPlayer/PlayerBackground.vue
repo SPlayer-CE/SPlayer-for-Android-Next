@@ -2,6 +2,7 @@
 import { useSettingsStore } from "@/stores/settings";
 import { useMediaStore } from "@/stores/media";
 import { useStatusStore } from "@/stores/status";
+import { resolveCoverUrl } from "@/services/bridge";
 import DEFAULT_COVER from "@/assets/images/song.jpg";
 import BackgroundRender from "./BackgroundRender.vue";
 
@@ -49,7 +50,8 @@ const bgPlaying = computed(() => {
 });
 
 // 模糊模式：双缓冲层，切歌时交叉淡入淡出
-const initialCover = media.track?.cover || media.track?.coverOriginal || DEFAULT_COVER;
+const initialCover =
+  resolveCoverUrl(media.track?.cover || media.track?.coverOriginal) || DEFAULT_COVER;
 const blurLayers = reactive([
   { src: initialCover, active: true },
   { src: "", active: false },
@@ -68,7 +70,7 @@ watch(
       preloadImg.src = "";
       preloadImg = null;
     }
-    const targetCover = newCover || DEFAULT_COVER;
+    const targetCover = resolveCoverUrl(newCover) || DEFAULT_COVER;
     // 相同不切换
     if (blurLayers[currentLayerIndex].src === targetCover) return;
     const nextIndex = currentLayerIndex === 0 ? 1 : 0;
@@ -130,7 +132,7 @@ onBeforeUnmount(() => {
   <Transition v-else-if="bgType === 'animation'" name="bg-fade">
     <div v-if="bgReady" class="absolute inset-0 overflow-hidden -z-1">
       <BackgroundRender
-        :album="media.track?.cover || DEFAULT_COVER"
+        :album="resolveCoverUrl(media.track?.cover) || DEFAULT_COVER"
         :playing="bgPlaying"
         :fps="settings.player.playerBgFps"
         :flow-speed="settings.player.playerBgFlowSpeed"

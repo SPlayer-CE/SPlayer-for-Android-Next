@@ -1,6 +1,6 @@
 import { Spring, type SpringParams } from "./spring";
 import type { LyricLine } from "@shared/types/lyrics";
-import { setMin } from "../utils/math";
+import { clamp, setMin } from "../utils/math";
 import { DEFAULTS } from "./constants";
 import {
   measureAndApplyWordMasks,
@@ -19,6 +19,15 @@ import {
 
 export type { RendererConfig } from "./constants";
 import type { RendererConfig } from "./constants";
+
+const LINE_PADDING_EM = 0.6;
+const DOT_PADDING_EM = 1;
+const TOUCH_VELOCITY_SMOOTHING = 0.65;
+const TOUCH_INERTIA_DECAY_MS = 280;
+const TOUCH_INERTIA_STOP_VELOCITY = 0.015;
+const TOUCH_MAX_VELOCITY = 2.4;
+const TOUCH_MAX_FRAME_DELTA = 96;
+const TOUCH_TAP_THRESHOLD = 10;
 
 export class LyricRenderer {
   /** 外层容器 */
@@ -82,10 +91,28 @@ export class LyricRenderer {
   private isUserScrolling = false;
   /** 鼠标是否悬停在容器上（悬停时抑制模糊） */
   private isHovering = false;
+  /** 抑制下一次 tap → seek，用于外层手势（如 controls 切换）吞掉点击 */
+  private suppressNextTapSeek = false;
   /** 滚动回弹定时器 ID */
   private scrollResetTimerId = 0;
   /** 上一次触摸 Y 坐标 */
   private lastTouchY = 0;
+  /** 待下一帧消费的用户滚动增量 */
+  private pendingUserScrollDelta = 0;
+  /** 触摸滑动速度（px/ms） */
+  private touchVelocity = 0;
+  /** 松手后的惯性速度（px/ms） */
+  private inertialVelocity = 0;
+  /** 上一次触摸时间戳 */
+  private lastTouchTime = 0;
+  /** 当前是否仍按住触摸 */
+  private isTouching = false;
+  /** 触摸起点 X 坐标，用于区分轻点与滚动 */
+  private touchStartX = 0;
+  /** 触摸起点 Y 坐标，用于区分轻点与滚动 */
+  private touchStartY = 0;
+  /** 本次触摸开始时命中的元素，用于补齐移动端 tap seek */
+  private touchStartTarget: EventTarget | null = null;
 
   /** 间奏状态 */
   private interludeState: InterludeState = {
@@ -97,6 +124,7 @@ export class LyricRenderer {
     alignRight: false,
     anchorIndex: 0,
     anchorOffset: 0,
+    fontSizePx: 16,
   };
   /** 间奏渲染缓存 */
   private interludeCache: InterludeCache = {
@@ -107,6 +135,8 @@ export class LyricRenderer {
   private dotsContainerWidth = 0;
   /** 间奏圆点容器高度 */
   private dotsContainerHeight = 0;
+  /** 缓存的行字号（px），仅在 measureLineHeights 时更新，避免 calculateLayout 热路径中调用 getComputedStyle */
+  private cachedFontSize = 16;
 
   /** rAF 句柄，0 表示未运行 */
   private animationFrameId = 0;
@@ -178,6 +208,10 @@ export class LyricRenderer {
   private showTranslation = DEFAULTS.showTranslation;
   /** 是否显示音译歌词 */
   private showRomanization = DEFAULTS.showRomanization;
+  /** 是否按词块换行 */
+  private enableWordBlockSegmentation = DEFAULTS.enableWordBlockSegmentation;
+  /** 是否解锁帧率限制：开启后普通行切换不触发全量同步，视口裁剪生效 */
+  private unlockFpsLimit = DEFAULTS.unlockFpsLimit;
 
   /** 容器尺寸变化观察器 */
   private containerResizeObserver: ResizeObserver;
@@ -233,6 +267,9 @@ export class LyricRenderer {
     container.addEventListener("touchend", this.handleTouchEnd, {
       passive: true,
     });
+    container.addEventListener("touchcancel", this.handleTouchCancel, {
+      passive: true,
+    });
     container.addEventListener("click", this.handleLineClick);
     container.addEventListener("mouseenter", this.handleMouseEnter);
     container.addEventListener("mouseleave", this.handleMouseLeave);
@@ -245,6 +282,7 @@ export class LyricRenderer {
   freeze = () => {
     cancelAnimationFrame(this.animationFrameId);
     this.animationFrameId = 0;
+    this.stopUserScrollMotion();
     // 断开 observer
     this.containerResizeObserver.disconnect();
     this.sentinelResizeObserver.disconnect();
@@ -283,6 +321,7 @@ export class LyricRenderer {
     this.container.removeEventListener("touchstart", this.handleTouchStart);
     this.container.removeEventListener("touchmove", this.handleTouchMove);
     this.container.removeEventListener("touchend", this.handleTouchEnd);
+    this.container.removeEventListener("touchcancel", this.handleTouchCancel);
     this.container.removeEventListener("click", this.handleLineClick);
     this.container.removeEventListener("mouseenter", this.handleMouseEnter);
     this.container.removeEventListener("mouseleave", this.handleMouseLeave);
@@ -310,6 +349,7 @@ export class LyricRenderer {
     this.activeLineSet.clear();
     this.lastProcessedTime = -1;
     this.userScrollOffset = 0;
+    this.resetUserScrollState();
     this.interludeState.isActive = false;
     // 含对唱行时启用左右分栏布局
     this.container.classList.toggle(
@@ -363,6 +403,7 @@ export class LyricRenderer {
       enableEmphasizeEffect: this.enableEmphasizeEffect,
       showTranslation: this.showTranslation,
       showRomanization: this.showRomanization,
+      enableWordBlockSegmentation: this.enableWordBlockSegmentation,
     });
     this.lineElements = built.lineElements;
     this.wordMeasurements = built.wordMeasurements;
@@ -384,7 +425,12 @@ export class LyricRenderer {
     this.measureLineHeights();
     // 掩码计算延迟到下一帧，避免与 DOM 构建/行高测量在同一帧内造成帧丢失
     this.maskRafId = requestAnimationFrame(() => {
-      measureAndApplyWordMasks(this.wordMeasurements, this.wordFadeWidth, this.lines);
+      measureAndApplyWordMasks(
+        this.wordMeasurements,
+        this.wordFadeWidth,
+        this.lines,
+        this.enableWordHighlight,
+      );
     });
 
     // 重置时间状态，避免残留旧歌的播放时间影响新歌词定位
@@ -406,6 +452,21 @@ export class LyricRenderer {
    */
   setCurrentTime = (timeMs: number) => {
     this.pendingPlayTime = timeMs;
+  };
+
+  /** 手动刷新布局相关测量 */
+  refreshLayout = () => {
+    this.containerWidth = this.container.clientWidth;
+    this.containerHeight = this.container.clientHeight;
+    this.measureLineHeights();
+    measureAndApplyWordMasks(
+      this.wordMeasurements,
+      this.wordFadeWidth,
+      this.lines,
+      this.enableWordHighlight,
+    );
+    if (this.entranceComplete) this.calculateLayout(true);
+    this.needsFullSync = true;
   };
 
   /**
@@ -449,7 +510,12 @@ export class LyricRenderer {
     if (config.wordFadeWidth != null && config.wordFadeWidth !== this.wordFadeWidth) {
       this.wordFadeWidth = config.wordFadeWidth;
       if (this.lineElements.length > 0)
-        measureAndApplyWordMasks(this.wordMeasurements, this.wordFadeWidth, this.lines);
+        measureAndApplyWordMasks(
+          this.wordMeasurements,
+          this.wordFadeWidth,
+          this.lines,
+          this.enableWordHighlight,
+        );
     }
     if (config.onLineClick !== undefined) this.lineClickCallback = config.onLineClick ?? null;
     if (config.springConfig) {
@@ -464,13 +530,28 @@ export class LyricRenderer {
     if (config.inactiveAlpha != null) this.inactiveAlpha = config.inactiveAlpha;
     if (config.hidePassedLines != null) this.hidePassedLines = config.hidePassedLines;
     if (config.enableBlur != null) this.enableBlur = config.enableBlur;
-    if (config.enableWordHighlight != null) this.enableWordHighlight = config.enableWordHighlight;
+    if (
+      config.enableWordHighlight != null &&
+      config.enableWordHighlight !== this.enableWordHighlight
+    ) {
+      this.enableWordHighlight = config.enableWordHighlight;
+      if (this.lineElements.length > 0)
+        measureAndApplyWordMasks(
+          this.wordMeasurements,
+          this.wordFadeWidth,
+          this.lines,
+          this.enableWordHighlight,
+        );
+    }
     if (config.enableFloatAnimation != null)
       this.enableFloatAnimation = config.enableFloatAnimation;
     if (config.enableEmphasizeEffect != null)
       this.enableEmphasizeEffect = config.enableEmphasizeEffect;
     if (config.showTranslation != null) this.showTranslation = config.showTranslation;
     if (config.showRomanization != null) this.showRomanization = config.showRomanization;
+    if (config.enableWordBlockSegmentation != null)
+      this.enableWordBlockSegmentation = config.enableWordBlockSegmentation;
+    if (config.unlockFpsLimit != null) this.unlockFpsLimit = config.unlockFpsLimit;
 
     if (layoutDirty && this.lineElements.length > 0) {
       this.measureLineHeights();
@@ -482,7 +563,12 @@ export class LyricRenderer {
   /** 测量所有行的 offsetHeight 并缓存到 lineHeights */
   private measureLineHeights = () => {
     for (let i = 0; i < this.lineElements.length; i++) {
-      this.lineHeights[i] = this.lineElements[i]?.offsetHeight || 40;
+      const el = this.lineElements[i];
+      this.lineHeights[i] = el?.offsetHeight || 40;
+      // 顺便缓存第一个行元素的字号（所有行字号一致），避免 calculateLayout 热路径中调用 getComputedStyle
+      if (i === 0 && el) {
+        this.cachedFontSize = parseFloat(getComputedStyle(el).fontSize) || 16;
+      }
     }
   };
 
@@ -490,9 +576,9 @@ export class LyricRenderer {
    * 处理播放时间变化，检测激活行的增减
    * 自动识别 seek：时间倒退 >100ms 或前进 >2000ms
    * @param currentTime - 当前播放时间（毫秒）
-   * @returns 是否发生了激活行变化
+   * @returns 时间处理结果：none 无变化，line 普通行切换，full 需要全量同步
    */
-  private processTime = (currentTime: number): boolean => {
+  private processTime = (currentTime: number): "none" | "line" | "full" => {
     const isFirst = this.lastProcessedTime < 0;
     const isSeeked =
       !isFirst &&
@@ -503,7 +589,7 @@ export class LyricRenderer {
       const snap = this.snapNextSeek;
       this.snapNextSeek = false;
       this.handleSeek(currentTime, snap);
-      return true;
+      return "full";
     }
     // 恢复后的首次推送未发生跳变
     this.snapNextSeek = false;
@@ -553,7 +639,7 @@ export class LyricRenderer {
       }
     }
 
-    if (activated.length === 0 && deactivated.size === 0) return false;
+    if (activated.length === 0 && deactivated.size === 0) return "none";
 
     // 执行停用/激活
     for (const lineIdx of deactivated) {
@@ -569,7 +655,7 @@ export class LyricRenderer {
 
     if (this.activeLineSet.size > 0) this.activeLineIndex = setMin(this.activeLineSet);
     this.calculateLayout(false);
-    return true;
+    return "line";
   };
 
   /**
@@ -578,9 +664,7 @@ export class LyricRenderer {
    * @param snap - true 时布局与透明度直接瞬移到目标状态（用于隐藏/冻结恢复）
    */
   private handleSeek = (targetTime: number, snap = false) => {
-    this.userScrollOffset = 0;
-    this.isUserScrolling = false;
-    clearTimeout(this.scrollResetTimerId);
+    this.resetUserScrollState();
 
     // 停用所有当前激活行
     for (const lineIdx of this.activeLineSet) {
@@ -700,6 +784,8 @@ export class LyricRenderer {
     // 置顶背景行延后到下一轮迭代摆放，记录其槽位
     let pendingBgIdx = -1;
     let pendingBgY = 0;
+    // 置顶背景行复用主行的级联延迟，避免其滞后于下方主行造成上移时的视觉重叠
+    let pendingBgDelay = 0;
 
     for (let i = 0; i < lineCount; i++) {
       const posSpring = this.positionSprings[i];
@@ -712,7 +798,12 @@ export class LyricRenderer {
         dotsInserted = true;
         position += dotsGap;
         const isDuet = interlude[3];
-        this.interludeState.x = isDuet ? viewWidth - this.dotsContainerWidth : 0;
+        const anchorFontSize = this.cachedFontSize;
+        const linePaddingX = anchorFontSize * LINE_PADDING_EM;
+        this.interludeState.fontSizePx = anchorFontSize;
+        this.interludeState.x = isDuet
+          ? viewWidth - this.dotsContainerWidth + anchorFontSize * DOT_PADDING_EM - linePaddingX
+          : linePaddingX - anchorFontSize * DOT_PADDING_EM;
         this.interludeState.y = position;
         this.interludeState.alignRight = isDuet;
         // 锚定到下一歌词行
@@ -730,10 +821,13 @@ export class LyricRenderer {
       // 默认顺排；置顶背景行排到主行上方
       let lineY = position;
       let advance = collapsedBG ? 0 : this.lineHeights[i] || 40;
+      // 该行实际使用的级联延迟；置顶背景行复用主行延迟以与主行同步运动
+      let lineDelay = cascadeDelay;
       if (i === pendingBgIdx) {
         // 置顶背景行：用主行处预留的上方槽位，自身不再推进布局
         lineY = pendingBgY;
         advance = 0;
+        lineDelay = pendingBgDelay;
         pendingBgIdx = -1;
       } else if (this.isBgAbove[i + 1]) {
         // 主行带置顶背景行：背景行在上、主行在下
@@ -743,6 +837,7 @@ export class LyricRenderer {
         lineY = position + bgSpace;
         pendingBgY = lineY - bgH;
         pendingBgIdx = bgIdx;
+        pendingBgDelay = cascadeDelay;
         advance = bgSpace + (this.lineHeights[i] || 40);
       }
 
@@ -750,8 +845,8 @@ export class LyricRenderer {
         posSpring.setPosition(lineY);
         scaleSpring.setPosition(targetScale);
       } else {
-        posSpring.setTargetPosition(lineY, cascadeDelay);
-        scaleSpring.setTargetPosition(targetScale, cascadeDelay);
+        posSpring.setTargetPosition(lineY, lineDelay);
+        scaleSpring.setTargetPosition(targetScale, lineDelay);
       }
 
       position += advance;
@@ -805,10 +900,17 @@ export class LyricRenderer {
     const lineCount = this.positionSprings.length;
     if (lineCount === 0) return;
 
+    this.consumeUserScrollMotion(deltaTime);
+
     // 消费播放时间，检测激活行变化
     const playTime = this.pendingPlayTime;
     if (playTime >= 0 && playTime !== this.lastProcessedTime) {
-      if (this.processTime(playTime)) this.needsFullSync = true;
+      const timeResult = this.processTime(playTime);
+      // unlockFpsLimit 关闭时，普通行切换也触发全量同步（保留旧行为，省电但帧率受限）
+      // unlockFpsLimit 开启时，仅 seek/首次同步触发全量同步，普通行切换走视口裁剪（高帧率但发热）
+      if (timeResult === "full" || (timeResult === "line" && !this.unlockFpsLimit)) {
+        this.needsFullSync = true;
+      }
     }
 
     // 更新激活行的 --t CSS 变量（驱动逐字掩码位移）
@@ -1045,55 +1147,164 @@ export class LyricRenderer {
    */
   private handleLineClick = (event: MouseEvent) => {
     if (!this.lineClickCallback) return;
-    const lineEl = (event.target as HTMLElement).closest(".lp-line") as HTMLDivElement | null;
-    if (!lineEl) return;
-    const lineIdx = this.lineElements.indexOf(lineEl);
-    if (lineIdx !== -1 && this.lines[lineIdx])
-      this.lineClickCallback(this.lines[lineIdx].startTime);
+    if (this.suppressNextTapSeek) {
+      this.suppressNextTapSeek = false;
+      return;
+    }
+    this.emitLineClickFromTarget(event.target);
   };
 
   /**
-   * 应用用户滚动偏移并设置回弹定时器
+   * 从任意事件目标解析歌词行并触发 seek
+   * @param target - 事件命中的 DOM 节点
+   */
+  private emitLineClickFromTarget = (target: EventTarget | null) => {
+    if (!this.lineClickCallback) return;
+    const lineEl = (target as HTMLElement | null)?.closest(".lp-line") as HTMLDivElement | null;
+    if (!lineEl) return;
+    const lineIdx = this.lineElements.indexOf(lineEl);
+    if (lineIdx !== -1 && this.lines[lineIdx]) {
+      this.lineClickCallback(this.lines[lineIdx].startTime);
+    }
+  };
+
+  /** 清除尚未进入布局的滚动动量 */
+  private stopUserScrollMotion = () => {
+    this.pendingUserScrollDelta = 0;
+    this.touchVelocity = 0;
+    this.inertialVelocity = 0;
+    this.lastTouchTime = 0;
+    this.isTouching = false;
+  };
+
+  /** 抑制下一次 tap → seek，用于外层手势（如 controls 切换）吞掉点击 */
+  requestSuppressTapSeek = () => {
+    this.suppressNextTapSeek = true;
+  };
+
+  /** 重置用户滚动状态 */
+  private resetUserScrollState = () => {
+    clearTimeout(this.scrollResetTimerId);
+    this.userScrollOffset = 0;
+    this.isUserScrolling = false;
+    this.stopUserScrollMotion();
+  };
+
+  /** 回弹到当前激活歌词 */
+  private resetUserScrollToActiveLine = () => {
+    const shouldRelayout = this.isUserScrolling || this.userScrollOffset !== 0;
+    this.resetUserScrollState();
+    if (shouldRelayout) this.calculateLayout(false);
+  };
+
+  /** 延迟回弹到当前激活歌词 */
+  private scheduleScrollReset = () => {
+    clearTimeout(this.scrollResetTimerId);
+    this.scrollResetTimerId = window.setTimeout(
+      this.resetUserScrollToActiveLine,
+      this.scrollResetDelay,
+    );
+  };
+
+  /**
+   * 将滚动增量推迟到下一帧统一消费
    * @param deltaY - 滚动偏移量
    */
-  private applyUserScroll = (deltaY: number) => {
+  private queueUserScroll = (deltaY: number) => {
+    if (deltaY === 0) return;
     // 首次进入滚动时清理残留动画，减少合成开销
     if (!this.isUserScrolling) this.lineAnimations.cleanupInactive();
-    this.userScrollOffset += deltaY;
+    this.pendingUserScrollDelta += deltaY;
+    this.isUserScrolling = true;
+  };
+
+  /**
+   * 在 rAF 中统一消费用户滚动和松手惯性
+   * @param deltaTime - 帧间隔时间（毫秒）
+   */
+  private consumeUserScrollMotion = (deltaTime: number) => {
+    let scrollDelta = this.pendingUserScrollDelta;
+    this.pendingUserScrollDelta = 0;
+
+    if (!this.isTouching && this.inertialVelocity !== 0) {
+      const frameDelta = clamp(
+        -TOUCH_MAX_FRAME_DELTA,
+        this.inertialVelocity * deltaTime,
+        TOUCH_MAX_FRAME_DELTA,
+      );
+      scrollDelta += frameDelta;
+      this.inertialVelocity *= Math.exp(-deltaTime / TOUCH_INERTIA_DECAY_MS);
+      if (Math.abs(this.inertialVelocity) < TOUCH_INERTIA_STOP_VELOCITY) {
+        this.inertialVelocity = 0;
+      }
+    }
+
+    if (scrollDelta === 0) return;
+    this.userScrollOffset += scrollDelta;
     this.isUserScrolling = true;
     this.calculateLayout(false);
-    clearTimeout(this.scrollResetTimerId);
-    this.scrollResetTimerId = window.setTimeout(() => {
-      this.isUserScrolling = false;
-      this.userScrollOffset = 0;
-      this.calculateLayout(false);
-    }, this.scrollResetDelay);
   };
 
   private handleWheel = (event: WheelEvent) => {
     event.preventDefault();
-    this.applyUserScroll(event.deltaY);
+    this.inertialVelocity = 0;
+    this.queueUserScroll(event.deltaY);
+    this.scheduleScrollReset();
   };
 
   private handleTouchStart = (event: TouchEvent) => {
-    this.lastTouchY = event.touches[0].clientY;
+    const touch = event.touches[0];
+    if (!touch) return;
+    this.isTouching = true;
+    this.inertialVelocity = 0;
+    this.touchVelocity = 0;
+    this.lastTouchY = touch.clientY;
+    this.touchStartX = touch.clientX;
+    this.touchStartY = touch.clientY;
+    this.touchStartTarget = event.target;
+    this.lastTouchTime = event.timeStamp;
+    clearTimeout(this.scrollResetTimerId);
   };
 
   private handleTouchMove = (event: TouchEvent) => {
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
     const currentY = event.touches[0].clientY;
-    this.applyUserScroll(this.lastTouchY - currentY);
+    const deltaY = this.lastTouchY - currentY;
+    const elapsed = Math.max(1, event.timeStamp - this.lastTouchTime);
+    const velocity = clamp(-TOUCH_MAX_VELOCITY, deltaY / elapsed, TOUCH_MAX_VELOCITY);
+    this.touchVelocity =
+      this.touchVelocity * TOUCH_VELOCITY_SMOOTHING + velocity * (1 - TOUCH_VELOCITY_SMOOTHING);
+    this.queueUserScroll(deltaY);
     this.lastTouchY = currentY;
+    this.lastTouchTime = event.timeStamp;
   };
 
-  private handleTouchEnd = () => {
-    if (!this.isUserScrolling) return;
-    clearTimeout(this.scrollResetTimerId);
-    this.scrollResetTimerId = window.setTimeout(() => {
-      this.isUserScrolling = false;
-      this.userScrollOffset = 0;
-      this.calculateLayout(false);
-    }, this.scrollResetDelay);
+  private handleTouchEnd = (event: TouchEvent) => {
+    const touch = event.changedTouches[0];
+    const endX = touch?.clientX ?? this.touchStartX;
+    const endY = touch?.clientY ?? this.lastTouchY;
+    const movedDistance = Math.hypot(endX - this.touchStartX, endY - this.touchStartY);
+    this.isTouching = false;
+    this.inertialVelocity =
+      Math.abs(this.touchVelocity) > TOUCH_INERTIA_STOP_VELOCITY ? this.touchVelocity : 0;
+    this.touchVelocity = 0;
+    if (this.isUserScrolling) this.scheduleScrollReset();
+    // 某些移动端在 touch 轻点后不会可靠派发 click，这里补一条显式 tap → seek 通路。
+    if (!this.isUserScrolling && movedDistance <= TOUCH_TAP_THRESHOLD) {
+      if (this.suppressNextTapSeek) {
+        this.suppressNextTapSeek = false;
+      } else {
+        this.emitLineClickFromTarget(this.touchStartTarget);
+      }
+    }
+    this.touchStartTarget = null;
+  };
+
+  private handleTouchCancel = () => {
+    this.isTouching = false;
+    this.touchVelocity = 0;
+    this.inertialVelocity = 0;
+    this.touchStartTarget = null;
   };
 
   private handleMouseEnter = () => {
@@ -1103,12 +1314,7 @@ export class LyricRenderer {
   /** 鼠标离开：恢复模糊 + 回弹滚动位置 */
   private handleMouseLeave = () => {
     this.isHovering = false;
-    if (this.isUserScrolling) {
-      clearTimeout(this.scrollResetTimerId);
-      this.isUserScrolling = false;
-      this.userScrollOffset = 0;
-      this.calculateLayout(false, true);
-    }
+    if (this.isUserScrolling) this.resetUserScrollToActiveLine();
   };
 
   /** 容器尺寸变化：重新测量 + 重算掩码 + 重新布局 */
@@ -1119,7 +1325,12 @@ export class LyricRenderer {
     this.containerWidth = newWidth;
     this.containerHeight = newHeight;
     this.measureLineHeights();
-    measureAndApplyWordMasks(this.wordMeasurements, this.wordFadeWidth, this.lines);
+    measureAndApplyWordMasks(
+      this.wordMeasurements,
+      this.wordFadeWidth,
+      this.lines,
+      this.enableWordHighlight,
+    );
     // 入场动画期间跳过 calculateLayout，避免 setPosition 瞬移破坏弹簧入场
     if (!this.entranceComplete) {
       this.needsFullSync = true;
@@ -1135,7 +1346,12 @@ export class LyricRenderer {
     this.dotsContainerWidth = this.dotsContainer.offsetWidth || 60;
     this.dotsContainerHeight = this.dotsContainer.offsetHeight || 20;
     this.measureLineHeights();
-    measureAndApplyWordMasks(this.wordMeasurements, this.wordFadeWidth, this.lines);
+    measureAndApplyWordMasks(
+      this.wordMeasurements,
+      this.wordFadeWidth,
+      this.lines,
+      this.enableWordHighlight,
+    );
     // 入场动画期间跳过 calculateLayout，避免 setPosition 瞬移破坏弹簧入场
     if (!this.entranceComplete) {
       this.needsFullSync = true;

@@ -4,6 +4,7 @@ import type { AlbumSummary, ArtistSummary, ScanProgress } from "@shared/types/li
 import type { Collection } from "@/types/collection";
 import type { ArtistProfile, CoverItem } from "@/types/artist";
 import { buildFolderTree, countFolders } from "@/utils/folderTree";
+import { isAndroid } from "@/services/bridge";
 
 const trackDb = localforage.createInstance({ name: "splayer", storeName: "library" });
 
@@ -115,16 +116,20 @@ export const useLibraryStore = defineStore("library", () => {
       likedOrderedIds.value = likedCached;
       likedIdSet.value = new Set(likedCached);
     }
-    // 拿最新数据并回写缓存
-    const [tracksRes, dirsRes] = await Promise.all([
-      window.api.library.getTracks(),
-      window.api.library.getScanDirs(),
-    ]);
-    if (tracksRes.success && tracksRes.data) {
-      tracks.value = tracksRes.data;
-      cacheTracks(tracksRes.data);
+    // 拿最新数据并回写缓存（API 不可达时静默回退到缓存数据）
+    try {
+      const [tracksRes, dirsRes] = await Promise.all([
+        window.api.library.getTracks(),
+        window.api.library.getScanDirs(),
+      ]);
+      if (tracksRes.success && tracksRes.data) {
+        tracks.value = tracksRes.data;
+        cacheTracks(tracksRes.data);
+      }
+      if (dirsRes.success && dirsRes.data) scanDirs.value = dirsRes.data;
+    } catch (error) {
+      console.warn("[library] load from API failed, using cache:", error);
     }
-    if (dirsRes.success && dirsRes.data) scanDirs.value = dirsRes.data;
     initialized.value = true;
     // 预取歌手头像
     loadArtistAvatars();
@@ -159,12 +164,10 @@ export const useLibraryStore = defineStore("library", () => {
     const res = await window.api.library.addScanDir();
     if (res.success) {
       const newDir = res.data as string;
-      const nested = scanDirs.value.some(
-        (d) =>
-          newDir.startsWith(d + "\\") ||
-          newDir.startsWith(d + "/") ||
-          d.startsWith(newDir + "\\") ||
-          d.startsWith(newDir + "/"),
+      // SAF URI 使用 %2F 作为路径分隔符，文件路径使用 \ 或 /
+      const seps = isAndroid ? ["/", "%2F"] : ["\\", "/"];
+      const nested = scanDirs.value.some((d) =>
+        seps.some((sep) => newDir.startsWith(d + sep) || d.startsWith(newDir + sep)),
       );
       if (nested) {
         await window.api.library.removeScanDir(newDir);

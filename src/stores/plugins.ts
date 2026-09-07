@@ -7,6 +7,8 @@ export const usePluginsStore = defineStore("plugins", () => {
   const marketPlugins = shallowRef<MarketPlugin[]>([]);
   const marketLoaded = ref(false);
   let unsubscribe: (() => void) | null = null;
+  /** 并发 load() 共享同一个 promise，避免重复订阅/重复全量请求 */
+  let loadPromise: Promise<void> | null = null;
 
   /** 仅 manifest.type 不为 "control" 的插件（音源类，含 type 缺省） */
   const sourcePlugins = computed(() =>
@@ -32,19 +34,26 @@ export const usePluginsStore = defineStore("plugins", () => {
       })),
   );
 
-  /** 拉取列表并建立状态订阅 */
+  /** 拉取列表并建立状态订阅（并发调用共享同一个 promise，根治重复订阅） */
   const load = async (): Promise<void> => {
-    list.value = await window.api.plugins.list();
-    loaded.value = true;
-    if (!unsubscribe) {
-      unsubscribe = window.api.plugins.onStatus((info) => {
-        const next = list.value.slice();
-        const idx = next.findIndex((item) => item.manifest.id === info.manifest.id);
-        if (idx >= 0) next[idx] = info;
-        else next.push(info);
-        list.value = next;
-      });
-    }
+    if (loadPromise) return loadPromise;
+    loadPromise = (async () => {
+      list.value = await window.api.plugins.list();
+      loaded.value = true;
+      // 单订阅守卫：仅首次建立 watch/ IPC 订阅，后续复用同一回调链
+      if (!unsubscribe) {
+        unsubscribe = window.api.plugins.onStatus((info) => {
+          const next = list.value.slice();
+          const idx = next.findIndex((item) => item.manifest.id === info.manifest.id);
+          if (idx >= 0) next[idx] = info;
+          else next.push(info);
+          list.value = next;
+        });
+      }
+    })().finally(() => {
+      loadPromise = null;
+    });
+    return loadPromise;
   };
 
   /** 通过原生文件选择框导入插件 */

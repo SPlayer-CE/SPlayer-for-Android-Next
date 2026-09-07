@@ -206,7 +206,7 @@ export interface AudioDevice {
 /** 主进程推送给渲染进程的播放事件 */
 export type PlayerEvent =
   | { type: "status"; data: PlayerStatus }
-  | { type: "position"; data: { position: number; duration: number } }
+  | { type: "position"; data: { position: number; duration: number; authoritative?: boolean } }
   | { type: "seek"; data: { position: number } }
   | { type: "ended" }
   | { type: "sourceError" }
@@ -219,7 +219,8 @@ export type PlayerEvent =
   | { type: "setRepeat"; data: { mode: RepeatMode } }
   | { type: "addToQueue"; data: { tracks: Track[]; position: "next" | "end" } }
   | { type: "toggleLike" }
-  | { type: "fftData"; data: FftData }
+  /** data 为双声道 FftData（PC 主进程）或单声道数组（Android 桥），lowFreq 仅 Android 原生推送 */
+  | { type: "fftData"; data: FftData | number[]; lowFreq?: number }
   | { type: "error"; error: string }
   | { type: "deviceChanged"; data: { defaultDevice: string | null } };
 
@@ -259,6 +260,8 @@ export interface PlayerApi {
   getStatus: () => Promise<IpcResponse<PlayerStatus>>;
   /** 设置 FFT 频谱推送 */
   setFftEnabled: (enabled: boolean) => Promise<IpcResponse>;
+  /** 切换 FFT 频谱算法方案（仅 Android 生效；pc 对齐桌面端，android 保留原生方案） */
+  setSpectrumAlgorithm: (mode: "pc" | "android") => Promise<IpcResponse>;
   /** 获取 FFT 频谱数据 */
   getFftData: () => Promise<IpcResponse<FftData>>;
   /** 设置渐入渐出时长（毫秒） */
@@ -301,4 +304,6 @@ export interface PlayerApi {
   dispatch: (type: string) => void;
   /** 订阅播放事件 */
   onEvent: (callback: (event: PlayerEvent) => void) => () => void;
+  /** 浏览器预览模式：在用户手势内激活音频元素以规避自动播放拦截；其他平台为 no-op */
+  unlockAudio: () => Promise<void>;
 }

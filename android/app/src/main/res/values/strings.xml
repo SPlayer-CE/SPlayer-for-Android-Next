@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SPlayer Next</string>
+    <string name="title_activity_main">SPlayer Next</string>
+
+    <!-- Android 12+ 隐私归因标签，AndroidManifest.xml 的 <attribution> 引用 -->
+    <string name="attribution_playback">媒体播放与通知栏控制</string>
+    <string name="attribution_cache">音频与图片缓存</string>
+
+    <!-- 媒体通知渠道与自定义通知动作（PlaybackManager.kt） -->
+    <string name="playback_notification_channel_name">播放控制</string>
+    <string name="playback_notification_channel_description">音乐播放与控制通知渠道</string>
+    <string name="playback_notification_favorite">收藏</string>
+    <string name="playback_notification_previous">上一首</string>
+    <string name="playback_notification_next">下一首</string>
+    <string name="playback_notification_play_pause">播放/暂停</string>
+    <string name="playback_notification_desktop_lyric">桌面歌词</string>
+</resources>

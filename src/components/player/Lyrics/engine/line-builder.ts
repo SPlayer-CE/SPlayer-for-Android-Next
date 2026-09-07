@@ -13,10 +13,14 @@ export interface LineBuildOptions {
   showTranslation: boolean;
   /** 是否显示音译歌词 */
   showRomanization: boolean;
+  /** 是否按词块换行 */
+  enableWordBlockSegmentation?: boolean;
 }
 
 /** 行 DOM 构建结果 */
 export interface LineBuildResult {
+  /** 每行主歌词元素 */
+  mainElements: HTMLDivElement[];
   /** 每行对应的 DOM 元素 */
   lineElements: HTMLDivElement[];
   /** 每行的单词测量数据（用于 CSS mask 计算） */
@@ -41,6 +45,7 @@ export const buildLineElements = (
 ): LineBuildResult => {
   const lineCount = lines.length;
   const lineElements: HTMLDivElement[] = new Array(lineCount);
+  const mainElements: HTMLDivElement[] = new Array(lineCount);
   const wordMeasurements: WordMeasurement[][] = new Array(lineCount);
   const lineAnimTargets: WordAnimTarget[][] = new Array(lineCount);
   const isBgAbove: boolean[] = new Array(lineCount).fill(false);
@@ -75,15 +80,26 @@ export const buildLineElements = (
     if (isStatic) {
       mainDiv.appendChild(document.createTextNode(line.words.map((w) => w.word).join("")));
       // 给静态行也加统一 mask，让 --ba 对其生效，与逐字行透明度一致
-      mainDiv.style.setProperty(
-        "mask-image",
-        "linear-gradient(rgba(0,0,0,var(--ba)),rgba(0,0,0,var(--ba)))",
-      );
+      const maskImage = "linear-gradient(rgba(0,0,0,var(--ba)),rgba(0,0,0,var(--ba)))";
+      // Android 10 WebView 可能低于 Chromium 120，同时写入标准属性和 -webkit- 前缀属性以覆盖不同内核
+      mainDiv.style.setProperty("mask-image", maskImage);
+      mainDiv.style.setProperty("mask-size", "100% 100%");
+      mainDiv.style.setProperty("mask-repeat", "no-repeat");
+      mainDiv.style.setProperty("mask-position", "left top");
+      mainDiv.style.setProperty("-webkit-mask-image", maskImage);
+      mainDiv.style.setProperty("-webkit-mask-size", "100% 100%");
+      mainDiv.style.setProperty("-webkit-mask-repeat", "no-repeat");
+      mainDiv.style.setProperty("-webkit-mask-position", "left top");
       wordMeasurements[i] = [];
       lineAnimTargets[i] = [];
     } else {
       // 构建单词 span + 动画目标描述
-      const result = buildWordSpans(line.words, mainDiv, options.enableEmphasizeEffect);
+      const result = buildWordSpans(
+        line.words,
+        mainDiv,
+        options.enableEmphasizeEffect,
+        options.enableWordBlockSegmentation ?? false,
+      );
       wordMeasurements[i] = result.measurements;
       lineAnimTargets[i] = result.animTargets;
     }
@@ -107,9 +123,10 @@ export const buildLineElements = (
     }
 
     lineEl.appendChild(contentDiv);
+    mainElements[i] = mainDiv;
     lineElements[i] = lineEl;
     fragment.appendChild(lineEl);
   }
 
-  return { lineElements, wordMeasurements, lineAnimTargets, isBgAbove, fragment };
+  return { lineElements, mainElements, wordMeasurements, lineAnimTargets, isBgAbove, fragment };
 };

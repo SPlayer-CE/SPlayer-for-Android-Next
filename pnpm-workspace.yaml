@@ -20,5 +20,12 @@ minimumReleaseAgeExclude:
   - browserslist@4.28.8
   - electron-to-chromium@1.5.403
 
+# 依赖版本覆盖：修复 nodejs-mobile-cordova 子依赖链中的已知漏洞
+# 仅覆盖同主版本可安全升级的包，避免破坏 nodejs-mobile-gyp / tar.gz2 的 API 兼容性
+# tar / request / tough-cookie / uuid 因跨大版本会破坏 API 而未覆盖，保留为已知风险
 overrides:
   node-abi: ^4.33.0
+  form-data: ">=2.5.6" # 修复 GHSA-fjxv-7rqg-78g4（critical，unsafe random）与 GHSA-hmw2-7cc7-3qxx（high，CRLF 注入）
+  mout: ">=1.2.4" # 修复 GHSA-pc58-wgmc-hfjr 与 GHSA-vvv8-xw5f-3f88（high，原型污染）
+  qs: ">=6.14.1" # 修复 GHSA-6rw7-vpxm-498p（moderate，arrayLimit 绕过致 DoS）
+  semver: ">=5.7.2" # 修复 GHSA-c2qf-rxjj-qqgw（high，ReDoS）

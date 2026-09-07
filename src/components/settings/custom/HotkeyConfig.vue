@@ -6,6 +6,7 @@ import { useHotkeyRecorder } from "@/core/hotkey/recorder";
 import { formatAccelerator } from "@shared/utils/accelerator";
 import { toast } from "@/composables/useToast";
 import { dialog } from "@/composables/useDialog";
+import { isAndroid } from "@/services/bridge";
 import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
 import { isMac } from "@/utils/config";
 
@@ -13,6 +14,17 @@ defineOptions({ inheritAttrs: false });
 
 const { t } = useI18n();
 const hotkey = useHotkeyStore();
+
+/** Android 上不可用的快捷键动作 ID */
+const ANDROID_HIDDEN_ACTIONS = new Set<HotkeyActionId>([
+  "window.toggleDesktopLyric",
+  "window.toggleDynamicIsland",
+  "window.toggleTaskbarLyric",
+]);
+
+/** 判断动作是否在 Android 上不可用 */
+const isAndroidUnavailable = (id: HotkeyActionId): boolean =>
+  isAndroid && ANDROID_HIDDEN_ACTIONS.has(id);
 
 /** 按 id 前缀分组 */
 const groupedActions = computed(() => {
@@ -214,6 +226,7 @@ const errorTitleOf = (id: HotkeyActionId, scope: Scope): string => {
 <template>
   <div class="flex flex-col gap-3">
     <div
+      v-if="!isAndroid"
       class="rounded-xl bg-surface-panel border border-solid border-outline-variant/15 px-4 py-3.5 flex items-center justify-between gap-4"
     >
       <div class="min-w-0 flex-1">
@@ -238,7 +251,7 @@ const errorTitleOf = (id: HotkeyActionId, scope: Scope): string => {
         <span class="w-48 text-center text-on-surface-variant/60">
           {{ t("settings.hotkeys.colInApp") }}
         </span>
-        <span class="w-48 text-center text-on-surface-variant/60">
+        <span v-if="!isAndroid" class="w-48 text-center text-on-surface-variant/60">
           {{ t("settings.hotkeys.colGlobal") }}
         </span>
         <span class="w-9" />
@@ -246,12 +259,24 @@ const errorTitleOf = (id: HotkeyActionId, scope: Scope): string => {
       <SDivider />
       <div class="flex flex-col">
         <template v-for="(action, idx) in group.actions" :key="action.id">
-          <div class="px-4 py-2.5 flex items-center gap-3">
-            <span class="flex-1 text-sm">{{ t(action.labelKey) }}</span>
+          <div
+            class="px-4 py-2.5 flex items-center gap-3"
+            :class="isAndroidUnavailable(action.id) ? 'opacity-50' : ''"
+          >
+            <div class="flex-1 min-w-0">
+              <span class="text-sm">{{ t(action.labelKey) }}</span>
+              <span
+                v-if="isAndroidUnavailable(action.id)"
+                class="text-xs text-on-surface-variant/50 ml-2"
+              >
+                {{ t("settings.desktopOnly") }}
+              </span>
+            </div>
 
             <div class="w-48" :title="errorTitleOf(action.id, 'inApp')">
               <SInput
                 readonly
+                :disabled="isAndroidUnavailable(action.id)"
                 :model-value="valueOf(action.id, 'inApp')"
                 :placeholder="placeholderOf(action.id, 'inApp')"
                 :status="statusOf(action.id, 'inApp')"
@@ -260,22 +285,29 @@ const errorTitleOf = (id: HotkeyActionId, scope: Scope): string => {
               />
             </div>
 
-            <div v-if="action.allowGlobal" class="w-48" :title="errorTitleOf(action.id, 'global')">
-              <SInput
-                readonly
-                :disabled="!hotkey.globalEnabled"
-                :model-value="valueOf(action.id, 'global')"
-                :placeholder="placeholderOf(action.id, 'global')"
-                :status="statusOf(action.id, 'global')"
-                @click="startRecord(action.id, 'global')"
-                @blur="stopRecord"
-              />
-            </div>
-            <div v-else class="w-48 text-center text-sm text-on-surface-variant/30">—</div>
+            <template v-if="!isAndroid">
+              <div
+                v-if="action.allowGlobal"
+                class="w-48"
+                :title="errorTitleOf(action.id, 'global')"
+              >
+                <SInput
+                  readonly
+                  :disabled="!hotkey.globalEnabled || isAndroidUnavailable(action.id)"
+                  :model-value="valueOf(action.id, 'global')"
+                  :placeholder="placeholderOf(action.id, 'global')"
+                  :status="statusOf(action.id, 'global')"
+                  @click="startRecord(action.id, 'global')"
+                  @blur="stopRecord"
+                />
+              </div>
+              <div v-else class="w-48 text-center text-sm text-on-surface-variant/30">—</div>
+            </template>
 
             <SButton
               variant="ghost"
               circle
+              :disabled="isAndroidUnavailable(action.id)"
               :title="t('settings.hotkeys.resetRow')"
               @click="resetSingle(action.id)"
             >

@@ -1,6 +1,6 @@
 import { resolve } from "path";
-import { execSync } from "child_process";
 import { defineConfig } from "electron-vite";
+import { getGitCommit, getGitDate } from "./scripts/git-info";
 import UnoCSS from "unocss/vite";
 import vue from "@vitejs/plugin-vue";
 import AutoImport from "unplugin-auto-import/vite";
@@ -10,24 +10,6 @@ import { FileSystemIconLoader } from "unplugin-icons/loaders";
 import RekaResolver from "reka-ui/resolver";
 import Components from "unplugin-vue-components/vite";
 import pkg from "./package.json" with { type: "json" };
-
-/** 获取当前 git 提交 */
-const getGitCommit = (): string => {
-  try {
-    return execSync("git rev-parse HEAD").toString().trim().slice(0, 7) || "unknown";
-  } catch {
-    return "unknown";
-  }
-};
-
-/** 获取当前 git 提交日期 */
-const getGitDate = (): string => {
-  try {
-    return execSync("git log -1 --format=%cI").toString().trim() || "unknown";
-  } catch {
-    return "unknown";
-  }
-};
 
 export default defineConfig({
   main: {

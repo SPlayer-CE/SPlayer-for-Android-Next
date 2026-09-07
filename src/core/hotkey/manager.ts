@@ -10,6 +10,7 @@
 import { watch } from "vue";
 import { useHotkeyStore } from "@/stores/hotkey";
 import { isMac } from "@/utils/config";
+import { isAndroid } from "@/services/bridge";
 import { parseAccelerator, matchParsed, type ParsedAccelerator } from "@shared/utils/accelerator";
 import type { HotkeyActionId } from "@shared/types/hotkey";
 import { buildRegistry, dispatch } from "./registry";
@@ -73,7 +74,10 @@ export const installHotkeyManager = (): void => {
   recompile();
   stopWatchBindings = watch(() => useHotkeyStore().bindings, recompile, { deep: true });
   window.addEventListener("keydown", onKeyDown, { capture: true });
-  offGlobalTrigger = window.api.hotkey.onTrigger((id) => dispatch(id));
+  // Android 无 global 快捷键能力，bridge.hotkey.onTrigger 为 noop，跳过订阅避免无意义调用
+  if (!isAndroid) {
+    offGlobalTrigger = window.api.hotkey.onTrigger((id) => dispatch(id));
+  }
 };
 
 /** 卸载（仅测试 / HMR 用） */

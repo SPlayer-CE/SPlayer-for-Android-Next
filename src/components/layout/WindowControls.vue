@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAndroid } from "@/services/bridge";
 import { useWindowControls } from "@/composables/useWindowControls";
 import IconMinus from "~icons/lucide/minus";
 import IconSquare from "~icons/lucide/square";
@@ -20,7 +21,7 @@ const onClose = (): void => {
 </script>
 
 <template>
-  <div v-if="isBorderless" class="flex items-center gap-3 shrink-0">
+  <div v-if="!isAndroid && isBorderless" class="flex items-center gap-3 shrink-0">
     <SButton
       class="window-control-button app-no-drag"
       :type="cover ? 'cover' : undefined"

@@ -26,12 +26,37 @@ import {
 } from "@/services/nextTrackPreloader";
 import { installPlayStats } from "./stats";
 import { useFavorite } from "@/composables/useFavorite";
+import { mediaSessionManager } from "./MediaSessionManager";
 import { extractColorFromUrl } from "@/utils/color";
 import { handleError, isSkippableError } from "@/utils/errors";
 import { ErrorCode } from "@shared/types/errors";
 import { shouldSkipDjTrack } from "@/utils/preset/djMode";
 import { toast } from "@/composables/useToast";
 import i18n from "@/i18n";
+import bridge, {
+  ensureNotificationPermission,
+  isAndroid,
+  isAndroidNative,
+} from "@/services/bridge";
+import { isLanSyncReceiver } from "@/composables/useLanSyncRole";
+import {
+  dispatchLanRemoteCommand,
+  isApplyingRemoteState,
+  reportHostManualAction,
+  type LanRemoteAction,
+} from "@/composables/lanSyncRemote";
+
+/**
+ * 局域网协同接收端遥控拦截：本机为从设备且非"应用主机状?期间时，
+ * 把用户控制指令上送主机执行，本地不直接操作播放器（随后由主机广播回灌镜像）? * @returns 是否已被遥控接管（true 则调用方应直?return? */
+const tryRemoteControl = (action: LanRemoteAction, value?: number): boolean => {
+  if (isApplyingRemoteState()) return false;
+  if (isLanSyncReceiver()) {
+    return dispatchLanRemoteCommand(action, value);
+  }
+  reportHostManualAction(action, value);
+  return false;
+};
 
 /** 加载运行时选项 */
 interface LoadRuntimeOptions {
@@ -41,42 +66,38 @@ interface LoadRuntimeOptions {
   context?: PlaybackContext;
 }
 
-/** 单次音源兜底过程的重试状态 */
+/** 单次音源兜底过程的重试状?*/
 interface SourceRetryState {
-  /** 是否已放弃官方在线接口，后续仅尝试插件 */
+  /** 是否已放弃官方在线接口，后续仅尝试插?*/
   skipOfficialOnline: boolean;
-  /** 已尝试且需跳过的插件 ID */
+  /** 已尝试且需跳过的插?ID */
   skippedPluginIds: Set<string>;
 }
 
 /**
  * 单次解析并加载音源的结果
- * - loaded: 已拿到解析结果，并完成一次 load（成功或失败都算）
- * - unresolved: 当前重试策略下没有可用音源
- * - cancelled: 加载期间被新的切歌/重载请求接管
+ * - loaded: 已拿到解析结果，并完成一?load（成功或失败都算? * - unresolved: 当前重试策略下没有可用音? * - cancelled: 加载期间被新的切?重载请求接管
  */
 type LoadSourceResult =
   | { status: "loaded"; result: LoadOutcome; resolved: ResolvedTrackSource }
   | { status: "unresolved" }
   | { status: "cancelled" };
 
-/** 引擎 load 竞态 token */
+/** 引擎 load 竞?token */
 let loadToken = 0;
-/** loadTrack 竞态 token */
+/** loadTrack 竞?token */
 let trackToken = 0;
 /** 连续加载失败计数，成功时重置 */
 let consecutiveFailures = 0;
-/** 连续失败硬上限 */
+/** 连续失败硬上?*/
 const MAX_CONSECUTIVE_FAILURES = 5;
 /** 失败后跳下一首的节流延迟（毫秒） */
 const SKIP_ON_ERROR_DELAY_MS = 1000;
 
 /**
- * 单曲级失败兜底
- * 达到连续失败上限 / 队列长度则交 onQueueEnded 停下
- * @param myToken - 调用方进入失败路径时的 token 快照
- * @param getCurrentToken - 取该 token 的最新值，setTimeout 触发时再次比对
- */
+ * 单曲级失败兜? * 达到连续失败上限 / 队列长度则交 onQueueEnded 停下
+ * @param myToken - 调用方进入失败路径时?token 快照
+ * @param getCurrentToken - 取该 token 的最新值，setTimeout 触发时再次比? */
 const skipOnFailure = async (myToken: number, getCurrentToken: () => number): Promise<void> => {
   consecutiveFailures++;
   if (
@@ -101,7 +122,7 @@ export type LoadOutcome = { ok: true; track: Track | null } | { ok: false; error
 
 /**
  * 切歌通用前置
- * @param duration 新歌时长（毫秒），未知时传 0
+ * @param duration 新歌时长（毫秒），未知时?0
  */
 const resetForLoad = (duration: number): void => {
   const status = useStatusStore();
@@ -116,12 +137,9 @@ const resetForLoad = (duration: number): void => {
 };
 
 /**
- * 加载音频源
- * @param source - 音频文件路径或网络地址
+ * 加载音频? * @param source - 音频文件路径或网络地址
  * @param autoPlay - 是否自动播放
- * @param meta - 渲染层下发给主进程的权威 Track（用于 SMTC/托盘）
- * @param options - 加载时的内部控制项
- */
+ * @param meta - 渲染层下发给主进程的权威 Track（用?SMTC/托盘。? * @param options - 加载时的内部控制? */
 export const load = async (
   source: string,
   autoPlay = true,
@@ -130,9 +148,9 @@ export const load = async (
 ): Promise<LoadOutcome> => {
   const status = useStatusStore();
   const token = ++loadToken;
-  // 切歌即清空 AB 循环（per-song 状态）
+  // 切歌即清?AB 循环（per-song 状态）
   abLoop.reset();
-  // 清除上一次 seek 残留
+  // 清除上一?seek 残留
   seekTarget = null;
   playback.setSeeking(false);
   resetForLoad(meta?.duration ?? 0);
@@ -143,8 +161,10 @@ export const load = async (
     extractColorFromUrl(meta?.cover ?? meta?.coverOriginal ?? null);
     if (meta) void coverLoader.loadCoverForTrack(meta);
   }
+  // Android：在 load 前推送元数据，让通知栏首次显示即有正确歌曲信?
+  if (isAndroid) void mediaSessionManager.updateMetadata();
   try {
-    const result = await window.api.player.load(source, {
+    const result = await bridge.player.load(source, {
       autoPlay,
       meta,
       context: options.context,
@@ -154,8 +174,10 @@ export const load = async (
     if (result.success && result.data) {
       const { detail, mediaInfo } = result.data;
       consecutiveFailures = 0;
+      // 首次播放时请求通知权限（Android 13+）?
+      void ensureNotificationPermission();
       const media = useMediaStore();
-      // 把引擎提取的 mediaInfo 与已有 Track 合并；身份字段保留
+      // 把引擎提取的 mediaInfo 与已?Track 合并；身份字段保?
       media.enrichTrack(mediaInfo, detail);
       const enriched = media.track;
       // 更新队列中的 Track 元数据
@@ -174,28 +196,41 @@ export const load = async (
       status.currentSource = source;
       playback.setDuration(dur);
       playback.setPlaying(autoPlay);
+      // Android：推送元数据 + 队列窗口到原?MediaSession
+      if (isAndroid) {
+        void mediaSessionManager.updateMetadata();
+        void mediaSessionManager.syncAndroidPlaybackContext();
+      }
       return { ok: true, track: enriched };
     }
     status.state = "idle";
     lyricLoader.loadForTrack(null);
     if (result.error && !options.suppressErrorToast) handleError(result.error);
     return { ok: false, error: result.error };
+  } catch (_error) {
+    if (token !== loadToken) return { ok: false };
+    status.state = "idle";
+    lyricLoader.loadForTrack(null);
+    const code =
+      source.startsWith("http://") || source.startsWith("https://")
+        ? ErrorCode.NETWORK_ERROR
+        : ErrorCode.FILE_DECODE_ERROR;
+    handleError(code);
+    return { ok: false, error: code };
   } finally {
     if (token === loadToken) status.trackLoading = false;
   }
 };
 
-/** 创建音源重试状态 */
+/** 创建音源重试状?*/
 const createSourceRetryState = (): SourceRetryState => ({
   skipOfficialOnline: false,
   skippedPluginIds: new Set<string>(),
 });
 
 /**
- * 根据当前重试状态解析音源
- * @param track - 要解析的 Track
- * @param retry - 当前重试状态
- */
+ * 根据当前重试状态解析音? * @param track - 要解析的 Track
+ * @param retry - 当前重试状? */
 const resolveTrackSourceWithRetry = (
   track: Track,
   retry: SourceRetryState,
@@ -207,9 +242,7 @@ const resolveTrackSourceWithRetry = (
 
 /**
  * 记录可继续兜底的音源失败
- * @param resolved - 本次加载使用的音源
- * @param retry - 当前重试状态
- * @returns 是否还有可尝试的后续音源
+ * @param resolved - 本次加载使用的音? * @param retry - 当前重试状? * @returns 是否还有可尝试的后续音源
  */
 const markRetryableSourceFailure = (
   resolved: ResolvedTrackSource,
@@ -228,6 +261,17 @@ const markRetryableSourceFailure = (
 
 const shouldSuppressLoadError = (resolved: ResolvedTrackSource): boolean =>
   resolved.provider === "official" || resolved.provider === "plugin";
+
+/**
+ * 将解析到的实际音质回填到 Track（仅网易云），用于 UI 展示与历史记录
+ * @param track - 原始 Track
+ * @param resolved - 音源解析结果
+ * @returns 回填音质后的 Track；无变化时原样返回
+ */
+const withResolvedQuality = (track: Track, resolved: ResolvedTrackSource): Track =>
+  resolved.playbackQuality && track.source === "netease"
+    ? { ...track, quality: resolved.playbackQuality }
+    : track;
 
 /**
  * 解析并加载 Track，遇到可兜底的音源失败时继续尝试下一个来源
@@ -253,7 +297,10 @@ const loadTrackSourceWithFallback = async (
     firstTry = null;
     if (!shouldContinue()) return { status: "cancelled" };
     if (!resolved) return { status: "unresolved" };
-    const result = await load(resolved.source, autoPlay, track, {
+    // 实际音质与请求档位不同时先回填，保证引擎元数据与 UI 一致
+    const playbackTrack = withResolvedQuality(track, resolved);
+    if (playbackTrack !== track) useMediaStore().setTrack(playbackTrack);
+    const result = await load(resolved.source, autoPlay, playbackTrack, {
       suppressErrorToast: usingInitial || shouldSuppressLoadError(resolved),
       context,
     });
@@ -291,15 +338,43 @@ const loadTrack = async (track: Track | null, context?: PlaybackContext): Promis
     return;
   }
   const myToken = ++trackToken;
-  // 消费预载结果
-  const preloaded = consumePreloadedTrack(track);
+  loadToken++;
+  const status = useStatusStore();
   // 乐观更新
   const media = useMediaStore();
   media.setTrack(track);
   media.setPlaybackContext(context);
   lyricLoader.beginLoad();
   resetForLoad(track.duration ?? 0);
-  void window.api.player.stop();
+  // Android：播放权威在原生。推全量队列上下文后由原生解析并开播，JS 不做音源解析
+  if (isAndroidNative) {
+    const isOnline = track.source !== "local";
+    if (isOnline) {
+      void lyricLoader.loadForTrack(null);
+      extractColorFromUrl(track.cover ?? track.coverOriginal ?? null);
+      void coverLoader.loadCoverForTrack(track);
+    }
+    // 换歌后 currentSource 仍是上一首的 URL 快照，必须清空：否则 buildAndroidQueueTracks
+    // 会把它当作新曲的 knownUrl，导致原生直接播放上一首（点 A 播 B）
+    status.currentSource = null;
+    try {
+      await mediaSessionManager.syncAndroidPlaybackContext();
+      if (myToken !== trackToken) return;
+      await bridge.android.playIndex(status.fmMode ? 0 : status.playIndex);
+    } catch (error) {
+      console.warn("[player] android native load failed", error);
+      if (myToken === trackToken) status.trackLoading = false;
+    }
+    return;
+  }
+  // 消费预载结果
+  const preloaded = consumePreloadedTrack(track);
+  try {
+    await bridge.player.stop();
+  } catch (error) {
+    console.warn("[player] stop before load failed", error);
+  }
+  if (myToken !== trackToken) return;
   // 是否可跳曲
   let shouldSkip = false;
   try {
@@ -316,7 +391,7 @@ const loadTrack = async (track: Track | null, context?: PlaybackContext): Promis
       const status = useStatusStore();
       status.currentSource = null;
       status.state = "idle";
-      void window.api.player.stop();
+      void bridge.player.stop();
       useMediaStore().setLyric(null, null);
       shouldSkip = true;
     } else {
@@ -326,7 +401,7 @@ const loadTrack = async (track: Track | null, context?: PlaybackContext): Promis
         shouldSkip = true;
       } else if (result.ok) {
         // 用户主动触发的成功播放记入历史；initPlayer 的恢复路径走 load() 不经此处
-        void useHistoryStore().record(track);
+        void useHistoryStore().record(withResolvedQuality(track, resolved));
         if (resolved.cacheRequest) {
           cacheScheduler.schedule(track.id, resolved.cacheRequest);
         }
@@ -361,8 +436,24 @@ export const reloadCurrentTrack = async (forcePlay?: boolean): Promise<boolean> 
   const resumePosition = Math.round(playback.getCurrentTime());
   // 抢占加载令牌，与 loadTrack 互相取消
   const myToken = ++trackToken;
+  loadToken++;
   // resolveTrackSource 联网解析较慢，先置加载态，让播放键立即给出反馈
   status.trackLoading = true;
+  // Android：原生重载——刷新 API 上下文清空解析缓存后按索引重播并恢复进度
+  if (isAndroidNative) {
+    try {
+      await mediaSessionManager.syncAndroidApiContext(true);
+      if (myToken !== trackToken) return true;
+      await bridge.android.playIndex(status.fmMode ? 0 : status.playIndex, resumePosition);
+      if (!shouldPlay) await pause();
+      return true;
+    } catch (error) {
+      console.warn("[player] android native reload failed", error);
+      status.trackLoading = false;
+      return false;
+    }
+  }
+  // helper 以暂停态完成单次加载（含实际音质回填），seek 回原进度后再决定是否播放
   const loaded = await loadTrackSourceWithFallback(
     track,
     media.playbackContext,
@@ -371,6 +462,7 @@ export const reloadCurrentTrack = async (forcePlay?: boolean): Promise<boolean> 
     true,
   );
   // 被更新的加载接管：由它负责结果，不算本次失败
+  if (myToken !== trackToken) return true;
   if (loaded.status === "cancelled") return true;
   if (loaded.status === "unresolved") {
     status.trackLoading = false;
@@ -385,14 +477,13 @@ export const reloadCurrentTrack = async (forcePlay?: boolean): Promise<boolean> 
   return true;
 };
 
-/** 同一首歌因源失效连续重载的次数，换歌时归零 */
+/** 同一首歌因源失效连续重载的次数，换歌时归?*/
 let sourceRecoveryCount = 0;
-/** sourceRecoveryCount 对应的 track id */
+/** sourceRecoveryCount 对应?track id */
 let sourceRecoveryTrackId: string | null = null;
 
 /**
- * 源失效恢复
- * 重载一次后仍失败则放弃跳曲
+ * 源失效恢复。? * 重载一次后仍失败则放弃跳曲
  */
 export const recoverFromSourceFailure = async (): Promise<void> => {
   const track = useMediaStore().track;
@@ -406,14 +497,14 @@ export const recoverFromSourceFailure = async (): Promise<void> => {
     sourceRecoveryTrackId = track.id;
     sourceRecoveryCount = 0;
   }
-  // 最多重载一次
+  // 最多重载一?
   if (sourceRecoveryCount >= 1) {
     sourceRecoveryCount = 0;
     await nextTrack();
     return;
   }
   sourceRecoveryCount++;
-  // 重载失败（重新解析的 URL 仍失效 / 加载报错，且不会再有 sourceError 兜底）→ 立即跳曲
+  // 重载失败（重新解析的 URL 仍失?/ 加载报错，且不会再有 sourceError 兜底）→ 立即跳曲
   const ok = await reloadCurrentTrack(true);
   if (!ok) {
     sourceRecoveryCount = 0;
@@ -423,6 +514,7 @@ export const recoverFromSourceFailure = async (): Promise<void> => {
 
 /** 恢复播放 */
 export const play = async (): Promise<void> => {
+  if (tryRemoteControl("play")) return;
   const status = useStatusStore();
   if (status.state === "stopped" && status.currentTrack) {
     await loadTrack(status.currentTrack, status.currentPlaybackContext);
@@ -431,7 +523,7 @@ export const play = async (): Promise<void> => {
   const prev = status.state;
   status.state = "playing";
   playback.setPlaying(true);
-  const result = await window.api.player.play();
+  const result = await bridge.player.play();
   if (!result.success) {
     status.state = prev;
     playback.setPlaying(false);
@@ -441,6 +533,7 @@ export const play = async (): Promise<void> => {
 
 /** 切换播放/暂停 */
 export const togglePlay = (): void => {
+  if (tryRemoteControl("toggle")) return;
   const status = useStatusStore();
   if (status.isPlaying) {
     pause();
@@ -451,11 +544,12 @@ export const togglePlay = (): void => {
 
 /** 暂停播放 */
 export const pause = async (): Promise<void> => {
+  if (tryRemoteControl("pause")) return;
   const status = useStatusStore();
   const prev = status.state;
   status.state = "paused";
   playback.setPlaying(false);
-  const result = await window.api.player.pause();
+  const result = await bridge.player.pause();
   if (!result.success) {
     status.state = prev;
     playback.setPlaying(true);
@@ -466,7 +560,7 @@ export const pause = async (): Promise<void> => {
 export const stop = async (): Promise<void> => {
   const status = useStatusStore();
   status.trackLoading = false;
-  const result = await window.api.player.stop();
+  const result = await bridge.player.stop();
   if (result.success) {
     status.state = "stopped";
     status.position = 0;
@@ -475,19 +569,18 @@ export const stop = async (): Promise<void> => {
 };
 
 /**
- * seek 目标位置（毫秒），非 null 表示正在 seek，
- * 后端推送的 position 必须接近此值才会被接受
+ * seek 目标位置（毫秒），非 null 表示正在 seek? * 后端推送的 position 必须接近此值才会被接受
  */
 let seekTarget: number | null = null;
 
 /**
- * 判断后端推送的 position 是否已到达 seek 目标附近
+ * 判断后端推送的 position 是否已到?seek 目标附近
  * @param position - 后端推送的播放位置（毫秒）
- * @returns 是否已到达 seek 目标
+ * @returns 是否已到?seek 目标
  */
 export const hasReachedSeekTarget = (position: number): boolean => {
   if (seekTarget === null) return true;
-  // 容差：后端推送的位置在 seek 目标 ±1s 内视为已到达
+  // 容差：后端推送的位置?seek 目标 ±1s 内视为已到达
   if (Math.abs(position - seekTarget) < 1000) {
     seekTarget = null;
     playback.setSeeking(false);
@@ -500,23 +593,21 @@ export const hasReachedSeekTarget = (position: number): boolean => {
 export const isSeeking = (): boolean => seekTarget !== null;
 
 /**
- * 跳转到指定播放位置
- * @param posMs - 目标位置（毫秒）
+ * 跳转到指定播放位? * @param posMs - 目标位置（毫秒）
  */
 export const seek = async (posMs: number): Promise<void> => {
+  if (tryRemoteControl("seek", posMs)) return;
   const status = useStatusStore();
-  // 歌曲加载中 seek 无意义：引擎此刻没有可 seek 的解码线程，
-  // 且 seekTarget 残留会让加载完成后的 position 推送被持续丢弃
+  // 歌曲加载?seek 无意义：引擎此刻没有?seek 的解码线程，
+  // ?seekTarget 残留会让加载完成后的 position 推送被持续丢弃
   if (status.trackLoading) return;
-  // 先冻结插值，再写入位置
-  playback.setSeeking(true);
+  // 先冻结插值，再写入位?  playback.setSeeking(true);
   status.position = posMs;
   playback.setCurrentTime(posMs);
 
-  // 设置 seek 目标，屏蔽旧 position 推送
-  seekTarget = posMs;
+  // 设置 seek 目标，屏蔽旧 position 推?  seekTarget = posMs;
 
-  const result = await window.api.player.seek(posMs);
+  const result = await bridge.player.seek(posMs);
   if (result.success) {
     status.position = posMs;
     playback.setCurrentTime(posMs);
@@ -538,10 +629,9 @@ export const markSeek = (posMs: number): void => {
 
 /**
  * 设置音量
- * @param vol - 音量值（0.0 ~ 1.0）
- */
+ * @param vol - 音量值（0.0 ~ 1.0? */
 export const setVolume = async (vol: number): Promise<void> => {
-  const result = await window.api.player.setVolume(vol);
+  const result = await bridge.player.setVolume(vol);
   if (result.success) {
     useStatusStore().volume = vol;
   }
@@ -549,39 +639,38 @@ export const setVolume = async (vol: number): Promise<void> => {
 
 /**
  * 设置播放速度
- * @param v - 速度（0.5 ~ 2.0）
- */
+ * @param v - 速度?.5 ~ 2.0? */
 export const setSpeed = async (v: number): Promise<void> => {
   const safe = Number.isFinite(v) ? Math.max(0.5, Math.min(2.0, v)) : 1.0;
-  const result = await window.api.player.setSpeed(safe);
+  // 接收端上送速度变更到主机，由主机统一广播给所有从设备
+  if (tryRemoteControl("setSpeed", safe)) return;
+  const result = await bridge.player.setSpeed(safe);
   if (result.success) {
     useStatusStore().speed = safe;
-    // 同步给 playback 时间源，让墙钟插值正确换算到源时间
-    playback.setSpeed(safe);
+    // 同步?playback 时间源，让墙钟插值正确换算到源时?    playback.setSpeed(safe);
   }
 };
 
 /**
- * 设置音调偏移（半音 -12 ~ 12）
- */
+ * 设置音调偏移（半?-12 ~ 12? */
 export const setPitch = async (n: number): Promise<void> => {
   const safe = Number.isFinite(n) ? Math.max(-12, Math.min(12, Math.round(n))) : 0;
-  const result = await window.api.player.setPitch(safe);
+  // 接收端上送音调变更到主机
+  if (tryRemoteControl("setPitch", safe)) return;
+  const result = await bridge.player.setPitch(safe);
   if (result.success) useStatusStore().pitch = safe;
 };
 
 /**
- * 设置"音调同步"开关
- * @param on - true = 变速保音调，false = 变速变调
- */
+ * 设置"音调同步"开? * @param on - true = 变速保音调，false = 变速变? */
 export const setPitchSync = async (on: boolean): Promise<void> => {
-  const result = await window.api.player.setPitchSync(on);
+  const result = await bridge.player.setPitchSync(on);
   if (result.success) useStatusStore().pitchSync = on;
 };
 
 /** 刷新音频输出设备列表 */
 export const refreshDevices = async (): Promise<void> => {
-  const result = await window.api.player.getOutputDevices();
+  const result = await bridge.player.getOutputDevices();
   if (result.success && result.data) useStatusStore().outputDevices = result.data;
 };
 
@@ -593,7 +682,7 @@ export const switchDevice = async (deviceId: string | null): Promise<void> => {
   const settings = useSettingsStore();
   const pauseBeforeSwitch =
     settings.player.pauseOnDeviceSwitch && useStatusStore().state === "playing";
-  const result = await window.api.player.setOutputDevice(deviceId, pauseBeforeSwitch);
+  const result = await bridge.player.setOutputDevice(deviceId, pauseBeforeSwitch);
   if (result.success) settings.player.outputDevice = deviceId;
 };
 
@@ -609,10 +698,11 @@ export const playFrom = async (
   context?: PlaybackContext,
 ): Promise<void> => {
   if (items.length === 0) return;
+  // 接收端不能自主切队列：交由主机决定播放内容，否则会与主机广播产生冲突
+  if (isLanSyncReceiver() && !isApplyingRemoteState()) return;
   const status = useStatusStore();
   const media = useMediaStore();
-  // 退出特殊模式
-  status.heartMode = false;
+  // 退出特殊模?  status.heartMode = false;
   status.fmMode = false;
   const idx = Math.max(0, Math.min(startIndex, items.length - 1));
   const isSameTrack = media.track?.id === items[idx]?.id;
@@ -629,7 +719,7 @@ export const playFrom = async (
   }
 };
 
-/** 标签写入后恢复当前曲：暂停态加载 → seek 回原进度 → 视情况恢复播放 */
+/** 标签写入后恢复当前曲：暂停态加??seek 回原进度 ?视情况恢复播?*/
 const resumeAfterTagWrite = async (
   track: Track,
   resumeMs: number,
@@ -637,6 +727,7 @@ const resumeAfterTagWrite = async (
 ): Promise<void> => {
   if (!track.path) return;
   const myToken = ++trackToken;
+  loadToken++;
   useMediaStore().setTrack(track);
   lyricLoader.beginLoad();
   const result = await load(track.path, false, track);
@@ -646,10 +737,7 @@ const resumeAfterTagWrite = async (
 };
 
 /**
- * 写入本地文件标签并同步各处缓存。
- * 目标包含当前播放曲时：记录进度 → 停止释放文件句柄 → 写入 → 重载并恢复进度
- * @param edits - 标签编辑请求（按文件路径）
- * @returns 逐项写入结果；IPC 层失败时返回 null
+ * 写入本地文件标签并同步各处缓存? * 目标包含当前播放曲时：记录进??停止释放文件句柄 ?写入 ?重载并恢复进? * @param edits - 标签编辑请求（按文件路径? * @returns 逐项写入结果；IPC 层失败时返回 null
  */
 export const saveTrackTags = async (edits: TagEditRequest[]): Promise<TagWriteOutcome[] | null> => {
   if (edits.length === 0) return [];
@@ -664,14 +752,14 @@ export const saveTrackTags = async (edits: TagEditRequest[]): Promise<TagWriteOu
   if (touchesCurrent) {
     resumeMs = Math.round(playback.getCurrentTime());
     wasPlaying = status.isPlaying;
-    // Windows 下引擎持有文件句柄，必须先停止才能写入
-    await window.api.player.stop();
+    // Windows 下引擎持有文件句柄，必须先停止才能写?
+    await bridge.player.stop();
   }
 
   const result = await window.api.library.writeTags(edits);
   if (!result.success || !result.data) {
     if (result.error) handleError(result.error);
-    // 写入失败也要恢复被停掉的当前曲
+    // 写入失败也要恢复被停掉的当前?
     if (touchesCurrent && current) await resumeAfterTagWrite(current, resumeMs, wasPlaying);
     return null;
   }
@@ -692,9 +780,7 @@ export const saveTrackTags = async (edits: TagEditRequest[]): Promise<TagWriteOu
 };
 
 /**
- * 进入心动模式：用智能推荐列表替换队列并从头播放
- * @param tracks - 网易云智能推荐曲目
- */
+ * 进入心动模式：用智能推荐列表替换队列并从头播? * @param tracks - 网易云智能推荐曲? */
 export const playHeartMode = async (tracks: readonly Track[]): Promise<void> => {
   if (tracks.length === 0) return;
   const status = useStatusStore();
@@ -735,15 +821,36 @@ export const playPersonalFm = async (options?: PersonalFmOptions): Promise<boole
 export const dislikeFmTrack = async (): Promise<void> => {
   if (!useStatusStore().fmMode) return;
   const playedSec = Math.max(0, Math.round(playback.getCurrentTime() / 1000));
+  // Android：trash 由 JS 提交（含播放秒数反馈），队列推进交给原生权威
+  if (isAndroidNative) {
+    void fm.trashCurrent(playedSec);
+    await nextTrack();
+    return;
+  }
   const next = await fm.dislikeCurrent(playedSec);
   if (next) await loadTrack(next);
 };
 
 /**
  * 播放下一首
+ * @param manual - 用户手动点下一首
  */
-export const nextTrack = async (): Promise<void> => {
+export const nextTrack = async (manual = false): Promise<void> => {
+  // 接收端：手动切歌上送主机；自动续播（ended）抑制——由主机续播并广播，避免双跳
+  if (isLanSyncReceiver() && !isApplyingRemoteState()) {
+    if (manual) dispatchLanRemoteCommand("next");
+    return;
+  }
   const status = useStatusStore();
+  // Android：原生队列权威推进（FM 续池 / wrap / 解析 / 失败跳曲全在原生完成）
+  if (isAndroidNative) {
+    if (!status.fmMode && queue.queueLength.value > 0) {
+      // 乐观推进索引，原生 trackChanged 为权威随后校正
+      status.playIndex = status.playIndex >= queue.queueLength.value - 1 ? 0 : status.playIndex + 1;
+    }
+    await bridge.android.next();
+    return;
+  }
   // 私人 FM
   if (status.fmMode) {
     const next = await fm.next();
@@ -767,18 +874,18 @@ export const nextTrack = async (): Promise<void> => {
 };
 
 /**
- * 跳到队列指定位置并播放
- * 同一首则不重新加载，仅在暂停时恢复播放
- * @param index - 队列位置
+ * 跳到队列指定位置并播? * 同一首则不重新加载，仅在暂停时恢复播? * @param index - 队列位置
  */
 export const playAtIndex = async (index: number): Promise<void> => {
+  // 接收端不能自主选歌：队列索引由主机广播决定
+  if (isLanSyncReceiver() && !isApplyingRemoteState()) return;
   const status = useStatusStore();
   if (index < 0 || index >= queue.queueLength.value) return;
   if (index === status.playIndex) {
     if (!status.isPlaying && useMediaStore().track) play();
     return;
   }
-  // 退出 FM
+  // 退?FM
   status.fmMode = false;
   status.playIndex = index;
   await loadTrack(status.currentTrack, status.currentPlaybackContext);
@@ -786,7 +893,16 @@ export const playAtIndex = async (index: number): Promise<void> => {
 
 /** 播放上一首，首位时回绕到末尾 */
 export const prevTrack = async (): Promise<void> => {
+  if (tryRemoteControl("prev")) return;
   const status = useStatusStore();
+  // Android：原生队列权威推进（FM 下原生忽略 previous，对齐既有行为）
+  if (isAndroidNative) {
+    if (!status.fmMode && queue.queueLength.value > 0) {
+      status.playIndex = status.playIndex > 0 ? status.playIndex - 1 : queue.queueLength.value - 1;
+    }
+    await bridge.android.previous();
+    return;
+  }
   if (status.fmMode) return;
   if (queue.queueLength.value === 0) return;
   status.playIndex = status.playIndex > 0 ? status.playIndex - 1 : queue.queueLength.value - 1;
@@ -800,7 +916,7 @@ const onQueueEnded = async (): Promise<void> => {
   playback.setPlaying(false);
   playback.reset();
   // 通知主进程停止音频引擎
-  await window.api.player.stop();
+  await bridge.player.stop();
   status.state = "stopped";
   status.position = status.duration;
 };
@@ -808,7 +924,7 @@ const onQueueEnded = async (): Promise<void> => {
 /** 同步播放模式到主进程 */
 const syncPlayMode = (): void => {
   const status = useStatusStore();
-  window.api.player.syncPlayMode(status.repeatMode, status.shuffleMode);
+  bridge.player.syncPlayMode(status.repeatMode, status.shuffleMode);
 };
 
 /**
@@ -843,7 +959,7 @@ export const toggleShuffleMode = (): void => {
  */
 export const setShuffleMode = (mode: ShuffleMode): void => {
   const status = useStatusStore();
-  // 心动模式下忽略
+  // 心动模式下忽?
   if (status.heartMode) return;
   if (status.shuffleMode === mode) return;
   status.shuffleMode = mode;
@@ -865,7 +981,7 @@ export const setShuffleMode = (mode: ShuffleMode): void => {
 };
 
 /**
- * 从队列移除指定位置的歌曲，自动调整 playIndex
+ * 从队列移除指定位置的歌曲，自动调?playIndex
  * @param index - 要移除的队列位置
  */
 export const removeFromQueue = async (index: number): Promise<void> => {
@@ -883,15 +999,14 @@ export const removeFromQueue = async (index: number): Promise<void> => {
       await onQueueEnded();
       return;
     }
-    // 索引越界则回到首位
+    // 索引越界则回到首?
     if (status.playIndex >= queue.queueLength.value) status.playIndex = 0;
     await loadTrack(status.currentTrack, status.currentPlaybackContext);
   }
 };
 
 /**
- * 文件删除后同步队列：移除被删曲目，当前播放曲被删则切下一首（队列空则停止）
- * @param ids - 被删除的 Track id 列表
+ * 文件删除后同步队列：移除被删曲目，当前播放曲被删则切下一首（队列空则停止? * @param ids - 被删除的 Track id 列表
  */
 export const purgeDeletedTracks = async (ids: readonly string[]): Promise<void> => {
   const currentId = useMediaStore().track?.id;
@@ -930,12 +1045,16 @@ export const insertToQueue = (
     const safeAt = Math.max(0, Math.min(raw, len - 1));
     if (existingIdx === safeAt) return existingIdx;
     moveInQueue(existingIdx, safeAt);
+    // Android 原生队列自治切歌，队列顺序变了必须重推队列
+    void mediaSessionManager.syncAndroidPlaybackContext();
     return safeAt;
   }
-  // 插入：可以追加到末尾，clamp 到 length
+  // 插入：可以追加到末尾，clamp ?length
   const safeAt = Math.max(0, Math.min(raw, len));
   queue.insertToQueue(item, safeAt, context);
   if (safeAt <= status.playIndex) status.playIndex++;
+  // Android 原生队列自治切歌，“下一首播放”必须立即同步，否则续播仍取旧队列
+  void mediaSessionManager.syncAndroidPlaybackContext();
   return safeAt;
 };
 
@@ -964,6 +1083,8 @@ export const insertManyToQueue = (
   if (fresh.length === 0) return 0;
   const insertAt = position === "end" ? queue.queue.value.length : status.playIndex + 1;
   queue.insertManyToQueue(fresh, insertAt, context);
+  // Android 原生队列自治切歌，批量插入（含"下一首播放"）后必须重推队列
+  void mediaSessionManager.syncAndroidPlaybackContext();
   return fresh.length;
 };
 
@@ -972,6 +1093,8 @@ export const insertManyToQueue = (
  * 如果是当前正在播放的歌曲则继续播放，不重新加载
  */
 export const playNow = async (item: Track, context?: PlaybackContext): Promise<void> => {
+  // 接收端不能自主插歌播放：由主机决定播放内容
+  if (isLanSyncReceiver() && !isApplyingRemoteState()) return;
   const status = useStatusStore();
   const media = useMediaStore();
   // 同一首歌且已成功加载
@@ -979,7 +1102,7 @@ export const playNow = async (item: Track, context?: PlaybackContext): Promise<v
     if (!status.isPlaying) play();
     return;
   }
-  // 退出 FM
+  // 退?FM
   status.fmMode = false;
   status.playIndex = insertToQueue(item, undefined, context);
   await loadTrack(item, context);
@@ -1058,7 +1181,7 @@ export const initPlayer = async (): Promise<void> => {
   // 先从主进程同步后端配置，确保 system 设置可用
   const settings = useSettingsStore();
   await settings.syncSystem();
-  // 流媒体 store 必须在恢复队列前就绪，否则队列里的 streaming track 拿不到 cfg
+  // 流媒体。?store 必须在恢复队列前就绪，否则队列里?streaming track 拿不?cfg
   await useStreamingStore().init();
   // 插件 store 同理：在线歌曲 URL 兜底走插件，列表必须在 loadTrack 前就绪
   void usePluginsStore().load();
@@ -1067,38 +1190,38 @@ export const initPlayer = async (): Promise<void> => {
   // 兼容移除“不循环”前持久化的旧状态
   if ((status.repeatMode as string) === "off") status.repeatMode = "list";
   // 恢复上次的音量和播放模式到主进程
-  await window.api.player.setVolume(status.volume);
+  await bridge.player.setVolume(status.volume);
   syncPlayMode();
   // 应用渐入渐出配置
   const { fadeEnabled, fadeDuration, loudnessNormalization, equalizer } = settings.system.player;
-  await window.api.player.setFadeDuration(fadeEnabled ? fadeDuration : 0);
+  await bridge.player.setFadeDuration(fadeEnabled ? fadeDuration : 0);
   // 应用音量均衡配置
-  await window.api.player.setNormalizationEnabled(loudnessNormalization ?? false);
+  await bridge.player.setNormalizationEnabled(loudnessNormalization ?? false);
   // 应用均衡器配置
   if (equalizer) {
-    await window.api.player.setEqualizerBands([...equalizer.bands]);
-    await window.api.player.setPreampGain(equalizer.preamp);
-    await window.api.player.setEqualizerEnabled(equalizer.enabled);
+    await bridge.player.setEqualizerBands([...equalizer.bands]);
+    await bridge.player.setPreampGain(equalizer.preamp);
+    await bridge.player.setEqualizerEnabled(equalizer.enabled);
   }
   // 刷新设备列表并恢复上次选择的输出设备
   await refreshDevices();
-  await window.api.player.setPauseOnDeviceSwitch(settings.player.pauseOnDeviceSwitch);
+  await bridge.player.setPauseOnDeviceSwitch(settings.player.pauseOnDeviceSwitch);
   if (settings.player.outputDevice) {
     // 1.0.0 及更早版本存的是显示名，就地换成稳定 ID；设备当前不在线时保留原值等下次启动
     const legacy = useStatusStore().outputDevices.find(
       (device) => device.name === settings.player.outputDevice,
     );
     if (legacy) settings.player.outputDevice = legacy.id;
-    await window.api.player.setOutputDevice(settings.player.outputDevice);
+    await bridge.player.setOutputDevice(settings.player.outputDevice);
   }
   // 先订阅事件，确保 load 触发播放后 position 事件能被接收
   if (unsubscribe) unsubscribe();
-  unsubscribe = window.api.player.onEvent(handleEvent);
+  unsubscribe = bridge.player.onEvent(handleEvent);
   // 安装播放统计累加器
   installPlayStats();
   // 订阅主进程下发的歌词偏移变化
   const media = useMediaStore();
-  // 当前歌曲喜欢状态变化时同步到托盘菜单
+  // 当前歌曲喜欢状态变化时同步到托盘菜?
   const fav = useFavorite();
   watch(
     () => fav.isLiked(media.track),
@@ -1116,9 +1239,15 @@ export const initPlayer = async (): Promise<void> => {
   } catch (error) {
     console.error("[player] requestSnapshot failed", error);
   }
-  // 下一首预载的监听器
-  installNextTrackPreloadWatchers();
-  scheduleNextTrackPreload();
+  // Android：初始化 MediaSession（customAction 监听 + 同步 API 上下文）
+  if (isAndroid) {
+    mediaSessionManager.init();
+  }
+  // 下一首预载的监听器（Android 由原生 prefetchUpcomingUrls 接管，跳过 JS 预载）
+  if (!isAndroidNative) {
+    installNextTrackPreloadWatchers();
+    scheduleNextTrackPreload();
+  }
 };
 
 /** 恢复上次播放状态 */
@@ -1135,6 +1264,18 @@ export const restoreLastTrack = async (): Promise<void> => {
   media.setTrack(lastTrack);
   media.setPlaybackContext(status.currentPlaybackContext);
   lyricLoader.beginLoad();
+  // Android：推全量队列上下文恢复；autoPlay 时由原生从恢复索引开播（原生解析）。
+  // 进度恢复与桌面一致受 rememberLastTrack 门控
+  if (isAndroidNative) {
+    await mediaSessionManager.syncAndroidPlaybackContext();
+    if (settings.system.player.autoPlay) {
+      const resumePosition = settings.system.player.rememberLastTrack ? lastPosition : 0;
+      await bridge.android.playIndex(status.fmMode ? 0 : status.playIndex, resumePosition);
+    } else {
+      status.state = "idle";
+    }
+    return;
+  }
   const loaded = await loadTrackSourceWithFallback(
     lastTrack,
     status.currentPlaybackContext,
@@ -1160,4 +1301,6 @@ export const disposePlayer = (): void => {
     unsubscribe();
     unsubscribe = null;
   }
+  // 清理 MediaSession 事件订阅
+  mediaSessionManager.dispose();
 };

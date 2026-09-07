@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup 规则（Android 11 及以下）：保持系统默认规则，缓存目录系统默认不参与备份 -->
+<full-backup-content />

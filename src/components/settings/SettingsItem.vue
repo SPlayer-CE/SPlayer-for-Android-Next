@@ -43,6 +43,9 @@ const isChildrenActive = computed(() => {
 
 const isDisabled = computed(() => props.item.disabled?.() ?? false);
 const isVisible = computed(() => props.item.visible?.() ?? true);
+const resolvedType = computed(() =>
+  props.item.type === "slider" && props.item.renderAsNumberWhen?.() ? "number" : props.item.type,
+);
 
 const descriptionText = computed(() =>
   t(props.item.descriptionKey ?? `settings.${props.item.key}.description`),
@@ -60,37 +63,40 @@ const descriptionText = computed(() =>
     />
     <div
       v-else
-      class="flex items-center justify-between gap-4 rounded-xl bg-surface-panel border border-solid border-outline-variant/15 px-4 py-3.5 transition-all duration-300"
+      class="settings-item-card flex items-center justify-between gap-4 rounded-xl bg-surface-panel border border-solid border-outline-variant/15 px-4 py-3.5 transition-all duration-300"
       :class="highlighted ? 'animate-highlight-pulse' : ''"
     >
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2 text-base">
+      <div class="settings-item-label min-w-0 flex-1">
+        <div class="flex items-center gap-2 text-[15px] sm:text-base font-medium">
           <span>{{ t(`settings.${item.key}.label`) }}</span>
           <STag v-if="item.tag" :type="item.tag.type ?? 'primary'">
             {{ item.tag.text }}
           </STag>
         </div>
-        <div v-if="!item.hideDescription" class="text-sm text-on-surface-variant/70 mt-0.5">
+        <div
+          v-if="!item.hideDescription"
+          class="text-xs sm:text-sm text-on-surface-variant/70 mt-0.5 leading-relaxed"
+        >
           {{ descriptionText }}
         </div>
       </div>
 
-      <div class="shrink-0 w-50 flex justify-end">
+      <div class="settings-item-control shrink-0 flex justify-end w-50">
         <SSwitch
-          v-if="item.type === 'switch'"
+          v-if="resolvedType === 'switch'"
           :model-value="model"
           :disabled="isDisabled"
           @update:model-value="applyChange($event)"
         />
         <SSelect
-          v-else-if="item.type === 'select'"
+          v-else-if="resolvedType === 'select'"
           :model-value="model"
           :options="selectOptions"
           :disabled="isDisabled"
           @update:model-value="applyChange($event)"
         />
         <SSlider
-          v-else-if="item.type === 'slider'"
+          v-else-if="resolvedType === 'slider'"
           :model-value="model"
           :min="item.min ?? 0"
           :max="item.max ?? 100"
@@ -107,7 +113,7 @@ const descriptionText = computed(() =>
           <template #popover="{ value }">{{ value }}</template>
         </SSlider>
         <SColor
-          v-else-if="item.type === 'color'"
+          v-else-if="resolvedType === 'color'"
           :model-value="model"
           :disabled="isDisabled"
           :show-alpha="item.showAlpha"
@@ -115,7 +121,7 @@ const descriptionText = computed(() =>
           @update:model-value="applyChange($event)"
         />
         <SButton
-          v-else-if="item.type === 'button'"
+          v-else-if="resolvedType === 'button'"
           type="primary"
           variant="secondary"
           size="small"
@@ -124,8 +130,8 @@ const descriptionText = computed(() =>
           {{ t(`settings.${item.key}.label`) }}
         </SButton>
         <SNumberInput
-          v-else-if="item.type === 'number'"
-          :model-value="model"
+          v-else-if="resolvedType === 'number'"
+          v-model="model"
           :min="item.min"
           :max="item.max"
           :step="item.step"
@@ -148,7 +154,7 @@ const descriptionText = computed(() =>
         />
         <component
           :is="item.component"
-          v-else-if="item.type === 'custom' && item.component"
+          v-else-if="resolvedType === 'custom' && item.component"
           v-bind="item.componentProps"
           :model-value="model"
           @update:model-value="model = $event"
@@ -164,3 +170,29 @@ const descriptionText = computed(() =>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 使用容器查询：手机横屏下外部歌词页的标签较长、控件也更宽，640px 内统一上下堆叠更稳妥 */
+.settings-item-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+  .settings-item-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  /* 窄容器（竖屏移动端）下两列各占整行，杜绝 Tailwind 工具类被 scope hash 隔离导致的覆盖失败。
+     `flex: 1 1 100%` 在 column flex 上下文中等价于 cross-axis 撑满；同时清掉 .w-50 的固定 200px 与
+     .flex-1 在 column 下隐含的 min-content 收缩，避免出现"主/题/模/式"竖排塌缩。 */
+  .settings-item-card > .settings-item-label,
+  .settings-item-card > .settings-item-control {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+</style>

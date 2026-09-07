@@ -2,13 +2,16 @@
 import type { StyleValue } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSystemFonts } from "@/composables/useSystemFonts";
+import { toast } from "@/composables/useToast";
+import { isAndroid } from "@/services/bridge";
 import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
+import IconLucideDownload from "~icons/lucide/download";
 
 defineOptions({ inheritAttrs: false });
 
 const { t } = useI18n();
 const settings = useSettingsStore();
-const { families: fonts, loading: loadingFonts, ensureLoaded } = useSystemFonts();
+const { families: fonts, loading: loadingFonts, ensureLoaded, importFont } = useSystemFonts();
 
 type FontDraftKey =
   | "global"
@@ -39,6 +42,7 @@ interface FontTarget {
   key: FontDraftKey;
   label: string;
   defaultLabel: string;
+  androidUnavailable?: boolean;
 }
 
 interface FontOption {
@@ -63,24 +67,28 @@ const draft = reactive<FontDraft>({
 });
 
 /** 字段定义 */
-const TARGET_DEFS: Array<{ key: FontDraftKey; group: FontGroup }> = [
+const TARGET_DEFS: Array<{ key: FontDraftKey; group: FontGroup; androidUnavailable?: boolean }> = [
   { key: "global", group: "general" },
   { key: "lyric", group: "appLyric" },
   { key: "lyricChinese", group: "appLyric" },
   { key: "lyricJapanese", group: "appLyric" },
   { key: "lyricKorean", group: "appLyric" },
   { key: "lyricLatin", group: "appLyric" },
-  { key: "desktopLyric", group: "externalLyric" },
-  { key: "dynamicIsland", group: "externalLyric" },
-  { key: "taskbarLyric", group: "externalLyric" },
+  { key: "desktopLyric", group: "externalLyric", androidUnavailable: true },
+  { key: "dynamicIsland", group: "externalLyric", androidUnavailable: true },
+  { key: "taskbarLyric", group: "externalLyric", androidUnavailable: true },
 ];
 
 const GROUP_ORDER: FontGroup[] = ["general", "appLyric", "externalLyric"];
 
 /** 分组目标 */
 const groupedTargets = computed<Array<{ group: FontGroup; items: FontTarget[] }>>(() => {
-  const buildTarget = (key: FontDraftKey): FontTarget => {
-    const name = t(`settings.fontConfig.fields.${key}`);
+  const buildTarget = (def: {
+    key: FontDraftKey;
+    group: FontGroup;
+    androidUnavailable?: boolean;
+  }): FontTarget => {
+    const name = t(`settings.fontConfig.fields.${def.key}`);
     const followLyricKeys: FontDraftKey[] = [
       "lyricChinese",
       "lyricJapanese",
@@ -88,19 +96,20 @@ const groupedTargets = computed<Array<{ group: FontGroup; items: FontTarget[] }>
       "lyricLatin",
     ];
     return {
-      key,
+      key: def.key,
       label: t("settings.fontConfig.fieldLabel", { name }),
       defaultLabel:
-        key === "lyric"
+        def.key === "lyric"
           ? t("settings.fontConfig.useGlobal")
-          : followLyricKeys.includes(key)
+          : followLyricKeys.includes(def.key)
             ? t("settings.fontConfig.useLyric")
             : t("settings.fontConfig.useSystem"),
+      androidUnavailable: def.androidUnavailable,
     };
   };
   return GROUP_ORDER.map((group) => ({
     group,
-    items: TARGET_DEFS.filter((d) => d.group === group).map((d) => buildTarget(d.key)),
+    items: TARGET_DEFS.filter((d) => d.group === group).map((d) => buildTarget(d)),
   })).filter((g) => g.items.length > 0);
 });
 
@@ -188,6 +197,17 @@ const handleSave = async (): Promise<void> => {
   ]);
   open.value = false;
 };
+
+const handleImportFont = async () => {
+  const fontNames = await importFont();
+  if (fontNames && fontNames.length > 0) {
+    toast.success(t("settings.fontConfig.importSuccess", { name: fontNames.join(", ") }));
+    // 导入后切换到选择模式，让用户在下拉列表中看到已导入的字体
+    mode.value = "select";
+  } else {
+    toast.warning(t("settings.fontConfig.importFailed"));
+  }
+};
 </script>
 
 <template>
@@ -209,8 +229,14 @@ const handleSave = async (): Promise<void> => {
             {{ t("settings.fontConfig.modeHint") }}
           </div>
         </div>
-        <div class="shrink-0 w-60">
-          <SSelect :model-value="mode" :options="modeOptions" @update:model-value="updateMode" />
+        <div class="shrink-0 flex gap-2">
+          <SButton v-if="isAndroid" variant="secondary" class="shrink-0" @click="handleImportFont">
+            <template #icon><IconLucideDownload /></template>
+            {{ t("settings.fontConfig.importFont") }}
+          </SButton>
+          <div class="w-32 sm:w-40">
+            <SSelect :model-value="mode" :options="modeOptions" @update:model-value="updateMode" />
+          </div>
         </div>
       </SCard>
 
@@ -225,14 +251,23 @@ const handleSave = async (): Promise<void> => {
           :key="target.key"
           variant="settings"
           class="flex flex-col gap-2.5"
+          :class="isAndroid && target.androidUnavailable ? 'opacity-50' : ''"
         >
           <div class="flex items-center gap-3">
-            <div class="min-w-0 flex-1 text-base">{{ target.label }}</div>
+            <div class="min-w-0 flex-1 text-base">
+              {{ target.label }}
+              <span
+                v-if="isAndroid && target.androidUnavailable"
+                class="text-xs text-on-surface-variant/50 ml-1"
+              >
+                {{ t("settings.desktopOnly") }}
+              </span>
+            </div>
             <SButton
               variant="ghost"
               circle
               size="small"
-              :disabled="!draft[target.key]"
+              :disabled="!draft[target.key] || (isAndroid && !!target.androidUnavailable)"
               :title="t('settings.fontConfig.resetRow')"
               @click="handleResetField(target.key)"
             >
@@ -244,7 +279,7 @@ const handleSave = async (): Promise<void> => {
             class="w-full"
             :model-value="parseFontChain(draft[target.key])"
             :options="fontOptions"
-            :disabled="loadingFonts"
+            :disabled="loadingFonts || (isAndroid && !!target.androidUnavailable)"
             :placeholder="loadingFonts ? t('settings.fontConfig.loading') : target.defaultLabel"
             multiple
             clearable
@@ -257,6 +292,7 @@ const handleSave = async (): Promise<void> => {
             class="w-full"
             :model-value="draft[target.key]"
             :placeholder="t('settings.fontConfig.placeholder')"
+            :disabled="isAndroid && !!target.androidUnavailable"
             clearable
             @update:model-value="handleManualInput(target.key, $event)"
           />

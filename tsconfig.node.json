@@ -5,12 +5,13 @@
     "vitest.config.*",
     "electron/main/**/*",
     "electron/preload/**/*",
+    "API/**/*",
     "scripts/**/*",
     "shared/**/*"
   ],
   "compilerOptions": {
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo",
-    "types": ["electron-vite/node"],
+    "types": ["node", "electron-vite/node"],
     "paths": {
       "@main/*": ["./electron/main/*"],
       "@shared/*": ["./shared/*"],

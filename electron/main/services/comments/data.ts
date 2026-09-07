@@ -139,17 +139,17 @@ export const normalizeNeteaseCommentPage = (
   page: number,
   limit: number,
 ): MusicCommentPage => {
+  // 精选评论只认 hotComments，缺失即为空，不用最新评论顶替
   const rawList =
-    type === "hot"
-      ? (body.hotComments ?? body.data?.comments ?? [])
-      : (body.comments ?? body.data?.comments ?? []);
+    type === "hot" ? (body.hotComments ?? []) : (body.comments ?? body.data?.comments ?? []);
   const list = rawList
     .map((item) => normalizeNeteaseComment(item))
     .filter((item): item is MusicCommentItem => item !== null);
 
   return {
     list,
-    total: body.total ?? body.data?.totalCount ?? list.length,
+    // 热门评论不随 offset 分页，total 取列表长度，避免出现可翻页的假象
+    total: type === "hot" ? list.length : (body.total ?? body.data?.totalCount ?? list.length),
     page,
     limit,
   };

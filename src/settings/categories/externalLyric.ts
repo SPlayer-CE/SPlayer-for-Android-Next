@@ -1,12 +1,24 @@
-import type { SettingCategory, SettingSection } from "@/types/settings-schema";
+import type { SettingItem, SettingSection, SettingCategory } from "@/types/settings-schema";
+import { isAndroid } from "@/services/bridge";
 import { useSettingsStore } from "@/stores/settings";
 import { isMac } from "@/utils/config";
 import IconLucideMonitor from "~icons/lucide/monitor";
 
+/** 为 Android 上不可用的设置项添加禁用和提示 */
+const androidDisabledItems = (items: SettingItem[]): SettingItem[] =>
+  isAndroid
+    ? items.map((item) => ({
+        ...item,
+        disabled: () => true,
+        descriptionKey: "settings.desktopOnly",
+      }))
+    : items;
+
 const desktopLyricSection: SettingSection = {
   id: "desktopLyric",
   tag: { text: "Beta" },
-  items: [
+  platform: "desktop",
+  items: androidDisabledItems([
     {
       key: "desktopLyricEnabled",
       type: "switch",
@@ -15,18 +27,20 @@ const desktopLyricSection: SettingSection = {
     },
     {
       key: "desktopLyricFontSize",
-      type: "select",
+      type: "slider",
       binding: { store: "settings", path: "system.desktopLyric.fontSize" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
       defaultValue: 24,
-      options: Array.from({ length: 96 - 20 + 1 }, (_, i) => {
-        const n = 20 + i;
-        return { value: n, label: `${n} px` };
-      }),
+      min: 20,
+      max: 96,
+      step: 1,
+      marks: { 20: "20", 58: "58", 96: "96" },
     },
     {
       key: "desktopLyricFontWeight",
       type: "slider",
       binding: { store: "settings", path: "system.desktopLyric.fontWeight" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
       min: 100,
       max: 900,
       step: 100,
@@ -133,19 +147,14 @@ const desktopLyricSection: SettingSection = {
       binding: { store: "settings", path: "system.desktopLyric.locked" },
       defaultValue: false,
     },
-    {
-      key: "desktopLyricUseCSSDrag",
-      type: "switch",
-      binding: { store: "settings", path: "system.desktopLyric.useCSSDrag" },
-      defaultValue: false,
-    },
-  ],
+  ]),
 };
 
 const dynamicIslandSection: SettingSection = {
   id: "dynamicIsland",
   tag: { text: "Beta" },
-  items: [
+  platform: "desktop",
+  items: androidDisabledItems([
     {
       key: "dynamicIslandEnabled",
       type: "switch",
@@ -153,19 +162,21 @@ const dynamicIslandSection: SettingSection = {
       defaultValue: false,
     },
     {
-      key: "dynamicIslandScale",
+      key: "dynamicIslandHeight",
       type: "slider",
-      binding: { store: "settings", path: "system.dynamicIsland.scale" },
-      min: 0.5,
-      max: 2,
-      step: 0.05,
-      defaultValue: 1,
-      marks: { 0.5: "50%", 1: "100%", 2: "200%" },
+      binding: { store: "settings", path: "system.dynamicIsland.height" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: 32,
+      max: 96,
+      step: 1,
+      defaultValue: 40,
+      marks: { 32: "32", 40: "40", 64: "64", 96: "96" },
     },
     {
       key: "dynamicIslandFontWeight",
       type: "slider",
       binding: { store: "settings", path: "system.dynamicIsland.fontWeight" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
       min: 100,
       max: 900,
       step: 100,
@@ -204,14 +215,14 @@ const dynamicIslandSection: SettingSection = {
       key: "dynamicIslandPlayedColor",
       type: "color",
       binding: { store: "settings", path: "system.dynamicIsland.playedColor" },
-      defaultValue: "rgba(255, 255, 255, 1)",
+      defaultValue: "rgb(23, 113, 191)",
       showAlpha: false,
     },
     {
       key: "dynamicIslandUnplayedColor",
       type: "color",
       binding: { store: "settings", path: "system.dynamicIsland.unplayedColor" },
-      defaultValue: "rgba(255, 255, 255, 0.5)",
+      defaultValue: "rgba(171, 171, 171, 0.5)",
     },
     {
       key: "dynamicIslandBackgroundColor",
@@ -248,11 +259,201 @@ const dynamicIslandSection: SettingSection = {
       binding: { store: "settings", path: "system.dynamicIsland.nonOcclusive" },
       defaultValue: false,
     },
+  ]),
+};
+
+/**
+ * Android 灵动岛歌词 section
+ * 由原生 DynamicIslandService 实现药丸形悬浮窗，配置项绑定到 system.dynamicIsland.* 路径
+ * 由原生层读取并应用，不依赖 Electron 窗口
+ */
+const androidDynamicIslandSection: SettingSection = {
+  id: "dynamicIsland",
+  tag: { text: "Beta" },
+  platform: "android",
+  items: [
     {
-      key: "dynamicIslandUseCSSDrag",
+      key: "dynamicIslandEnabled",
       type: "switch",
-      binding: { store: "settings", path: "system.dynamicIsland.useCSSDrag" },
+      binding: { store: "settings", path: "isDynamicIslandOpen" },
       defaultValue: false,
+    },
+    {
+      key: "dynamicIslandHeight",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.height" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: 32,
+      max: 96,
+      step: 1,
+      defaultValue: 40,
+      marks: { 32: "32", 40: "40", 64: "64", 96: "96" },
+    },
+    {
+      key: "dynamicIslandFontSize",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.fontSize" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      defaultValue: 24,
+      min: 20,
+      max: 96,
+      step: 1,
+      marks: { 20: "20", 58: "58", 96: "96" },
+    },
+    {
+      key: "dynamicIslandFontWeight",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.fontWeight" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: 100,
+      max: 900,
+      step: 100,
+      defaultValue: 500,
+      marks: { 100: "100", 500: "500", 900: "900" },
+    },
+    {
+      key: "dynamicIslandWordByWord",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.wordByWord" },
+      defaultValue: true,
+    },
+    {
+      key: "dynamicIslandAutoGenerateWordByWord",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.autoGenerateWordByWord" },
+      defaultValue: true,
+    },
+    {
+      key: "dynamicIslandDoubleLine",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.doubleLine" },
+      defaultValue: false,
+    },
+    {
+      key: "dynamicIslandShowTranslation",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.showTranslation" },
+      defaultValue: false,
+    },
+    {
+      key: "dynamicIslandPlayedColor",
+      type: "color",
+      binding: { store: "settings", path: "system.dynamicIsland.playedColor" },
+      defaultValue: "rgb(23, 113, 191)",
+      showAlpha: false,
+    },
+    {
+      key: "dynamicIslandUnplayedColor",
+      type: "color",
+      binding: { store: "settings", path: "system.dynamicIsland.unplayedColor" },
+      defaultValue: "rgba(171, 171, 171, 0.5)",
+    },
+    {
+      key: "dynamicIslandStrokeColor",
+      type: "color",
+      binding: { store: "settings", path: "system.dynamicIsland.strokeColor" },
+      defaultValue: "rgba(0, 0, 0, 0.5)",
+    },
+    {
+      key: "dynamicIslandBackgroundMask",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.backgroundMask" },
+      defaultValue: false,
+      children: [
+        {
+          key: "dynamicIslandBackgroundMaskColor",
+          type: "color",
+          binding: { store: "settings", path: "system.dynamicIsland.backgroundMaskColor" },
+          defaultValue: "rgba(0, 0, 0, 0.3)",
+        },
+      ],
+    },
+    {
+      key: "dynamicIslandBackgroundColor",
+      type: "color",
+      binding: { store: "settings", path: "system.dynamicIsland.backgroundColor" },
+      defaultValue: "rgba(0, 0, 0, 1)",
+    },
+    {
+      key: "dynamicIslandAlign",
+      type: "select",
+      binding: { store: "settings", path: "system.dynamicIsland.align" },
+      options: [
+        { value: "left", labelKey: "settings.dynamicIslandAlign.left" },
+        { value: "center", labelKey: "settings.dynamicIslandAlign.center" },
+        { value: "right", labelKey: "settings.dynamicIslandAlign.right" },
+        { value: "justify", labelKey: "settings.dynamicIslandAlign.justify" },
+      ],
+      defaultValue: "center",
+    },
+    {
+      key: "dynamicIslandAnimation",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.animation" },
+      defaultValue: true,
+    },
+    {
+      key: "dynamicIslandAlwaysShowSongInfo",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.alwaysShowSongInfo" },
+      defaultValue: false,
+    },
+    {
+      key: "dynamicIslandAlwaysOnTop",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.alwaysOnTop" },
+      defaultValue: true,
+    },
+    {
+      key: "dynamicIslandLocked",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.locked" },
+      defaultValue: false,
+    },
+    {
+      key: "dynamicIslandDragByLongPress",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.dragByLongPress" },
+      defaultValue: true,
+    },
+    {
+      key: "dynamicIslandLimitBounds",
+      type: "switch",
+      binding: { store: "settings", path: "system.dynamicIsland.limitBounds" },
+      defaultValue: false,
+    },
+    {
+      key: "dynamicIslandPosX",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.posX" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: 0,
+      max: 4000,
+      step: 10,
+      defaultValue: 0,
+      marks: { 0: "0", 2000: "2000", 4000: "4000" },
+    },
+    {
+      key: "dynamicIslandPosY",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.posY" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: -200,
+      max: 4000,
+      step: 10,
+      defaultValue: 0,
+      marks: { "-200": "-200", 0: "0", 2000: "2000", 4000: "4000" },
+    },
+    {
+      key: "dynamicIslandMaxWidth",
+      type: "slider",
+      binding: { store: "settings", path: "system.dynamicIsland.maxWidth" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
+      min: 0,
+      max: 2000,
+      step: 10,
+      defaultValue: 0,
+      marks: { 0: "0", 1000: "1000", 2000: "2000" },
     },
   ],
 };
@@ -261,6 +462,7 @@ const dynamicIslandSection: SettingSection = {
 const taskbarLyricSection: SettingSection = {
   id: "taskbarLyric",
   tag: { text: "Beta" },
+  platform: "desktop",
   items: [
     {
       key: "taskbarLyricEnabled",
@@ -345,6 +547,7 @@ const taskbarLyricSection: SettingSection = {
       key: "taskbarLyricFontSize",
       type: "slider",
       binding: { store: "settings", path: "system.taskbarLyric.fontSize" },
+      renderAsNumberWhen: () => useSettingsStore().externalLyricManualInput,
       min: 12,
       max: 20,
       step: 1,
@@ -388,15 +591,30 @@ const taskbarLyricSection: SettingSection = {
   ],
 };
 
+const inputModeSection: SettingSection = {
+  id: "externalLyricInputMode",
+  items: [
+    {
+      key: "externalLyricManualInput",
+      type: "switch",
+      binding: { store: "settings", path: "externalLyricManualInput" },
+      defaultValue: false,
+    },
+  ],
+};
+
 const externalLyricCategory: SettingCategory = {
   id: "externalLyric",
   icon: IconLucideMonitor,
-  sections: [
-    desktopLyricSection,
-    dynamicIslandSection,
-    // taskbarLyric 仅 Windows 可用
-    ...(navigator.platform.startsWith("Win") ? [taskbarLyricSection] : []),
-  ],
+  sections: isAndroid
+    ? [inputModeSection, androidDynamicIslandSection]
+    : [
+        inputModeSection,
+        desktopLyricSection,
+        dynamicIslandSection,
+        // taskbarLyric 仅 Windows 可用
+        ...(navigator.platform.startsWith("Win") ? [taskbarLyricSection] : []),
+      ],
 };
 
 export default externalLyricCategory;

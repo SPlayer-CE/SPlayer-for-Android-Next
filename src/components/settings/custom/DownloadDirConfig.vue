@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import IconLucideFolderOpen from "~icons/lucide/folder-open";
 import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
+import bridge from "@/services/bridge";
+import { safDirName } from "@/utils/safUri";
 
 defineOptions({ inheritAttrs: false });
 
@@ -9,20 +11,20 @@ const { t } = useI18n();
 const dir = ref("");
 
 const load = async (): Promise<void> => {
-  dir.value = await window.api.download.getDir();
+  dir.value = await bridge.download.getDir();
 };
 
 const change = async (): Promise<void> => {
-  const result = await window.api.download.pickDir();
+  const result = await bridge.download.pickDir();
   if (result.ok) dir.value = result.dir;
 };
 
 const reset = async (): Promise<void> => {
-  dir.value = await window.api.download.resetDir();
+  dir.value = await bridge.download.resetDir();
 };
 
 const openDir = (): void => {
-  if (dir.value) void window.api.system.showInExplorer(dir.value);
+  if (dir.value) void bridge.system.showInExplorer(dir.value);
 };
 
 onMounted(load);
@@ -34,9 +36,11 @@ onMounted(load);
   >
     <div class="min-w-0 flex-1">
       <div class="text-base">{{ t("settings.downloadDir.label") }}</div>
-      <div class="mt-0.5 truncate font-mono text-sm text-on-surface-variant/70" :title="dir">
-        {{ dir || "—" }}
+      <div v-if="dir" class="mt-0.5 truncate text-sm text-on-surface">{{ safDirName(dir) }}</div>
+      <div v-if="dir" class="truncate font-mono text-xs text-on-surface-variant/60" :title="dir">
+        {{ dir }}
       </div>
+      <div v-else class="mt-0.5 text-sm text-on-surface-variant/70">—</div>
     </div>
     <div class="shrink-0 flex items-center gap-2">
       <SButton variant="ghost" circle :title="t('settings.cacheDir.open')" @click="openDir">

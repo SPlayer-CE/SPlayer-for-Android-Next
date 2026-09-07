@@ -8,14 +8,17 @@ import { useLibraryStore } from "@/stores/library";
 import { useUserStore } from "@/stores/user";
 import { useStatusStore } from "@/stores/status";
 import SongList from "@/components/list/SongList.vue";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import * as player from "@/core/player";
 import IconLucideListChecks from "~icons/lucide/list-checks";
 import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
+import IconLucideSearch from "~icons/lucide/search";
 
 const { t } = useI18n();
 const library = useLibraryStore();
 const user = useUserStore();
 const status = useStatusStore();
+const { useMobileLayout } = useResponsiveLayout();
 
 /** 当前 tab */
 const tab = computed({
@@ -42,7 +45,7 @@ const localTracks = computed<Track[]>(() => {
 });
 
 watch(
-  () => [tab.value, user.isLoggedIn, user.likedPlaylistId] as const,
+  () => [tab.value, user.isLoggedIn, user.likedPlaylistId, user.likedSongIds.size] as const,
   ([nextTab, loggedIn, plId]) => {
     if (nextTab !== "online" || !loggedIn || !plId) return;
     user.ensureLikedPlaylist();
@@ -78,7 +81,8 @@ const handlePlayAll = (): void => {
 };
 
 onMounted(() => {
-  if (!library.initialized) library.load();
+  if (!library.initialized)
+    library.load().catch((err) => console.warn("[Liked] library load failed:", err));
 });
 
 const songListRef = shallowRef<InstanceType<typeof SongList> | null>(null);
@@ -113,10 +117,18 @@ const handleMoreMenu = (key: string): void => {
 <template>
   <div class="flex flex-col h-full">
     <!-- 顶栏 -->
-    <div class="shrink-0 px-5 pb-2">
-      <div class="flex items-center justify-between mt-2 mb-4">
+    <div class="shrink-0 pb-2" :class="useMobileLayout ? 'px-4' : 'px-5'">
+      <div
+        class="flex items-center justify-between"
+        :class="[useMobileLayout ? 'mt-1 mb-3' : 'mt-2 mb-4']"
+      >
         <div class="flex items-baseline gap-4">
-          <h1 class="text-3xl font-bold text-on-surface text-balance">{{ t("liked.title") }}</h1>
+          <h1
+            class="font-bold text-on-surface text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
+            {{ t("liked.title") }}
+          </h1>
           <span
             v-if="currentTracks.length > 0"
             class="text-sm text-on-surface-variant/50 flex items-center gap-1"
@@ -126,8 +138,11 @@ const handleMoreMenu = (key: string): void => {
           </span>
         </div>
       </div>
-      <div class="flex items-center justify-between gap-4">
-        <div class="flex items-center gap-3">
+      <div
+        class="flex items-center gap-3"
+        :class="useMobileLayout ? 'flex-wrap' : 'justify-between gap-4'"
+      >
+        <div class="flex items-center gap-2">
           <SButton
             type="primary"
             variant="secondary"
@@ -150,20 +165,22 @@ const handleMoreMenu = (key: string): void => {
             </template>
           </SDropdownMenu>
         </div>
-        <div class="flex items-center gap-3">
-          <SInput
-            v-model="searchQuery"
-            :placeholder="t('common.search')"
-            clearable
-            round
-            class="w-40 focus-within:w-56"
-            data-search-input
-          >
-            <template #prefix>
-              <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
-            </template>
-          </SInput>
-          <div class="w-48">
+        <div class="flex items-center gap-3" :class="useMobileLayout ? 'w-full' : ''">
+          <div class="relative h-9 shrink-0" :class="useMobileLayout ? 'flex-1 min-w-0' : 'w-40'">
+            <SInput
+              v-model="searchQuery"
+              :placeholder="t('common.search')"
+              clearable
+              round
+              class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
+              data-search-input
+            >
+              <template #prefix>
+                <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+              </template>
+            </SInput>
+          </div>
+          <div :class="useMobileLayout ? 'w-40' : 'w-48'">
             <STabs v-model="tab" :tabs="tabs" type="segment" round />
           </div>
         </div>

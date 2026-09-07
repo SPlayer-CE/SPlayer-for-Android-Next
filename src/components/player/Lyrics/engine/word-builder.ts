@@ -2,9 +2,8 @@
  * 歌词渲染引擎 — 单词 span 构建与掩码测量
  */
 
-import { chunkAndSplitLyricWords } from "../utils/split-words";
+import { chunkAndSplitLyricWords, needsSpaceBetween } from "../utils/split-words";
 import type { LyricLine, LyricWord } from "@shared/types/lyrics";
-import { needsSpaceBetween } from "../utils/split-words";
 import { shouldChunkEmphasize } from "./emphasize";
 
 /** 单个歌词单词的 DOM 元素与测量数据 */
@@ -47,6 +46,7 @@ export const buildWordSpans = (
   words: LyricWord[],
   mainDiv: HTMLDivElement,
   enableEmphasize = true,
+  enableWordBlockSegmentation = false,
 ): BuildResult => {
   const chunks = chunkAndSplitLyricWords(words);
   const measurements: WordMeasurement[] = [];
@@ -76,25 +76,17 @@ export const buildWordSpans = (
         mainDiv.appendChild(document.createTextNode(" "));
       }
 
+      const parent = createChunkParent(chunk, enableWordBlockSegmentation, mainDiv);
       if (isEmp) {
-        buildEmphasizedChunk(atoms, mainDiv, measurements, animTargets, isLast);
+        buildEmphasizedChunk(atoms, parent, measurements, animTargets, isLast);
       } else {
         for (const atom of atoms) {
           const text = atom.word.trim();
           if (!text) continue;
-          const span = document.createElement("span");
-          span.textContent = text;
-          mainDiv.appendChild(span);
-          measurements.push({ element: span, word: atom, width: 0, fadeWidth: 0 });
-          animTargets.push({
-            element: span,
-            word: atom,
-            isEmphasize: false,
-            charElements: [],
-            isLastWord: false,
-          });
+          buildWordSpan(text, atom, parent, measurements, animTargets);
         }
       }
+      appendChunkParent(parent, mainDiv);
       const lastAtom = atoms[atoms.length - 1];
       if (lastAtom) previousText = lastAtom.word.trim();
     }
@@ -116,23 +108,15 @@ export const buildWordSpans = (
         mainDiv.appendChild(document.createTextNode(" "));
       }
 
+      const parent = createChunkParent(chunk, enableWordBlockSegmentation, mainDiv);
       if (isEmp) {
-        buildEmphasizedChunk(chunk, mainDiv, measurements, animTargets, isLast);
+        buildEmphasizedChunk(chunk, parent, measurements, animTargets, isLast);
       } else {
         for (const word of chunk) {
-          const span = document.createElement("span");
-          span.textContent = word.word;
-          mainDiv.appendChild(span);
-          measurements.push({ element: span, word, width: 0, fadeWidth: 0 });
-          animTargets.push({
-            element: span,
-            word,
-            isEmphasize: false,
-            charElements: [],
-            isLastWord: false,
-          });
+          buildWordSpan(word.word, word, parent, measurements, animTargets);
         }
       }
+      appendChunkParent(parent, mainDiv);
 
       if (mergedText.trimEnd() !== mergedText) {
         mainDiv.appendChild(document.createTextNode(" "));
@@ -157,17 +141,7 @@ export const buildWordSpans = (
       if (isEmp) {
         buildEmphasizedChunk([chunk], mainDiv, measurements, animTargets, isLast);
       } else {
-        const span = document.createElement("span");
-        span.textContent = text.trim();
-        mainDiv.appendChild(span);
-        measurements.push({ element: span, word: chunk, width: 0, fadeWidth: 0 });
-        animTargets.push({
-          element: span,
-          word: chunk,
-          isEmphasize: false,
-          charElements: [],
-          isLastWord: false,
-        });
+        buildWordSpan(text.trim(), chunk, mainDiv, measurements, animTargets);
       }
 
       if (text.trimEnd() !== text) {
@@ -181,12 +155,48 @@ export const buildWordSpans = (
   return { measurements, animTargets };
 };
 
+function createChunkParent(
+  chunk: LyricWord | LyricWord[],
+  enableWordBlockSegmentation: boolean,
+  mainDiv: HTMLDivElement,
+): HTMLElement {
+  if (!Array.isArray(chunk)) return mainDiv;
+  if (!enableWordBlockSegmentation && chunk.length <= 1) return mainDiv;
+  const wrapper = document.createElement("span");
+  wrapper.className = "lp-word-block";
+  return wrapper;
+}
+
+function appendChunkParent(parent: HTMLElement, mainDiv: HTMLDivElement) {
+  if (parent !== mainDiv) mainDiv.appendChild(parent);
+}
+
+function buildWordSpan(
+  text: string,
+  word: LyricWord,
+  parent: HTMLElement,
+  measurements: WordMeasurement[],
+  animTargets: WordAnimTarget[],
+) {
+  const span = document.createElement("span");
+  span.textContent = text;
+  parent.appendChild(span);
+  measurements.push({ element: span, word, width: 0, fadeWidth: 0 });
+  animTargets.push({
+    element: span,
+    word,
+    isEmphasize: false,
+    charElements: [],
+    isLastWord: false,
+  });
+}
+
 /**
  * 构建强调单词 chunk（纯 DOM，不创建动画）
  */
 function buildEmphasizedChunk(
   atoms: LyricWord[],
-  mainDiv: HTMLDivElement,
+  parent: HTMLElement,
   measurements: WordMeasurement[],
   animTargets: WordAnimTarget[],
   isLastWord: boolean,
@@ -209,7 +219,7 @@ function buildEmphasizedChunk(
     charElements.push(charSpan);
   }
 
-  mainDiv.appendChild(wrapper);
+  parent.appendChild(wrapper);
   measurements.push({ element: wrapper, word: mergedWord, width: 0, fadeWidth: 0 });
   animTargets.push({
     element: wrapper,
@@ -230,6 +240,7 @@ export const measureAndApplyWordMasks = (
   wordMeasurements: WordMeasurement[][],
   fadeRatio: number,
   lines?: LyricLine[],
+  enableWordHighlight = true,
 ) => {
   // 临时存储每个 measurement 的 padding，供第二遍使用
   const paddings: number[][] = new Array(wordMeasurements.length);
@@ -267,7 +278,9 @@ export const measureAndApplyWordMasks = (
       const totalAspect = 2 + gradientWidth / elementWidth;
       const gradientRatio = gradientWidth / elementWidth / totalAspect;
       const gradientStart = (1 - gradientRatio) / 2;
-      const maskImage = `linear-gradient(to right,rgba(0,0,0,var(--ba)) ${gradientStart * 100}%,rgba(0,0,0,var(--da)) ${(gradientStart + gradientRatio) * 100}%)`;
+      const maskImage = enableWordHighlight
+        ? `linear-gradient(to right,rgba(0,0,0,var(--ba)) ${gradientStart * 100}%,rgba(0,0,0,var(--da)) ${(gradientStart + gradientRatio) * 100}%)`
+        : "linear-gradient(rgba(0,0,0,var(--ba)),rgba(0,0,0,var(--ba)))";
       const maskPixelWidth = totalAspect * elementWidth;
       const maskSize = `${maskPixelWidth}px 100%`;
       const wordData = measurement.word;
@@ -280,14 +293,21 @@ export const measureAndApplyWordMasks = (
       const startPos = padding - totalMaskWidth;
       const endPos = padding;
       const speed = totalMaskWidth / adjustedDuration;
-      const maskPosition = Number.isFinite(speed)
-        ? `clamp(${startPos}px,calc(${startPos}px + (var(--t,${lineStart}) - ${adjustedStart}) * ${speed}px),${endPos}px) 0px,left top`
-        : `${startPos}px 0px,left top`;
+      const maskPosition = enableWordHighlight
+        ? Number.isFinite(speed)
+          ? `clamp(${startPos}px,calc(${startPos}px + (var(--t,${lineStart}) - ${adjustedStart}) * ${speed}px),${endPos}px) 0px,left top`
+          : `${startPos}px 0px,left top`
+        : "left top";
       const style = measurement.element.style;
+      // Android 10 WebView 可能低于 Chromium 120，同时写入标准属性和 -webkit- 前缀属性以覆盖不同内核
       style.setProperty("mask-image", maskImage);
       style.setProperty("mask-size", maskSize);
       style.setProperty("mask-repeat", "no-repeat");
       style.setProperty("mask-position", maskPosition);
+      style.setProperty("-webkit-mask-image", maskImage);
+      style.setProperty("-webkit-mask-size", maskSize);
+      style.setProperty("-webkit-mask-repeat", "no-repeat");
+      style.setProperty("-webkit-mask-position", maskPosition);
     }
   }
 };

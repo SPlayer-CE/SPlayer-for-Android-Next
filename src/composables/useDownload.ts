@@ -1,8 +1,14 @@
 import type { Track } from "@shared/types/player";
-import type { DownloadRequest, DownloadTagOptions, DownloadTask } from "@shared/types/download";
+import type {
+  DownloadRequest,
+  DownloadStatus,
+  DownloadTagOptions,
+  DownloadTask,
+} from "@shared/types/download";
 import { QUALITY_LABELS, type QualityLevel } from "@/utils/quality";
 import { useSettingsStore } from "@/stores/settings";
 import { toast } from "@/composables/useToast";
+import bridge from "@/services/bridge";
 
 /** 下载选项 */
 interface EnqueueOptions {
@@ -67,9 +73,7 @@ export const useDownload = () => {
   const enqueue = async (track: Track, opts: EnqueueOptions = {}): Promise<boolean> => {
     const req = prepareRequest(track, opts);
     if (!req) return false;
-    const res = opts.taskId
-      ? await window.api.download.retry(req)
-      : await window.api.download.start(req);
+    const res = opts.taskId ? await bridge.download.retry(req) : await bridge.download.start(req);
     if (!res.ok) {
       toast.warning(
         res.reason === "downloaded" ? t("download.alreadyDownloaded") : t("download.alreadyQueued"),
@@ -80,14 +84,38 @@ export const useDownload = () => {
     return true;
   };
 
-  /** 批量下载 */
+  /** 判断任务是否已到终态 */
+  const isTerminal = (status: DownloadStatus): boolean =>
+    status !== "queued" && status !== "downloading";
+
+  /** 解析→下载→等待该任务结束（先订阅终态再发起，避免极快任务漏掉事件） */
+  const downloadAndWait = (track: Track): Promise<void> => {
+    const req = prepareRequest(track, {});
+    if (!req) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const off = bridge.download.onState((task) => {
+        if (task.taskId === req.taskId && isTerminal(task.status)) {
+          off();
+          resolve();
+        }
+      });
+      void bridge.download.start(req).then((res) => {
+        if (!res.ok) {
+          off();
+          resolve();
+        }
+      });
+    });
+  };
+
+  /** 批量下载：严格逐首 */
   const enqueueMany = async (tracks: Track[]): Promise<void> => {
-    const requests = tracks
-      .map((track) => prepareRequest(track, {}))
-      .filter((req): req is DownloadRequest => req !== null);
-    const results = await window.api.download.startMany(requests).catch(() => []);
-    const count = results.filter((result) => result?.ok).length;
-    if (count > 0) toast.success(t("download.enqueued", { count }));
+    const downloadable = tracks.filter((track) => track.source !== "local");
+    if (downloadable.length === 0) return;
+    toast.success(t("download.enqueued", { count: downloadable.length }));
+    for (const track of downloadable) {
+      await downloadAndWait(track);
+    }
   };
 
   /** 重试：用任务保存的完整 Track 重新入队（复用 taskId） */

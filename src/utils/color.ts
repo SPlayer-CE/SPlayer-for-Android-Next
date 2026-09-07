@@ -8,13 +8,21 @@ import {
 import type { ThemePalette } from "@/types/theme";
 import { useSettingsStore } from "@/stores/settings";
 import { useThemeStore } from "@/stores/theme";
+import { resolveCoverUrl } from "@/services/bridge";
+import {
+  COVER_SAMPLE_SIZE,
+  argbPixelsToCoverHex,
+  rgbaPixelsToArgbInts,
+  type CoverColorWorkerRequest,
+  type CoverColorWorkerResponse,
+} from "./coverColor.worker";
+// Vite Worker 导入
+import CoverColorWorker from "./coverColor.worker?worker";
 
 /** 默认主色 */
 export const DEFAULT_PRIMARY = "#fe7971";
-/** 封面取色竞态 token */
-let coverColorToken = 0;
-/** 封面取样大小 */
-const COVER_SAMPLE_SIZE = 64;
+/** 封面取色竞态 requestId 计数器 */
+let coverColorRequestId = 0;
 /** 封面边缘留白 */
 const COVER_EDGE_MARGIN = 3;
 /** 封面最小色度 */
@@ -22,7 +30,7 @@ const MIN_COVER_CHROMA = 8;
 /** 彩色区域至少覆盖该比例，避免少量点缀色覆盖大面积中性色 */
 const MIN_COLORFUL_POPULATION_RATIO = 0.12;
 
-/** 将 ARGB 整数转为 HEX 字符串 */
+/** ARGB 整数转 HEX 字符串 */
 const argbToHex = (argb: number): string => {
   const r = (argb >> 16) & 0xff;
   const g = (argb >> 8) & 0xff;
@@ -78,7 +86,10 @@ const toCoverBaseColor = (argb: number): string => {
   return argbToHex(Hct.from(hct.hue, chroma, tone).toInt());
 };
 
-/** 从封面代表色派生播放器前景 UI 色 */
+/**
+ * 把封面原始主色转成 UI 显示色
+ * 提亮到 tone 88、压缩 chroma 到 14-30 区间，避免高饱和刺眼
+ */
 const toCoverUiColor = (hex: string): string => {
   const hct = Hct.fromInt(argbFromHex(hex));
   const tone = 88;
@@ -166,18 +177,107 @@ export const SOLID_PALETTE_DARK: ThemePalette = {
   outlineVariant: "46 46 51",
 };
 
-/**
- * 从 HTMLImageElement 提取主色并应用
- * 缩放到 50×50 降低计算量，经 QuantizerCelebi 量化 + Score 评分
- * @param img 封面图片元素，无封面传 null
- */
-export const extractColorFromImage = (img: HTMLImageElement | null): void => {
-  const themeStore = useThemeStore();
-  if (!img || !useSettingsStore().player.followCoverColor) {
-    themeStore.coverColor = null;
-    return;
+// ============================================================
+// 封面取色：LRU 缓存 + 竞态保护 + Worker 异步计算
+// ============================================================
+
+/** LRU 缓存上限：重复播放（包括预取/上一首/历史回放）零计算开销 */
+const COVER_COLOR_CACHE_MAX = 64;
+const coverColorCache = new Map<string, string | null>();
+
+const readCoverColorCache = (url: string): string | null | undefined => {
+  const cached = coverColorCache.get(url);
+  if (cached === undefined) return undefined;
+  // 命中后移到末尾，维持 LRU
+  coverColorCache.delete(url);
+  coverColorCache.set(url, cached);
+  return cached;
+};
+
+const writeCoverColorCache = (url: string, data: string | null): void => {
+  if (coverColorCache.has(url)) coverColorCache.delete(url);
+  coverColorCache.set(url, data);
+  while (coverColorCache.size > COVER_COLOR_CACHE_MAX) {
+    const oldestKey = coverColorCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    coverColorCache.delete(oldestKey);
   }
-  themeStore.coverColor = extractColorFromImageElement(img);
+};
+
+/** Worker 超时时间 */
+const COVER_COLOR_WORKER_TIMEOUT = 5000;
+
+/**
+ * 把主线程重调度到空闲帧执行，避免在切歌首帧阻塞 30-100ms
+ */
+const runWhenIdle = (cb: () => void): void => {
+  const ric = (window as unknown as { requestIdleCallback?: typeof requestIdleCallback })
+    .requestIdleCallback;
+  if (typeof ric === "function") {
+    ric(() => cb(), { timeout: 500 });
+  } else {
+    setTimeout(cb, 120);
+  }
+};
+
+/**
+ * 从 ImageData 通过 Worker 异步提取主色 HEX
+ * Worker 失败时回退到主线程同步计算
+ */
+const extractColorByWorker = (imageData: ImageData): Promise<string | null> => {
+  return new Promise((resolve) => {
+    let worker: Worker;
+    try {
+      worker = new CoverColorWorker();
+    } catch {
+      // Worker 创建失败，回退主线程
+      resolve(extractColorFromImageDataSync(imageData));
+      return;
+    }
+
+    const cleanupWorker = (): void => {
+      window.clearTimeout(timer);
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    };
+    const timer = window.setTimeout(() => {
+      cleanupWorker();
+      resolve(null);
+    }, COVER_COLOR_WORKER_TIMEOUT);
+
+    worker.onmessage = (ev: MessageEvent<CoverColorWorkerResponse>) => {
+      cleanupWorker();
+      resolve(ev.data.data);
+    };
+    worker.onerror = () => {
+      cleanupWorker();
+      // 回退主线程
+      resolve(extractColorFromImageDataSync(imageData));
+    };
+
+    const buffer = imageData.data.slice().buffer as ArrayBuffer;
+    const request: CoverColorWorkerRequest = {
+      id: 0,
+      buffer,
+      width: imageData.width,
+      height: imageData.height,
+    };
+    worker.postMessage(request, [buffer]);
+  });
+};
+
+/**
+ * 主线程同步提取主色（Worker 回退路径）
+ */
+const extractColorFromImageDataSync = (imageData: ImageData): string | null => {
+  const pixels = rgbaPixelsToArgbInts(imageData.data);
+  return argbPixelsToCoverHex(pixels);
+};
+
+/** 应用取色结果到 store */
+const applyCoverColor = (hex: string | null): void => {
+  useThemeStore().coverColor = hex;
 };
 
 /**
@@ -188,103 +288,159 @@ export const extractColorFromImage = (img: HTMLImageElement | null): void => {
  */
 export const extractColorFromUrl = (url: string | null): void => {
   const themeStore = useThemeStore();
-  const token = ++coverColorToken;
   if (!url || !useSettingsStore().player.followCoverColor) {
     themeStore.coverColor = null;
     return;
   }
-  if (/^https?:\/\//i.test(url)) {
-    void loadColorFromRemote(url, token);
+  const requestId = ++coverColorRequestId;
+
+  // 缓存命中：立即应用，跳过图片加载与 quantize 重算
+  const cached = readCoverColorCache(url);
+  if (cached !== undefined) {
+    runWhenIdle(() => {
+      if (requestId === coverColorRequestId) applyCoverColor(cached);
+    });
     return;
   }
+
+  // http(s) URL 走主进程代理取字节，避免跨域 canvas tainted
+  if (/^https?:\/\//i.test(url)) {
+    void loadColorFromRemote(url, requestId);
+    return;
+  }
+
+  // 本地 URL（cache://、blob:、data: 等）直接加载
+  // Android 的 file:// / content:// 需先经 Capacitor 代理转换
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.onload = () => {
-    if (token !== coverColorToken || !useSettingsStore().player.followCoverColor) return;
-    themeStore.coverColor = extractColorFromImageElement(img);
+    runWhenIdle(async () => {
+      if (requestId !== coverColorRequestId) return;
+      const hex = await extractColorFromImageElement(img);
+      writeCoverColorCache(url, hex);
+      if (requestId === coverColorRequestId) applyCoverColor(hex);
+    });
   };
   img.onerror = () => {
-    if (token !== coverColorToken) return;
-    themeStore.coverColor = null;
+    if (requestId === coverColorRequestId) applyCoverColor(null);
   };
-  img.src = url;
+  img.src = resolveCoverUrl(url) ?? url;
+};
+
+/** 仅当请求未被新切歌覆盖时写入 store */
+const applyIfFresh = (requestId: number, hex: string | null): void => {
+  if (requestId === coverColorRequestId) applyCoverColor(hex);
 };
 
 /** 跨域封面：主进程拉字节 → blob URL → 同源 canvas 取色 */
-const loadColorFromRemote = async (url: string, token: number): Promise<void> => {
-  const settings = useSettingsStore();
-  const themeStore = useThemeStore();
+const loadColorFromRemote = async (url: string, requestId: number): Promise<void> => {
   try {
     const result = await window.api.system.fetchRemoteBytes(url);
-    if (token !== coverColorToken || !settings.player.followCoverColor) return;
+    if (requestId !== coverColorRequestId) return;
     if (!result.success || !result.data) {
-      themeStore.coverColor = null;
+      applyIfFresh(requestId, null);
       return;
     }
     const blob = new Blob([new Uint8Array(result.data)]);
     const blobUrl = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
-      if (token !== coverColorToken || !settings.player.followCoverColor) {
+      runWhenIdle(async () => {
+        if (requestId !== coverColorRequestId) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        const hex = await extractColorFromImageElement(img);
         URL.revokeObjectURL(blobUrl);
-        return;
-      }
-      themeStore.coverColor = extractColorFromImageElement(img);
-      URL.revokeObjectURL(blobUrl);
+        writeCoverColorCache(url, hex);
+        applyIfFresh(requestId, hex);
+      });
     };
     img.onerror = () => {
-      if (token !== coverColorToken) {
-        URL.revokeObjectURL(blobUrl);
-        return;
-      }
-      themeStore.coverColor = null;
       URL.revokeObjectURL(blobUrl);
+      applyIfFresh(requestId, null);
     };
     img.src = blobUrl;
   } catch {
-    if (token !== coverColorToken) return;
-    themeStore.coverColor = null;
+    applyIfFresh(requestId, null);
   }
 };
 
 /**
- * 从图片 URL 提取主色
- * @returns 主色 HEX 或 null（图片加载失败 / 单调 / 低彩度）
+ * 从图片 URL 提取主色（用于背景图取色，不起 Worker，无缓存）
+ * @returns 主色 HEX 或 null（图片加载失败 / 单调 / 低色度时）
  */
 export const extractColorFromImageUrl = (url: string): Promise<string | null> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => resolve(extractColorFromImageElement(img));
+    img.onload = () => resolve(extractColorFromImageElementSync(img));
     img.onerror = () => resolve(null);
     img.src = url;
   });
 };
 
 /**
- * 从 HTMLImageElement 提取主色 HEX，纯计算，不操作 store
- * @returns 主色 HEX 或 null（单调/低彩度时）
+ * 从 HTMLImageElement 提取主色 HEX（Worker 异步版）
+ * 采样到 COVER_SAMPLE_SIZE×COVER_SAMPLE_SIZE，经 Worker 量化评判
+ * @returns 主色 HEX 或 null（单调/低色度时）
  */
-const extractColorFromImageElement = (img: HTMLImageElement): string | null => {
+const extractColorFromImageElement = async (img: HTMLImageElement): Promise<string | null> => {
   const canvas = document.createElement("canvas");
   canvas.width = COVER_SAMPLE_SIZE;
   canvas.height = COVER_SAMPLE_SIZE;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
-  // 跨域无 CORS 头会污染 canvas；图片状态异常时 drawImage 也可能抛错
+  ctx.drawImage(
+    img,
+    0,
+    0,
+    img.naturalWidth,
+    img.naturalHeight,
+    0,
+    0,
+    COVER_SAMPLE_SIZE,
+    COVER_SAMPLE_SIZE,
+  );
+  // 跨域时 CORS 头会污染 canvas，getImageData 抛 SecurityError → 静默放弃提色
+  let imageData: ImageData;
+  try {
+    imageData = ctx.getImageData(0, 0, COVER_SAMPLE_SIZE, COVER_SAMPLE_SIZE);
+  } catch {
+    canvas.width = 0;
+    canvas.height = 0;
+    return null;
+  }
+  // 释放 canvas GPU 资源
+  canvas.width = 0;
+  canvas.height = 0;
+  return extractColorByWorker(imageData);
+};
+
+/**
+ * 从 HTMLImageElement 同步提取主色 HEX（无 Worker，用于 extractColorFromImageUrl）
+ * 沿用上游主线程代表色算法（中心加权 + 彩色占比过滤），避免背景图取色引入 Worker 复杂度
+ * @returns 主色 HEX 或 null（单调/低色度时）
+ */
+const extractColorFromImageElementSync = (img: HTMLImageElement): string | null => {
+  const canvas = document.createElement("canvas");
+  canvas.width = COVER_SAMPLE_SIZE;
+  canvas.height = COVER_SAMPLE_SIZE;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(
+    img,
+    0,
+    0,
+    img.naturalWidth,
+    img.naturalHeight,
+    0,
+    0,
+    COVER_SAMPLE_SIZE,
+    COVER_SAMPLE_SIZE,
+  );
   let data: Uint8ClampedArray;
   try {
-    ctx.drawImage(
-      img,
-      0,
-      0,
-      img.naturalWidth,
-      img.naturalHeight,
-      0,
-      0,
-      COVER_SAMPLE_SIZE,
-      COVER_SAMPLE_SIZE,
-    );
     data = ctx.getImageData(0, 0, COVER_SAMPLE_SIZE, COVER_SAMPLE_SIZE).data;
   } catch {
     canvas.width = 0;

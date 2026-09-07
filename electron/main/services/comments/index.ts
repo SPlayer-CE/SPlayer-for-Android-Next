@@ -113,8 +113,9 @@ const getNeteaseComments = async (args: MusicCommentQuery): Promise<MusicComment
   const id = await findNeteaseId(args.track);
   if (!id) return { list: [], total: 0, page: args.page, limit: args.limit };
 
-  const apiName = args.type === "hot" ? "comment_hot" : "comment_music";
-  const { body } = await callNetease(apiName, {
+  // comment_hot 端点已被网易下线（固定返回 code 400），
+  // 精选评论统一走 comment_music，从响应内 hotComments 字段取数
+  const { body } = await callNetease("comment_music", {
     id,
     type: NETEASE_RESOURCE_TYPE,
     limit: args.limit,

@@ -141,8 +141,10 @@ export type DynamicIslandTransition = "bounce" | "smooth";
 
 /** 灵动岛歌词配置 */
 export interface DynamicIslandSettings {
-  /** 缩放比例（0.5 ~ 2.0），1 = 100%；实际窗口高度由渲染端按基准高度 × 缩放算出 */
-  scale: number;
+  /** 主行高度（dp，32 ~ 96）；渲染端按此值计算窗口实际高度 */
+  height: number;
+  /** 字号（Android 悬浮窗使用；PC 灵动岛由 height 决定高度） */
+  fontSize: number;
   /** 字重 */
   fontWeight: number;
   /** 字体 */
@@ -151,12 +153,20 @@ export interface DynamicIslandSettings {
   wordByWord: boolean;
   /** 歌词行切换动画 */
   transition: DynamicIslandTransition;
+  /** 自动生成逐字数据（Android 悬浮窗） */
+  autoGenerateWordByWord: boolean;
   /** 已播放颜色 */
   playedColor: string;
   /** 未播放颜色 */
   unplayedColor: string;
+  /** 描边颜色（Android 悬浮窗） */
+  strokeColor: string;
   /** 背景颜色 */
   backgroundColor: string;
+  /** 背景遮罩（Android 悬浮窗） */
+  backgroundMask: boolean;
+  /** 背景遮罩颜色（Android 悬浮窗） */
+  backgroundMaskColor: string;
   /** 窗口置顶 */
   alwaysOnTop: boolean;
   /** 吸附时是否居中 */
@@ -169,8 +179,26 @@ export interface DynamicIslandSettings {
   doubleLine: boolean;
   /** 显示翻译 */
   showTranslation: boolean;
-  /** 是否使用原生CSS窗口拖动 */
+  /** 对齐方式（Android 悬浮窗） */
+  align: "left" | "center" | "right" | "justify";
+  /** 行切换动画（Android 悬浮窗） */
+  animation: boolean;
+  /** 锁定状态（Android 悬浮窗） */
+  locked: boolean;
+  /** 是否需要长按后才能拖动（Android 悬浮窗） */
+  dragByLongPress: boolean;
+  /** 是否使用原生 CSS 窗口拖动 */
   useCSSDrag: boolean;
+  /** 限制边界（Android 悬浮窗） */
+  limitBounds: boolean;
+  /** 总是显示歌曲信息（Android 悬浮窗）；true 时封面位置显示专辑封面，无激活行时显示歌曲名+艺人 */
+  alwaysShowSongInfo: boolean;
+  /** X 坐标（窗口水平中心点，绝对像素，0 表示屏幕水平居中；宽度变化时围绕此点对称伸缩） */
+  posX: number;
+  /** Y 坐标（绝对像素，0 表示顶部吸附） */
+  posY: number;
+  /** 固定伸缩最大宽度（像素，0 表示使用默认上限 70% 屏宽或 620dp）；超出后文本水平滚动 */
+  maxWidth: number;
 }
 
 /** 任务栏歌词位置模式 */
@@ -266,6 +294,8 @@ export interface ExternalApiStatus {
   listening: boolean;
   /** 实际生效的局域网开关（监听时绑定的模式，与配置项比对判断是否待重启） */
   allowLan: boolean;
+  /** 外部客户端访问用 token，仅本机状态查询返回 */
+  token?: string | null;
   /** 展示用主机地址：仅本机时为 127.0.0.1，开放局域网时为本机局域网 IP */
   host: string | null;
   /** 实际监听端口 */
@@ -316,10 +346,23 @@ export interface OnlineLyricSettings {
 
 /** 本地歌词配置 */
 export interface LocalLyricSettings {
+  /** 启用本地同文件夹侧载歌词（.ttml / .lrc 等）匹配 */
+  enableSidecarMatch: boolean;
   /** 启用本地 TTML 歌词库：从指定目录按元信息匹配 .ttml，命中优先于在线源 */
   enableLocalTTMLOverride: boolean;
   /** 本地 TTML 歌词库目录 */
   repoDir: string;
+}
+
+/** Android 主播放器逐词歌词渲染模式 */
+export type AndroidLyricRenderMode = "legacy" | "kotlin";
+
+/** Android 主播放器歌词配置，独立于桌面歌词/浮窗歌词模块 */
+export interface AndroidLyricSettings {
+  /** 仅描述逐词效果由谁实现，不复用 lyric.enableWordHighlight 这个开关语义 */
+  renderMode: AndroidLyricRenderMode;
+  /** 是否解锁 legacy 引擎的帧率限制（开启后普通行切换跳过全量同步，帧率提升但发热加重） */
+  unlockFpsLimit: boolean;
 }
 
 /** 歌曲缓存配置 */
@@ -334,6 +377,8 @@ export interface SongCacheSettings {
 
 /** 缓存配置 */
 export interface CacheSettings {
+  /** 缓存总开关：关闭后所有缓存读写操作跳过（封面、列表数据、音频等） */
+  enabled: boolean;
   /** 自定义缓存目录；null 使用默认 {userData}/app-data/cache */
   dir: string | null;
   /** 歌曲文件级缓存 */
@@ -447,6 +492,8 @@ export interface SystemConfig {
   lyric: OnlineLyricSettings;
   /** 本地歌词配置 */
   localLyric: LocalLyricSettings;
+  /** Android 主播放器歌词配置 */
+  androidLyric: AndroidLyricSettings;
   /** 缓存配置 */
   cache: CacheSettings;
   /** 下载配置 */

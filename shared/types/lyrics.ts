@@ -121,4 +121,10 @@ export interface LyricsApi {
   matchLocalTTML: (track: Track) => Promise<LyricTTMLResponse>;
   /** 弹出目录选择器，返回所选本地 TTML 歌词库目录 */
   pickLyricRepoDir: () => Promise<string | null>;
+  /** 获取音频文件同目录下的同名/同元信息歌词文件内容 */
+  findSidecarLyric?: (
+    audioPath: string,
+    title?: string,
+    artist?: string,
+  ) => Promise<{ content: string; format: string } | null>;
 }

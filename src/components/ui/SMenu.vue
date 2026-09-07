@@ -124,6 +124,7 @@ const handleSelect = (item: SMenuItem) => {
           <SImg
             v-if="item.showCover"
             :src="item.cover"
+            cache-type="list-covers"
             :class="[
               sizeClass.cover,
               'shrink-0 rounded-md object-cover transition-[width,height] duration-300',

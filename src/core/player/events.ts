@@ -6,6 +6,7 @@ import * as playback from "@/services/playback";
 import * as autoClose from "@/services/autoClose";
 import * as abLoop from "@/services/abLoop";
 import * as cacheScheduler from "@/services/cacheScheduler";
+import { isAndroidNative } from "@/services/bridge";
 import * as playStats from "./stats";
 import {
   hasReachedSeekTarget,
@@ -40,6 +41,8 @@ const finishCurrentTrack = async (): Promise<void> => {
     playStats.onTrackEnded(repeatOne && !stopByTimer);
     // 定时关闭"等本曲结束"模式
     if (stopByTimer) return;
+    // Android：自动续播由原生闭环（ended 到达即原生已放弃推进），不再触发切歌
+    if (isAndroidNative) return;
     // 单曲循环：seek 回开头继续播放
     if (repeatOne) {
       await seek(0);
@@ -79,12 +82,19 @@ export const handleEvent = async (event: PlayerEvent): Promise<void> => {
     case "seek":
       markSeek(event.data.position);
       break;
+    case "error":
+      // 原生播放终局失败（解析重试耗尽 / playIndex 越界）：复位加载态避免 UI 永久转圈
+      status.trackLoading = false;
+      status.state = "idle";
+      break;
     case "position": {
       // 歌曲加载中不更新进度
       if (status.trackLoading) break;
       // seek 后丢弃旧位置，直到后端推送的位置到达 seek 目标附近
       if (!hasReachedSeekTarget(event.data.position)) break;
-      const adjusted = playback.setCurrentTime(event.data.position);
+      const adjusted = playback.setCurrentTime(event.data.position, {
+        force: event.data.authoritative,
+      });
       status.position = adjusted;
       if (event.data.duration > 0) {
         status.duration = event.data.duration;
@@ -103,10 +113,40 @@ export const handleEvent = async (event: PlayerEvent): Promise<void> => {
       break;
     }
     case "fftData":
-      playback.setFftFrame(event.data.ldata, event.data.rdata);
+      // Android 桥推送单声道数组 + 原生 lowFreq，复制到双声道以复用 PC 消费路径
+      if (Array.isArray(event.data)) {
+        playback.setFftFrame(event.data, event.data);
+        playback.setLowFreq(event.lowFreq);
+      } else {
+        playback.setFftFrame(event.data.ldata, event.data.rdata);
+        playback.setLowFreq(undefined);
+      }
       break;
     case "ended": {
-      await finishCurrentTrack();
+      if (endedGuard) return;
+      endedGuard = true;
+      try {
+        const stopByTimer = autoClose.onTrackEnded();
+        // FM 模式跳过
+        const repeatOne = status.repeatMode === "one" && !status.fmMode;
+        // 结算播放统计
+        playStats.onTrackEnded(repeatOne && !stopByTimer);
+        // 定时关闭"等本曲结束"模式
+        if (stopByTimer) break;
+
+        // Android：自动续播由原生闭环（ended 到达即原生已放弃推进），不再触发切歌
+        if (isAndroidNative) break;
+
+        // 单曲循环：seek 回开头继续播放
+        if (repeatOne) {
+          await seek(0);
+          await play();
+        } else {
+          await nextTrack();
+        }
+      } finally {
+        endedGuard = false;
+      }
       break;
     }
     case "sourceError":

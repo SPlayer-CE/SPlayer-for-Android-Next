@@ -350,10 +350,22 @@ const resume = () => {
   isFrozen.value = false;
 };
 
+// 视口变化时由父组件触发；AMLL Core 内部自管布局，此处提供空实现以满足移动端控制器接口
+const refreshLayout = () => {
+  // AMLL Core 的 LyricPlayer 通过 ResizeObserver 自管布局，无需外部触发
+};
+
+// 抑制点击歌词行跳转（移动端底部控制区点击时调用）；AMLL 的 line-click 仅在点击歌词行时触发，无需抑制
+const suppressTapSeek = () => {
+  // AMLL 点击事件仅绑定在歌词行上，底部控制区不会触发，无需处理
+};
+
 defineExpose({
   setCurrentTime,
   freeze,
   resume,
+  refreshLayout,
+  suppressTapSeek,
   lyricPlayer: playerRef,
 });
 </script>

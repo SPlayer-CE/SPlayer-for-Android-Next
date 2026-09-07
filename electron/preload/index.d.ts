@@ -57,11 +57,21 @@ declare global {
           callback: (payload: { category?: string; highlight?: string }) => void,
         ) => () => void;
         listFonts: () => Promise<string[]>;
+        importFont: () => Promise<{
+          success: boolean;
+          fontName?: string;
+          fontNames?: string[];
+          fontData?: Array<{ name: string; base64: string; format: string }>;
+          error?: string;
+        }>;
+        readImportedFonts?: () => Promise<Array<{ name: string; base64: string; format: string }>>;
         fetchRemoteBytes: (url: string) => Promise<IpcResponse<Buffer | null>>;
         saveFile: (
           data: ArrayBuffer,
           fileName: string,
         ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        writeClipboardText: (text: string) => Promise<void>;
+        readClipboardText: () => Promise<string>;
         relaunch: () => Promise<void>;
         testNetworkProxy: () => Promise<boolean>;
         onProtocolUrl: (callback: (url: string) => void) => () => void;

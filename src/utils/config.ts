@@ -1,8 +1,12 @@
 /** 是否为开发环境 */
 export const isDev = import.meta.env.MODE === "development" || import.meta.env.DEV;
 
+/** 是否为 Android 目标构建（Android WebView 无 Electron preload，不存在 window.api） */
+export const isAndroidTarget =
+  typeof __SPLAYER_TARGET__ !== "undefined" && __SPLAYER_TARGET__ === "android";
+
 /** 操作系统平台 */
-const platform = window.api.system.platform;
+const platform = isAndroidTarget ? "android" : window.api.system.platform;
 /** 是否为 Windows 系统 */
 export const isWin = platform === "win32";
 /** 是否为 macOS 系统 */
@@ -14,7 +18,8 @@ export const isLinux = platform === "linux";
 export const APP_VERSION = __APP_VERSION__;
 
 /** 安装类型 */
-export const INSTALL_TYPE = window.api.system.installType;
+export const INSTALL_TYPE: "nsis" | "portable" | "appx" | "dmg" | "appimage" | "unknown" =
+  isAndroidTarget ? "unknown" : window.api.system.installType;
 /** 是否为 AppX 安装 */
 export const IS_APPX = INSTALL_TYPE === "appx";
 /** 仓库地址 */

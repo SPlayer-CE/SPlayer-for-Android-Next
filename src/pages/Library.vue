@@ -5,14 +5,17 @@ import type { PlaybackContext } from "@shared/types/player";
 import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
 import { useLibraryStore } from "@/stores/library";
 import SongList from "@/components/list/SongList.vue";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import { formatFileSize } from "@/utils/format";
 import IconFolderOpen from "~icons/lucide/folder-open";
 import IconRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideListChecks from "~icons/lucide/list-checks";
+import IconLucideChevronDown from "~icons/lucide/chevron-down";
 import * as player from "@/core/player";
 
 const { t } = useI18n();
 const libraryStore = useLibraryStore();
+const { useMobileLayout } = useResponsiveLayout();
 const { tracks, scanDirs, scanning, scanProgress, initialized } = storeToRefs(libraryStore);
 
 const playbackContext = computed<PlaybackContext>(() => ({
@@ -23,6 +26,13 @@ const playbackContext = computed<PlaybackContext>(() => ({
 
 /** 搜索关键词 */
 const searchQuery = ref("");
+const searchFocused = ref(false);
+
+const closeSearchInput = (): void => {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) activeElement.blur();
+  searchFocused.value = false;
+};
 
 /** 多选模式 */
 const songListRef = shallowRef<InstanceType<typeof SongList> | null>(null);
@@ -90,12 +100,16 @@ const handleMoreMenu = (key: string): void => {
 // 进入页面时初始化
 onMounted(async () => {
   libraryStore.subscribeScanProgress();
-  if (!initialized.value) {
-    await libraryStore.load();
-  }
-  // 有目录即扫描：尚无曲目时全量，已有曲目时增量
-  if (scanDirs.value.length > 0) {
-    libraryStore.startScan(tracks.value.length > 0);
+  try {
+    if (!initialized.value) {
+      await libraryStore.load();
+    }
+    // 有目录即扫描：尚无曲目时全量，已有曲目时增量
+    if (scanDirs.value.length > 0) {
+      libraryStore.startScan(tracks.value.length > 0);
+    }
+  } catch (error) {
+    console.warn("[Library] init failed:", error);
   }
 });
 
@@ -107,10 +121,18 @@ onUnmounted(() => {
 <template>
   <div class="flex flex-col h-full">
     <!-- 顶栏 -->
-    <div class="shrink-0 px-5 pb-2">
-      <div class="flex items-center justify-between mt-2 mb-4">
+    <div class="shrink-0 pb-2" :class="useMobileLayout ? 'px-4' : 'px-5'">
+      <div
+        class="flex items-center justify-between mb-4"
+        :class="useMobileLayout ? 'mt-1' : 'mt-2'"
+      >
         <div class="flex items-baseline gap-4">
-          <h1 class="text-3xl font-bold text-on-surface text-balance">{{ t("library.title") }}</h1>
+          <h1
+            class="font-bold text-on-surface text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
+            {{ t("library.title") }}
+          </h1>
           <!-- 统计或进度 -->
           <Transition name="fade" mode="out-in">
             <div
@@ -146,7 +168,7 @@ onUnmounted(() => {
           </Transition>
         </div>
       </div>
-      <div class="flex items-center justify-between gap-4">
+      <div class="relative flex items-center justify-between gap-4">
         <div class="flex items-center gap-3">
           <SButton
             type="primary"
@@ -180,18 +202,33 @@ onUnmounted(() => {
             </template>
           </SDropdownMenu>
         </div>
-        <SInput
-          v-model="searchQuery"
-          :placeholder="t('common.search')"
-          clearable
-          round
-          class="w-40 focus-within:w-56"
-          data-search-input
-        >
-          <template #prefix>
-            <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
-          </template>
-        </SInput>
+        <div class="relative h-9 w-40 shrink-0">
+          <SInput
+            v-model="searchQuery"
+            :placeholder="t('common.search')"
+            clearable
+            round
+            class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
+            data-search-input
+            @focus="searchFocused = true"
+            @blur="searchFocused = false"
+          >
+            <template #prefix>
+              <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+            </template>
+            <template v-if="searchFocused" #suffix>
+              <button
+                type="button"
+                class="size-7 shrink-0 inline-flex items-center justify-center rounded-full border-none bg-transparent appearance-none cursor-pointer text-on-surface-variant/70 transition-[color,background-color] duration-200 hover:bg-on-surface/10 hover:text-on-surface active:bg-on-surface/16"
+                :aria-label="t('common.close')"
+                @pointerdown.prevent.stop
+                @click.stop="closeSearchInput"
+              >
+                <IconLucideChevronDown class="size-4.5" />
+              </button>
+            </template>
+          </SInput>
+        </div>
       </div>
     </div>
     <!-- 曲目列表 -->

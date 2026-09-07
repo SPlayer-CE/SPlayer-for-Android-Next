@@ -33,11 +33,7 @@ const submit = async (): Promise<void> => {
   }
   loading.value = true;
   try {
-    const res = await window.api.apis.setCookie("netease", value);
-    if (!res.ok) {
-      toast.error(t("login.cookieInvalid"));
-      return;
-    }
+    await user.setCookie(value);
     const ok = await user.fetchStatus();
     if (!ok) {
       toast.error(t("login.failed"));

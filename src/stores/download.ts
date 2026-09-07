@@ -7,6 +7,7 @@
 
 import type { DownloadTask, DownloadProgress, DownloadStatus } from "@shared/types/download";
 import { initDownloadResolver } from "@/services/download/resolver";
+import bridge from "@/services/bridge";
 
 export const useDownloadStore = defineStore("download", () => {
   /** 是否尚未结束 */
@@ -58,24 +59,24 @@ export const useDownloadStore = defineStore("download", () => {
     if (initialized.value) return;
     initialized.value = true;
     unsubscribers.push(initDownloadResolver());
-    const tasks = await window.api.download.list();
+    const tasks = await bridge.download.list();
     activeTasks.value = tasks.filter((task) => isActive(task.status)).sort(compareActive);
     historyTasks.value = tasks.filter((task) => !isActive(task.status)).sort(compareHistory);
-    unsubscribers.push(window.api.download.onState(applyTask));
-    unsubscribers.push(window.api.download.onProgress(applyProgress));
+    unsubscribers.push(bridge.download.onState(applyTask));
+    unsubscribers.push(bridge.download.onProgress(applyProgress));
   };
 
-  const cancel = (taskId: string): void => void window.api.download.cancel(taskId);
+  const cancel = (taskId: string): void => void bridge.download.cancel(taskId);
 
   const remove = (taskId: string): void => {
     activeTasks.value = activeTasks.value.filter((item) => item.taskId !== taskId);
     historyTasks.value = historyTasks.value.filter((item) => item.taskId !== taskId);
-    void window.api.download.remove(taskId);
+    void bridge.download.remove(taskId);
   };
 
   const clearFinished = (): void => {
     historyTasks.value = [];
-    void window.api.download.clearFinished();
+    void bridge.download.clearFinished();
   };
 
   onScopeDispose(() => {

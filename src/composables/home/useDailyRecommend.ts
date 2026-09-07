@@ -84,11 +84,14 @@ export const useDailyRecommend = () => {
   const tryBuild = async (kind: HeroKind): Promise<HeroSource | null> => {
     try {
       if (kind === "daily") return toSource("daily", await data.ensureDailyRecommend());
-      if (kind === "liked") return toSource("liked", [...user.likedPlaylistTracks]);
+      if (kind === "liked") {
+        await user.ensureLikedPlaylist();
+        return toSource("liked", [...user.likedPlaylistTracks]);
+      }
       const res = await window.api.library.getRandomTracks(LOCAL_RANDOM_LIMIT);
       return toSource("local", res.success ? (res.data ?? []) : []);
-    } catch (error) {
-      console.warn(`[home] hero source ${kind} failed:`, error);
+    } catch {
+      // API 不可达时静默回退
       return null;
     }
   };
@@ -98,7 +101,7 @@ export const useDailyRecommend = () => {
     loading.value = true;
     const kinds: HeroKind[] = ["local"];
     if (user.isLoggedIn) kinds.push("daily");
-    if (user.likedPlaylistTracks.length > 0) kinds.push("liked");
+    if (user.likedPlaylistId || user.likedPlaylistTracks.length > 0) kinds.push("liked");
     const start = randomIndex(kinds.length);
     for (let offset = 0; offset < kinds.length; offset++) {
       const built = await tryBuild(kinds[(start + offset) % kinds.length]);

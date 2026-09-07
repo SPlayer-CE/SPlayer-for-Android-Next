@@ -1,3 +1,5 @@
+import bridge from "@/services/bridge";
+
 type CacheKind = "file" | "db";
 
 interface CacheStat {
@@ -25,7 +27,7 @@ let initialized = false;
 const refresh = async (): Promise<void> => {
   loading.value = true;
   try {
-    const [list, dir] = await Promise.all([window.api.cache.getStats(), window.api.cache.getDir()]);
+    const [list, dir] = await Promise.all([bridge.cache.getStats(), bridge.cache.getDir()]);
     stats.value = list;
     cacheDir.value = dir;
   } finally {

@@ -213,7 +213,8 @@ const panelTransitionClasses = computed(() => {
       ],
       type === 'line' &&
         (justifyContent ? 'flex w-full pb-1' : 'flex w-full justify-start gap-3 pb-1'),
-      type === 'bar' && (justifyContent ? 'flex w-full pb-1' : 'inline-flex shrink-0 gap-3 pb-1'),
+      type === 'bar' &&
+        (justifyContent ? 'flex w-full pb-1' : 'flex w-fit shrink-0 gap-3 pb-1 whitespace-nowrap'),
     ]"
   >
     <div v-if="type === 'line'" class="absolute inset-x-0 bottom-0 h-0.5 bg-outline-variant/65" />

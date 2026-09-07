@@ -15,7 +15,7 @@ import IconWandSparkles from "~icons/lucide/wand-sparkles";
 const props = defineProps<{ open: boolean; track: Track | null }>();
 const emit = defineEmits<{ "update:open": [value: boolean] }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 
 /** 文件名 */
 const fileName = computed(
@@ -147,7 +147,8 @@ const fillLyricFromCandidate = async (track: Track): Promise<void> => {
   const lookupId = matchPlatform.value === "qqmusic" ? (track.extId ?? track.id) : track.id;
   try {
     const resp = await window.api.lyrics.matchById(matchPlatform.value, lookupId);
-    if (resp.ok && resp.data?.content) form.lyrics = resp.data.content;
+    // apiFetch 的 res.json() 类型为 any，防御性检查 null/undefined
+    if (resp && resp.ok && resp.data?.content) form.lyrics = resp.data.content;
   } catch {
     // 拉取失败保留现有歌词，不打断匹配流程
   }
@@ -217,7 +218,9 @@ const handleSave = async (): Promise<void> => {
     toast.success(t("tagEditor.saveSuccess"));
     emit("update:open", false);
   } else if (outcome?.error) {
-    toast.error(`${t("tagEditor.saveFailed")}: ${outcome.error}`);
+    const errKey = `errors.${outcome.error}`;
+    const errMsg = te(errKey) ? t(errKey) : outcome.error;
+    toast.error(`${t("tagEditor.saveFailed")}: ${errMsg}`);
   }
 };
 </script>
@@ -284,6 +287,7 @@ const handleSave = async (): Promise<void> => {
           >
             <SImg
               :src="candidate.track.cover"
+              cache-type="list-covers"
               class="size-10 shrink-0 rounded-md overflow-hidden"
             />
             <div class="flex flex-col min-w-0 flex-1">

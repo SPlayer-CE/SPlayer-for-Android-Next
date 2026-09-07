@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { isAndroid } from "@/services/bridge";
+
 export interface SCardProps {
   /** 卡片标题 */
   title?: string;
@@ -18,7 +20,7 @@ export interface SCardProps {
   flush?: boolean;
 }
 
-withDefaults(defineProps<SCardProps>(), {
+const props = withDefaults(defineProps<SCardProps>(), {
   variant: "default",
   bordered: true,
   size: "medium",
@@ -46,43 +48,54 @@ const radiusClass: Record<NonNullable<SCardProps["radius"]>, string> = {
 };
 
 const slots = useSlots();
-
 const structured = computed(() => !!slots.header || !!slots["header-extra"] || !!slots.footer);
+
+const cardClass = computed(() => {
+  const classes = [
+    variantClass[props.variant].bg,
+    radiusClass[props.radius],
+    props.bordered && [
+      "border border-solid",
+      props.selected ? "border-primary" : variantClass[props.variant].border,
+    ],
+    !structured.value && !props.title && !props.flush && sizePadding[props.size],
+  ];
+  if (props.hoverable) {
+    classes.push(
+      isAndroid ? "cursor-pointer active:bg-on-surface/6" : "cursor-pointer hover:shadow-md",
+    );
+  }
+  return classes;
+});
 </script>
 
 <template>
   <div
     class="transition-[background-color,border-color,box-shadow] duration-200"
-    :class="[
-      variantClass[variant].bg,
-      radiusClass[radius],
-      bordered && [
-        'border border-solid',
-        selected ? 'border-primary' : variantClass[variant].border,
-      ],
-      hoverable && 'cursor-pointer hover:shadow-md',
-      !structured && !title && !flush && sizePadding[size],
-    ]"
+    :class="cardClass"
   >
     <!-- 结构化：头部 -->
-    <template v-if="structured || title">
+    <template v-if="structured || props.title">
       <div
         class="flex items-center justify-between gap-2"
-        :class="[sizePadding[size], $slots.default && 'pb-2']"
+        :class="[sizePadding[props.size], $slots.default && 'pb-2']"
       >
         <div class="min-w-0 flex-1 text-base font-medium">
-          <slot name="header">{{ title }}</slot>
+          <slot name="header">{{ props.title }}</slot>
         </div>
         <div v-if="$slots['header-extra']" class="shrink-0">
           <slot name="header-extra" />
         </div>
       </div>
       <!-- 主体 -->
-      <div v-if="$slots.default" :class="[sizePadding[size], 'pt-0', $slots.footer && 'pb-2']">
+      <div
+        v-if="$slots.default"
+        :class="[sizePadding[props.size], 'pt-0', $slots.footer && 'pb-2']"
+      >
         <slot />
       </div>
       <!-- 底部 -->
-      <div v-if="$slots.footer" :class="[sizePadding[size], 'pt-0']">
+      <div v-if="$slots.footer" :class="[sizePadding[props.size], 'pt-0']">
         <slot name="footer" />
       </div>
     </template>

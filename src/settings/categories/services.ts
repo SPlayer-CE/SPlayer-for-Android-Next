@@ -83,6 +83,7 @@ const servicesCategory: SettingCategory = {
     },
     {
       id: "discord",
+      platform: "desktop",
       items: [
         {
           key: "discordEnabled",

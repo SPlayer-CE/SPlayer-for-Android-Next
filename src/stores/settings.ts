@@ -19,6 +19,9 @@ import type { SystemConfig, LocaleCode } from "@shared/types/settings";
 import { ALL_PLATFORMS } from "@shared/types/platform";
 import { defaultSystemConfig } from "@shared/defaults/settings";
 import { setByPath } from "@shared/utils/path";
+import { isAndroid } from "@/services/bridge";
+import bridge, { pushDynamicIslandConfig } from "@/services/bridge";
+import { AndroidCache } from "@/plugins/androidCache";
 
 /**
  * 对账有序集合：保留存档中仍有效的项（顺序不变），
@@ -117,21 +120,25 @@ export const useSettingsStore = defineStore(
       sidebarNameWithDivider: false,
       sidebarPlaylistOrder: { myLocal: [], myOnline: [], subscribed: [] },
       showStatsInSidebar: true,
-      showQualitySwitch: false,
+      showQualitySwitch: true,
       closeAction: "hide",
       rememberCloseChoice: false,
       fontFamily: "",
       showPerformanceMonitor: false,
+      wavyProgressBar: true,
+      pageZoom: 100,
+      androidDeviceModeOverride: "auto",
+      appIcon: "green",
     });
 
     /** 播放器 */
     const player = reactive<PlayerSettings>({
       playerBgType: "blur",
-      playerBgFps: 30,
-      playerBgFlowSpeed: 4,
+      playerBgFps: 45,
+      playerBgFlowSpeed: 1,
       playerBgRenderScale: 0.5,
-      playerBgFreezeOnPause: false,
-      playerBgBeat: false,
+      playerBgFreezeOnPause: true,
+      playerBgBeat: true,
       coverLayout: "default",
       coverLyricRatio: 0.45,
       autoCenterCover: true,
@@ -143,6 +150,7 @@ export const useSettingsStore = defineStore(
       enableSpectrum: false,
       spectrumBarWidth: 4,
       reverseSpectrum: false,
+      spectrumAlgorithm: "pc",
       songLevel: "hq",
       allowTrialPlay: false,
       timeFormat: "current-total",
@@ -174,6 +182,9 @@ export const useSettingsStore = defineStore(
       cjkTransform: "none",
       adaptiveFontSize: true,
       fontSize: 48,
+      fontSizeLandscape: 25,
+      landscapeCoverOffsetX: 40,
+      landscapeLyricPaddingX: 0,
       fontWeight: 700,
       lyricBlendMode: "normal",
       fontFamily: "",
@@ -186,8 +197,8 @@ export const useSettingsStore = defineStore(
       amllShowLineRomanization: true,
       amllShowWordRomanization: true,
       enableWordHighlight: true,
-      enableFloatAnimation: false,
-      enableEmphasizeEffect: false,
+      enableFloatAnimation: true,
+      enableEmphasizeEffect: true,
       enableBlur: false,
       hidePassedLines: false,
       springPreset: "default",
@@ -221,6 +232,17 @@ export const useSettingsStore = defineStore(
     /** 系统配置 - 传递主进程 */
     const system = reactive<SystemConfig>(structuredClone(defaultSystemConfig));
 
+    /** Android：是否显示系统状态栏（默认隐藏，沉浸式） */
+    const androidShowStatusBar = ref(false);
+    /** Android：是否隐藏底部导航栏（平板横竖屏 / 手机竖屏隐藏系统导航栏与手势条） */
+    const androidHidePortraitNavBar = ref(true);
+    /** Android：通知栏媒体控制器开关 */
+    const androidMediaControllerEnabled = ref(true);
+    /** Android：通知栏桌面歌词按钮开关 */
+    const androidMediaControllerDesktopLyricEnabled = ref(false);
+    /** Android：允许与其他应用混播 */
+    const androidAllowMixWithOthers = ref(false);
+
     /** 桌面歌词窗口是否打开；由主进程广播 */
     const isDesktopLyricOpen = ref(false);
 
@@ -229,6 +251,15 @@ export const useSettingsStore = defineStore(
 
     /** 任务栏歌词窗口是否打开；由主进程广播 */
     const isTaskbarLyricOpen = ref(false);
+
+    /** 外部歌词页：字号 / 字重是否改为手动数值输入 */
+    const externalLyricManualInput = ref(false);
+    /** 歌词内容样式页：滑块是否改为手动数值输入 */
+    const lyricGeneralManualInput = ref(false);
+    /** 歌词弹簧动画页：滑块是否改为手动数值输入 */
+    const lyricSpringManualInput = ref(false);
+    /** 歌词布局与透明度页：滑块是否改为手动数值输入 */
+    const lyricLayoutManualInput = ref(false);
 
     /**
      * 深合并：嵌套对象原地 mutate，叶子值不变就不写
@@ -258,59 +289,133 @@ export const useSettingsStore = defineStore(
       try {
         deepAssign(
           system as unknown as Record<string, unknown>,
-          (await window.api.config.getAll()) as unknown as Record<string, unknown>,
+          (await bridge.config.getAll()) as unknown as Record<string, unknown>,
         );
+        // Android: 将缓存容量限制同步到原生 CacheStorage
+        syncNativeCacheMaxBytes();
+        if (
+          isAndroid &&
+          lyric.engine === "physics" &&
+          system.androidLyric.renderMode === "kotlin"
+        ) {
+          lyric.engine = "kotlin";
+        }
+      } catch {}
+    };
+
+    /**
+     * 将缓存容量设置同步到 AndroidCache 原生插件（CacheStorage.setMaxBytes）。
+     * 仅 Android 生效；Electron 端 songCache 从后端 store 读取，无需额外同步。
+     */
+    const syncNativeCacheMaxBytes = (): void => {
+      if (!isAndroid) return;
+      try {
+        const gb = system.cache?.songCache?.sizeLimitGb ?? 10;
+        const maxBytes = gb > 0 ? gb * 1024 * 1024 * 1024 : 10 * 1024 * 1024 * 1024;
+        AndroidCache.setMaxBytes({ maxBytes }).catch(() => {});
       } catch {}
     };
 
     /** IPC 订阅取消回调集合 */
-    const unsubscribers: Array<() => void> = [
-      // 订阅桌面歌词配置变化：歌词窗口点锁定按钮等场景需要回流到主窗口设置页
-      window.api.desktopLyric.onConfigChange((next) => {
-        Object.assign(system.desktopLyric, next as object);
-      }),
-      // 订阅桌面歌词窗口开关状态
-      window.api.window.onDesktopLyricVisibilityChange((open) => {
-        isDesktopLyricOpen.value = open;
-      }),
-      // 订阅灵动岛配置变化
-      window.api.dynamicIsland.onConfigChange((next) => {
-        Object.assign(system.dynamicIsland, next as object);
-      }),
-      // 订阅灵动岛窗口开关状态
-      window.api.window.onDynamicIslandVisibilityChange((open) => {
-        isDynamicIslandOpen.value = open;
-      }),
-      // 订阅任务栏歌词窗口开关状态
-      window.api.window.onTaskbarLyricVisibilityChange((open) => {
-        isTaskbarLyricOpen.value = open;
-      }),
-    ];
+    const unsubscribers: Array<() => void> = isAndroid
+      ? [
+          // 订阅灵动岛（悬浮窗）开关状态
+          bridge.window.onDynamicIslandVisibilityChange((open) => {
+            isDynamicIslandOpen.value = open;
+          }),
+        ]
+      : [
+          // 订阅桌面歌词配置变化：歌词窗口点锁定按钮等场景需要回流到主窗口设置页
+          bridge.desktopLyric.onConfigChange((next) => {
+            Object.assign(system.desktopLyric, next as object);
+          }),
+          // 订阅桌面歌词窗口开关状态
+          bridge.window.onDesktopLyricVisibilityChange((open) => {
+            isDesktopLyricOpen.value = open;
+          }),
+          // 订阅灵动岛配置变化
+          bridge.dynamicIsland.onConfigChange((next) => {
+            Object.assign(system.dynamicIsland, next as object);
+          }),
+          // 订阅灵动岛窗口开关状态
+          bridge.window.onDynamicIslandVisibilityChange((open) => {
+            isDynamicIslandOpen.value = open;
+          }),
+          // 订阅任务栏歌词窗口开关状态
+          bridge.window.onTaskbarLyricVisibilityChange((open) => {
+            isTaskbarLyricOpen.value = open;
+          }),
+        ];
 
     onScopeDispose(() => {
       for (const off of unsubscribers) off();
       unsubscribers.length = 0;
     });
 
+    // Android：监听灵动岛（悬浮窗）配置变化，推送给原生层
+    if (isAndroid) {
+      watch(
+        () => system.dynamicIsland,
+        (next) => {
+          pushDynamicIslandConfig({ ...next });
+        },
+        { deep: true },
+      );
+      // 频谱算法方案切换：立即同步到原生层，下次 analyze 生效
+      watch(
+        () => player.spectrumAlgorithm,
+        (mode) => {
+          bridge.player.setSpectrumAlgorithm(mode).catch(() => {});
+        },
+      );
+      // 桌面图标颜色变体切换：立即同步到原生层（activity-alias 启用态）
+      watch(
+        () => appearance.appIcon,
+        (icon) => {
+          bridge.android.setAppIcon(icon).catch(() => {});
+        },
+      );
+      // 持久化配置与原生实际生效变体分歧时（恢复备份等场景）以配置为准回推原生；
+      // 在 getIcon 返回后再推送，避免与 hydration 触发的 watch setIcon 并发乱序
+      bridge.android
+        .getAppIcon()
+        .then(async (icon) => {
+          if (icon && appearance.appIcon !== icon) {
+            await bridge.android.setAppIcon(appearance.appIcon);
+          }
+        })
+        .catch(() => {});
+    }
+
     // 拉取窗口初始开关状态
-    window.api.window
-      .isDesktopLyricOpen()
-      .then((open) => {
-        isDesktopLyricOpen.value = open;
-      })
-      .catch(() => {});
-    window.api.window
-      .isDynamicIslandOpen()
-      .then((open) => {
-        isDynamicIslandOpen.value = open;
-      })
-      .catch(() => {});
-    window.api.window
-      .isTaskbarLyricOpen()
-      .then((open) => {
-        isTaskbarLyricOpen.value = open;
-      })
-      .catch(() => {});
+    if (isAndroid) {
+      // Android 灵动岛服务，拉取运行状态
+      bridge.window
+        .isDynamicIslandOpen()
+        .then((open) => {
+          isDynamicIslandOpen.value = open;
+        })
+        .catch(() => {});
+    } else {
+      bridge.window
+        .isDesktopLyricOpen()
+        .then((open) => {
+          isDesktopLyricOpen.value = open;
+        })
+        .catch(() => {});
+      bridge.window
+        .isDynamicIslandOpen()
+        .then((open) => {
+          isDynamicIslandOpen.value = open;
+        })
+        .catch(() => {});
+      bridge.window
+        .isTaskbarLyricOpen()
+        .then((open) => {
+          isTaskbarLyricOpen.value = open;
+        })
+        .catch(() => {});
+    }
 
     /**
      * 写入后端配置并同步本地
@@ -319,14 +424,40 @@ export const useSettingsStore = defineStore(
     const setSystem = async (keyPath: string, value: unknown): Promise<void> => {
       setByPath(system, keyPath, value);
       try {
-        await window.api.config.set(keyPath, value);
+        await bridge.config.set(keyPath, value);
       } catch (err) {
         console.error("[settings] config.set failed", keyPath, err);
       }
       if (keyPath === "player.fadeEnabled" || keyPath === "player.fadeDuration") {
-        await window.api.player.setFadeDuration(
+        await bridge.player.setFadeDuration(
           system.player.fadeEnabled ? system.player.fadeDuration : 0,
         );
+      }
+      // 均衡器参数变更时，前端显式联动到原生播放器
+      // 桌面端 ipc/config.ts 的 server-side 钩子也会处理，双重调用结果一致无副作用
+      if (
+        keyPath === "player.equalizer.enabled" ||
+        keyPath === "player.equalizer.bands" ||
+        keyPath === "player.equalizer.preamp"
+      ) {
+        const eq = system.player.equalizer;
+        if (eq) {
+          try {
+            await bridge.player.setEqualizerBands([...eq.bands]);
+            await bridge.player.setPreampGain(eq.preamp);
+            await bridge.player.setEqualizerEnabled(eq.enabled);
+          } catch (err) {
+            console.error("[settings] equalizer sync failed", err);
+          }
+        }
+      }
+      // 缓存容量或开关变更时，同步到 AndroidCache 原生插件
+      if (
+        keyPath === "cache.songCache.sizeLimitGb" ||
+        keyPath === "cache.enabled" ||
+        keyPath === "cache.songCache.enabled"
+      ) {
+        syncNativeCacheMaxBytes();
       }
     };
 
@@ -338,6 +469,10 @@ export const useSettingsStore = defineStore(
         lyric.springDamping = params.damping;
         lyric.springStiffness = params.stiffness;
       }
+      if (path === "lyric.engine" && isAndroid) {
+        const renderMode = value === "kotlin" ? "kotlin" : "legacy";
+        setSystem("androidLyric.renderMode", renderMode).catch(() => {});
+      }
     };
 
     return {
@@ -347,9 +482,18 @@ export const useSettingsStore = defineStore(
       preset,
       lyric,
       system,
+      androidShowStatusBar,
+      androidHidePortraitNavBar,
+      androidMediaControllerEnabled,
+      androidMediaControllerDesktopLyricEnabled,
+      androidAllowMixWithOthers,
       isDesktopLyricOpen,
       isDynamicIslandOpen,
       isTaskbarLyricOpen,
+      externalLyricManualInput,
+      lyricGeneralManualInput,
+      lyricSpringManualInput,
+      lyricLayoutManualInput,
       syncSystem,
       setSystem,
       afterLocalChange,
@@ -372,6 +516,10 @@ export const useSettingsStore = defineStore(
         appearance.sidebarNavGroups = reconcileNavGroups(appearance.sidebarNavGroups ?? []);
         appearance.sidebarHiddenKeys = reconcileHiddenKeys(appearance.sidebarHiddenKeys ?? []);
         appearance.sidebarPlaylistOrder = reconcilePlaylistOrder(appearance.sidebarPlaylistOrder);
+        // 桌面端无 kotlin 原生歌词引擎，回退物理引擎
+        if (!isAndroid && lyric.engine === "kotlin") lyric.engine = "physics";
+        lyric.landscapeCoverOffsetX ??= 52;
+        lyric.landscapeLyricPaddingX ??= 0;
       },
     },
   },

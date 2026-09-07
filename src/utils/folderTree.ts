@@ -1,5 +1,6 @@
 import type { Track } from "@shared/types/player";
 import type { FolderNode } from "@/types/folder";
+import { safToHumanPath } from "./safUri";
 
 /**
  * 路径分隔归一化为正斜杠
@@ -33,15 +34,15 @@ export const buildFolderTree = (
   scanDirs: readonly string[],
 ): FolderNode[] => {
   if (tracks.length === 0) return [];
+  // SAF content URI 转为人类可读路径，使文件夹树能正确按真实目录结构聚合
+  const humanScanDirs = scanDirs.map((d) => normalizePath(safToHumanPath(d)).replace(/\/$/, ""));
   const roots = new Map<string, FolderNode>();
   const folderIndex = new Map<string, FolderNode>();
 
-  const findScanRoot = (trackPath: string): string => {
-    const norm = normalizePath(trackPath);
+  const findScanRoot = (humanPath: string): string => {
     let matched = "";
-    for (const dir of scanDirs) {
-      const dirNorm = normalizePath(dir).replace(/\/$/, "");
-      if (norm.startsWith(dirNorm + "/") && dirNorm.length > matched.length) {
+    for (const dirNorm of humanScanDirs) {
+      if (humanPath.startsWith(dirNorm + "/") && dirNorm.length > matched.length) {
         matched = dirNorm;
       }
     }
@@ -61,8 +62,8 @@ export const buildFolderTree = (
     // CUE 虚拟分轨的 path 是 cue://... 协议路径，按其真实容器文件路径归入磁盘目录
     const diskPath = track.cueAudioPath ?? track.path;
     if (!diskPath) continue;
-    const fullPath = normalizePath(diskPath);
-    const rootPath = findScanRoot(diskPath);
+    const fullPath = normalizePath(safToHumanPath(diskPath));
+    const rootPath = findScanRoot(fullPath);
     const rootNode =
       roots.get(rootPath) ?? ensureFolder(rootPath, folderBasename(rootPath) || rootPath);
     if (!roots.has(rootPath)) roots.set(rootPath, rootNode);

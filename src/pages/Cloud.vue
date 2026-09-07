@@ -10,9 +10,11 @@ import * as player from "@/core/player";
 import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideListChecks from "~icons/lucide/list-checks";
 import IconLucideCloud from "~icons/lucide/cloud";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconLucideHardDrive from "~icons/lucide/hard-drive";
 import IconLucideCloudUpload from "~icons/lucide/cloud-upload";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const user = useUserStore();
 
@@ -73,7 +75,10 @@ watch(
     <div class="shrink-0 px-5 pb-2">
       <div class="flex items-center justify-between mt-2 mb-4">
         <div class="flex items-baseline gap-4 min-w-0">
-          <h1 class="text-3xl font-bold text-on-surface shrink-0 text-balance">
+          <h1
+            class="font-bold text-on-surface shrink-0 text-balance"
+            :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+          >
             {{ t("cloud.title") }}
           </h1>
           <div
@@ -99,7 +104,7 @@ watch(
           </div>
         </div>
       </div>
-      <div class="flex items-center justify-between gap-4">
+      <div class="relative flex items-center justify-between gap-4">
         <div class="flex items-center gap-3">
           <SButton
             type="primary"
@@ -134,18 +139,20 @@ watch(
             </template>
           </SDropdownMenu>
         </div>
-        <SInput
-          v-model="searchQuery"
-          :placeholder="t('common.search')"
-          clearable
-          round
-          class="w-40 focus-within:w-56"
-          data-search-input
-        >
-          <template #prefix>
-            <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
-          </template>
-        </SInput>
+        <div class="relative h-9 w-40 shrink-0">
+          <SInput
+            v-model="searchQuery"
+            :placeholder="t('common.search')"
+            clearable
+            round
+            class="absolute right-0 top-0 w-40 focus-within:w-56 focus-within:z-10 focus-within:backdrop-blur-lg focus-within:bg-surface/80 focus-within:shadow-lg"
+            data-search-input
+          >
+            <template #prefix>
+              <IconLucideSearch class="size-4 text-on-surface-variant/40 shrink-0" />
+            </template>
+          </SInput>
+        </div>
       </div>
     </div>
     <!-- 列表 -->

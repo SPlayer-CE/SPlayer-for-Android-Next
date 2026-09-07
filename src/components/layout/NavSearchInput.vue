@@ -53,7 +53,8 @@ const menuItems = computed<DropdownMenuItem[]>(() => [
 
 const readClipboardText = async (): Promise<string> => {
   try {
-    return await navigator.clipboard.readText();
+    // Android WebView 的 navigator.clipboard 读取不可靠，走原生/桌面剪贴板通道
+    return await window.api.system.readClipboardText();
   } catch {
     return "";
   }

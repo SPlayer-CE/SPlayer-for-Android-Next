@@ -25,3 +25,71 @@ package-lock.json
 # Code signing certificates
 *.pfx
 *.p12
+.trae/
+android/app/libs/
+
+# Gradle / Android Studio
+.gradle/
+android/.gradle/
+android/local.properties
+android/captures/
+android/build/
+android/app/build/
+
+# Android generated assets
+android/app/src/main/assets/public/
+android/app/src/main/assets/www/nodejs-project/
+android/app/src/main/assets/nodejs-mobile-cordova-assets/
+
+# Android signing / outputs
+*.jks
+*.keystore
+key.properties
+*.apk
+*.aab
+*.apks
+
+# GitHub Actions temp release files
+release/
+
+# 临时调试产物与误入库备份
+error.txt
+pnpm-lock.yaml.bak
+*.bak
+
+# 本地 MCP / 工具配置
+.mcp.json
+.agents/
+.windsurf/
+docs/
+# android/res/ 默认由 `cap sync android` 生成；以下例外目录入库，避免每次同步重置：
+# - xml/：备份规则、文件提供者等敏感策略配置必须随仓库分发
+# - drawable/mipmap/values：启动图标与 splash 为手工维护资产，非 sync 产物
+android/app/src/main/res/*
+!android/app/src/main/res/xml/
+!android/app/src/main/res/layout/
+!android/app/src/main/res/drawable*/
+!android/app/src/main/res/mipmap*/
+!android/app/src/main/res/values*/
+.codegraph/
+.vscode/mcp.json
+nul
+.idea/
+.omo/
+.codex/config.toml
+.mimosa/
+.pnpm-store/
+.mimocode-project-id
+
+# AI 会话工作文档（本地产物，不入库）
+checklist.md
+spec.md
+tasks.md
+HDR_BLOOM_PLAN.md
+USER_RULES_SUMMARY.md
+WORD_LYRIC.md
+glm5.2_fix_system_prompt.md
+分析修复后台锁屏切歌失效.md
+去Node化-全量Kotlin原生化实施规划.md
+更新日志.md
+检查项目与PC设置页差异.md

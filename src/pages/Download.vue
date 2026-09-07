@@ -9,8 +9,10 @@ import DownloadList from "@/components/list/DownloadList.vue";
 import IconLucidePlay from "~icons/lucide/play";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
 import IconLucideMusic from "~icons/lucide/music";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
 import IconLucideDownload from "~icons/lucide/download";
 
+const { useMobileLayout } = useResponsiveLayout();
 const { t } = useI18n();
 const downloadStore = useDownloadStore();
 
@@ -61,7 +63,10 @@ onMounted(() => void downloadStore.init());
     <!-- 顶栏 -->
     <div class="shrink-0 px-5 pb-2">
       <div class="flex items-baseline gap-4 mt-2 mb-4 min-w-0">
-        <h1 class="text-3xl font-bold text-on-surface shrink-0 text-balance">
+        <h1
+          class="font-bold text-on-surface shrink-0 text-balance"
+          :class="useMobileLayout ? 'text-2xl' : 'text-3xl'"
+        >
           {{ t("download.title") }}
         </h1>
         <span class="flex items-center gap-1.5 text-sm text-on-surface-variant/50 shrink-0">

@@ -4,8 +4,11 @@ import { useSettingsDialog } from "@/settings/useSettingsDialog";
 import { useSettingsStore } from "@/stores/settings";
 import { openExternal } from "@/utils/url";
 import { REPO_URL, REPO_NAME, APP_VERSION, IS_APPX } from "@/utils/config";
+import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
+import { filterSectionsByPlatform } from "@/settings/platformFilter";
 
 const { initialCategory, initialHighlight, rememberCategory } = useSettingsDialog();
+const { useMobileLayout } = useResponsiveLayout();
 
 // 同步后端配置
 useSettingsStore().syncSystem();
@@ -15,14 +18,20 @@ const activeId = ref(initialCategory.value);
 const highlightKey = ref(initialHighlight.value);
 const scrollRef = ref<HTMLElement>();
 const isSearchActive = ref(false);
+const showMobileMenu = ref(true);
 
 const activeCategory = computed(() => settingsSchema.find((c) => c.id === activeId.value));
+
+/** 按平台过滤 section 与其 items（含子项），统一收敛到 platformFilter */
+const visibleSections = computed(() =>
+  filterSectionsByPlatform(activeCategory.value?.sections ?? []),
+);
 
 /** 计算每个 section 的全局起始索引 */
 const sectionStartIndices = computed(() => {
   const indices: number[] = [];
   let idx = 0;
-  for (const sec of activeCategory.value?.sections ?? []) {
+  for (const sec of visibleSections.value) {
     indices.push(idx);
     idx += 1 + sec.items.length;
   }
@@ -33,6 +42,9 @@ const onCategorySelect = (id: string) => {
   activeId.value = id;
   highlightKey.value = undefined;
   rememberCategory(id);
+  if (useMobileLayout.value) {
+    showMobileMenu.value = false;
+  }
   nextTick(() => scrollRef.value?.scrollTo({ top: 0 }));
 };
 
@@ -40,6 +52,9 @@ const onSearchSelect = (categoryId: string, itemKey: string) => {
   highlightKey.value = itemKey;
   if (activeId.value !== categoryId) {
     activeId.value = categoryId;
+  }
+  if (useMobileLayout.value) {
+    showMobileMenu.value = false;
   }
   nextTick(() => {
     setTimeout(() => {
@@ -60,11 +75,32 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full overflow-hidden">
+  <div
+    class="relative flex h-full overflow-hidden rounded-xl"
+    :class="{ 'flex-col': useMobileLayout }"
+  >
+    <!-- 移动端遮罩层 -->
+    <Transition name="fade">
+      <div
+        v-if="useMobileLayout && showMobileMenu"
+        class="absolute inset-0 z-1 bg-black/40"
+        @click="showMobileMenu = false"
+      />
+    </Transition>
     <!-- 左侧 -->
-    <div class="w-70 shrink-0 flex flex-col bg-surface-panel p-5">
-      <h2 class="text-2xl font-bold mb-1 px-1">{{ t("settings.title") }}</h2>
-      <p class="text-sm text-on-surface-variant/80 mb-5 px-1">{{ t("settings.subtitle") }}</p>
+    <div
+      v-show="!useMobileLayout || showMobileMenu"
+      class="shrink-0 flex flex-col bg-surface-panel p-5"
+      :class="useMobileLayout ? 'absolute left-0 top-0 bottom-0 z-2 w-[280px] shadow-lg' : 'w-70'"
+    >
+      <div class="mb-5 px-1">
+        <h2 class="text-[22px] leading-tight font-bold mb-1">
+          {{ t("settings.title") }}
+        </h2>
+        <p class="text-xs text-on-surface-variant/70">
+          {{ t("settings.subtitle") }}
+        </p>
+      </div>
 
       <!-- 搜索 -->
       <SettingsSearch
@@ -96,12 +132,23 @@ onMounted(() => {
     </div>
 
     <!-- 右侧 -->
-    <div ref="scrollRef" class="flex-1 overflow-y-auto bg-surface py-6 px-8">
+    <div
+      v-show="!useMobileLayout || !showMobileMenu"
+      ref="scrollRef"
+      class="min-w-0 flex-1 overflow-y-auto bg-surface relative"
+      :class="useMobileLayout ? 'p-4' : 'py-6 px-8'"
+    >
+      <div v-if="useMobileLayout" class="mb-4">
+        <SButton variant="text" size="small" @click="showMobileMenu = true">
+          <template #icon><IconLucideArrowLeft /></template>
+          返回
+        </SButton>
+      </div>
       <div v-if="activeCategory" :key="activeCategory.id" class="animate-fade-in">
         <component :is="activeCategory.component" v-if="activeCategory.component" />
         <template v-else>
           <SettingsSection
-            v-for="(sec, si) in activeCategory.sections"
+            v-for="(sec, si) in visibleSections"
             :key="sec.id"
             :section="sec"
             :highlight-key="highlightKey"

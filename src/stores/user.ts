@@ -1,6 +1,6 @@
 import localforage from "localforage";
 import type { Album, Artist, Playlist, Track } from "@shared/types/player";
-import type { UserProfile, UserSubcount } from "@/types/user";
+import type { UserRadioFavorite, UserProfile, UserSubcount, UserVideoFavorite } from "@/types/user";
 import { clearNeteaseSession, NeteaseApiError, onNeteaseAuthFailure } from "@/apis/netease";
 import { isExplicitNeteaseAuthFailure } from "@/apis/neteaseAuth";
 import {
@@ -13,7 +13,9 @@ import {
   fetchSubcount,
   fetchUserAlbums,
   fetchUserArtists,
+  fetchUserDjs,
   fetchUserLevel,
+  fetchUserMvs,
   fetchUserPlaylists,
   toggleLikeSong,
 } from "@/apis/user/netease";
@@ -27,6 +29,7 @@ import {
   removeFromPlaylist,
   subscribePlaylist,
 } from "@/apis/playlist/netease";
+import { songsByIds } from "@/apis/song/netease";
 import { subscribeAlbum } from "@/apis/album/netease";
 import { subscribeArtist } from "@/apis/artist/netease";
 import { fetchUserCloud, deleteCloudSongs } from "@/apis/cloud/netease";
@@ -76,6 +79,8 @@ const EMPTY_SUBCOUNT: UserSubcount = {
   createdPlaylistCount: 0,
   subPlaylistCount: 0,
   artistCount: 0,
+  mvCount: 0,
+  djRadioCount: 0,
 };
 
 export const useUserStore = defineStore(
@@ -89,6 +94,8 @@ export const useUserStore = defineStore(
     let lastRefreshAttemptAt = 0;
     let statusRequestId = 0;
     let invalidationPromise: Promise<void> | null = null;
+    /** 登录 cookie（MUSIC_U 等），持久化到 localStorage 以跨进程重启存活 */
+    const cookie = ref<string>("");
     /** 是否已登录 */
     const isLoggedIn = computed(() => profile.value !== null);
     /** 全部歌单 */
@@ -99,6 +106,10 @@ export const useUserStore = defineStore(
     const albums = shallowRef<Album[]>([]);
     /** 收藏歌手 */
     const artists = shallowRef<Artist[]>([]);
+    /** 收藏 MV */
+    const mvs = shallowRef<UserVideoFavorite[]>([]);
+    /** 收藏播客 */
+    const djs = shallowRef<UserRadioFavorite[]>([]);
     /** 用户等级 */
     const level = ref<number | undefined>(undefined);
     /** 订阅计数 */
@@ -190,6 +201,8 @@ export const useUserStore = defineStore(
       likedSongIds.value = new Set();
       albums.value = [];
       artists.value = [];
+      mvs.value = [];
+      djs.value = [];
       level.value = undefined;
       subcount.value = EMPTY_SUBCOUNT;
       likedPlaylistAbort?.abort();
@@ -209,6 +222,7 @@ export const useUserStore = defineStore(
       profile.value = null;
       lastRefreshAt.value = 0;
       lastRefreshAttemptAt = 0;
+      cookie.value = "";
       clearContent();
     };
 
@@ -251,6 +265,23 @@ export const useUserStore = defineStore(
       cacheDb.setItem(LIKED_PLAYLIST_CACHE_KEY, payload).catch(() => {});
     };
 
+    /** 用红心 id 预取一屏，避免歌单详情慢/失败时空白 */
+    const hydrateLikedPlaylistPreview = async (controller: AbortController): Promise<void> => {
+      if (likedPlaylistTracks.value.length > 0 || likedSongIds.value.size === 0) return;
+      try {
+        const tracks = await songsByIds([...likedSongIds.value].slice(0, 20));
+        if (
+          !controller.signal.aborted &&
+          likedPlaylistTracks.value.length === 0 &&
+          tracks.length > 0
+        ) {
+          likedPlaylistTracks.value = tracks;
+        }
+      } catch (err) {
+        console.warn("[user] liked playlist preview failed:", err);
+      }
+    };
+
     /** 拉取最新喜欢歌单曲目 */
     const refreshLikedPlaylist = async (playlistId: string): Promise<void> => {
       likedPlaylistAbort?.abort();
@@ -259,8 +290,15 @@ export const useUserStore = defineStore(
       if (likedPlaylistTracks.value.length === 0) likedPlaylistLoading.value = true;
       try {
         const accumulated: Track[] = [];
+        void hydrateLikedPlaylistPreview(controller);
         await fetchPlaylist(playlistId, {
           signal: controller.signal,
+          onMeta: (meta) => {
+            if (controller.signal.aborted) return;
+            if (accumulated.length > 0) return;
+            const trackCount = meta.trackCount ?? 0;
+            if (trackCount > 0) void hydrateLikedPlaylistPreview(controller);
+          },
           onBatch: (batch) => {
             if (controller.signal.aborted) return;
             accumulated.push(...batch);
@@ -430,14 +468,18 @@ export const useUserStore = defineStore(
         fetchLikelist(uid),
         fetchUserAlbums(),
         fetchUserArtists(),
+        fetchUserMvs(),
+        fetchUserDjs(),
         fetchUserLevel(),
       ]);
-      const [_plRes, likeRes, albumRes, artistRes, levelRes] = settled;
+      const [_plRes, likeRes, albumRes, artistRes, mvRes, djRes, levelRes] = settled;
       if (likeRes.status === "fulfilled") {
         applyLikedSongIds(likeRes.value);
       }
       if (albumRes.status === "fulfilled") albums.value = albumRes.value;
       if (artistRes.status === "fulfilled") artists.value = artistRes.value;
+      if (mvRes.status === "fulfilled") mvs.value = mvRes.value;
+      if (djRes.status === "fulfilled") djs.value = djRes.value;
       if (levelRes.status === "fulfilled") level.value = levelRes.value;
       for (const result of settled) {
         if (result.status === "rejected") {
@@ -619,6 +661,14 @@ export const useUserStore = defineStore(
     const fetchStatus = async (): Promise<boolean> => {
       const requestId = ++statusRequestId;
       try {
+        // 应用可能冷启动，服务端内存 cookie 已丢失，先把本地持久化的 cookie 推给服务端
+        if (cookie.value && cookie.value.includes("MUSIC_U")) {
+          try {
+            await window.api?.apis.setCookie("netease", cookie.value);
+          } catch {
+            // 推送失败（服务端未 ready 等）继续尝试校验，fetchLoginStatus 失败会走 catch 保留 profile
+          }
+        }
         const latest = await fetchLoginStatus();
         if (requestId !== statusRequestId) return profile.value !== null;
         if (latest) {
@@ -646,6 +696,8 @@ export const useUserStore = defineStore(
           return false;
         }
         // 网络失败保留缓存的 profile，不强制登出（离线可用性）
+        // 但仍需同步内容（至少从缓存恢复 playlists），否则 likedPlaylistId 为 null 导致喜欢页空白
+        if (profile.value?.userId) syncContent(profile.value.userId);
         return profile.value !== null;
       }
     };
@@ -664,18 +716,30 @@ export const useUserStore = defineStore(
       await invalidateSession();
     };
 
+    /** 保存登录 cookie 到本地持久化 + 推送给服务端 */
+    const setCookie = async (value: string): Promise<void> => {
+      cookie.value = value;
+      if (value && value.includes("MUSIC_U")) {
+        await window.api?.apis.setCookie("netease", value);
+      }
+    };
+
     return {
       profile,
       lastRefreshAt,
+      cookie,
       isLoggedIn,
       fetchStatus,
       invalidateSession,
       logout,
+      setCookie,
 
       playlists,
       likedSongIds,
       albums,
       artists,
+      mvs,
+      djs,
       level,
       subcount,
       likedPlaylistId,
@@ -711,7 +775,7 @@ export const useUserStore = defineStore(
   {
     persist: {
       storage: localStorage,
-      pick: ["profile", "lastRefreshAt", "level"],
+      pick: ["profile", "lastRefreshAt", "level", "cookie"],
     },
   },
 );

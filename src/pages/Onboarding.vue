@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useSettingsStore } from "@/stores/settings";
 import { CURRENT_AGREEMENT_VERSION } from "@shared/constants/agreement";
+import { isAndroid } from "@/services/bridge";
 import WindowControls from "@/components/layout/WindowControls.vue";
 import StepWelcome from "@/components/onboarding/StepWelcome.vue";
 import StepPreferences from "@/components/onboarding/StepPreferences.vue";
@@ -13,7 +14,7 @@ const { t } = useI18n();
 const router = useRouter();
 const settings = useSettingsStore();
 
-const STEPS = [
+const ALL_STEPS = [
   { key: "welcome", component: StepWelcome },
   { key: "agreement", component: StepAgreement },
   { key: "preferences", component: StepPreferences },
@@ -22,12 +23,17 @@ const STEPS = [
   { key: "hotkeys", component: StepHotkeys },
 ] as const;
 
+// Android 端无 global 快捷键能力，引导流程跳过 hotkeys 步骤
+const STEPS = computed(() =>
+  isAndroid ? ALL_STEPS.filter((s) => s.key !== "hotkeys") : ALL_STEPS,
+);
+
 const currentIndex = ref(0);
 const direction = ref<"forward" | "backward">("forward");
 
-const currentStep = computed(() => STEPS[currentIndex.value]);
+const currentStep = computed(() => STEPS.value[currentIndex.value]);
 const isFirst = computed(() => currentIndex.value === 0);
-const isLast = computed(() => currentIndex.value === STEPS.length - 1);
+const isLast = computed(() => currentIndex.value === STEPS.value.length - 1);
 
 const goNext = async (): Promise<void> => {
   if (isLast.value) {
@@ -60,9 +66,12 @@ const complete = async (): Promise<void> => {
 </script>
 
 <template>
-  <div class="flex flex-col h-screen w-screen bg-app text-on-surface overflow-hidden">
+  <div
+    :style="{ height: 'var(--page-zoom-100dvh, 100dvh)', width: 'var(--page-zoom-100vw, 100vw)' }"
+    class="flex flex-col bg-app text-on-surface overflow-hidden"
+  >
     <div class="app-drag-region h-16 shrink-0 flex items-center justify-end px-3">
-      <WindowControls direct-quit />
+      <WindowControls v-if="!isAndroid" direct-quit />
     </div>
 
     <div class="flex-1 min-h-0 flex flex-col items-center px-8 py-6">

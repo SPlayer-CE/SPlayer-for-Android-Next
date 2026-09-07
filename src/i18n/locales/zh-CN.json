@@ -21,10 +21,22 @@
       "subtitle": "一个现代化的桌面音乐播放器，完成几步设置即可开始享用",
       "start": "开始设置",
       "features": {
-        "local": { "title": "本地音乐库", "desc": "扫描本地目录，自动整理音乐库" },
-        "quality": { "title": "无损音质", "desc": "原生音频引擎，支持多种无损格式" },
-        "streaming": { "title": "流媒体服务器", "desc": "Subsonic / Jellyfin / Emby 等" },
-        "lyrics": { "title": "丰富歌词体验", "desc": "AMLL 逐字歌词，桌面歌词、灵动岛、任务栏歌词" }
+        "local": {
+          "title": "本地音乐库",
+          "desc": "扫描本地目录，自动整理音乐库"
+        },
+        "quality": {
+          "title": "无损音质",
+          "desc": "原生音频引擎，支持多种无损格式"
+        },
+        "streaming": {
+          "title": "流媒体服务器",
+          "desc": "Subsonic / Jellyfin / Emby 等"
+        },
+        "lyrics": {
+          "title": "丰富歌词体验",
+          "desc": "AMLL 逐字歌词，桌面歌词、灵动岛、任务栏歌词"
+        }
       }
     },
     "agreement": {
@@ -178,13 +190,23 @@
   "uiZoom": {
     "title": "界面缩放",
     "range": "可调节范围：50% - 200%",
-    "reset": "恢复默认"
+    "reset": "恢复默认",
+    "deviceMode": "设备形态",
+    "deviceModeHint": "自动识别异常时可手动切换",
+    "deviceModeAuto": "自动",
+    "deviceModePhone": "手机模式",
+    "deviceModePad": "平板模式",
+    "deviceModeConfirmTitle": "切换设备形态",
+    "deviceModeConfirmContent": "手动切换或将导致 UI 错乱，如正常请勿使用",
+    "deviceModeConfirm": "继续切换"
   },
   "nav": {
     "home": "首页",
     "library": "音乐库",
     "liked": "我喜欢的音乐",
+    "playlists": "我的歌单",
     "history": "播放历史",
+    "recent": "最近",
     "download": "下载管理",
     "favorites": "我的收藏",
     "cloud": "我的云盘",
@@ -369,6 +391,17 @@
     "cookiePlaceholder": "粘贴 Cookie，至少需要 MUSIC_U=xxx;",
     "cookieInvalid": "Cookie 无效，必须包含 MUSIC_U",
     "cookieConfirm": "登录",
+    "phoneLogin": "验证码登录",
+    "phoneLoginBtn": "登录",
+    "phoneCountry": "国家/地区",
+    "phonePlaceholder": "请输入手机号",
+    "phoneCaptchaPlaceholder": "请输入短信验证码",
+    "phoneSendCaptcha": "获取验证码",
+    "phoneCaptchaSent": "验证码已发送",
+    "phoneCaptchaSendFailed": "验证码发送失败，请重试",
+    "phoneCaptchaInvalid": "验证码错误，请重试",
+    "phoneEmpty": "请先输入手机号",
+    "phoneEmptyFields": "请填写手机号和验证码",
     "success": "登录成功",
     "failed": "登录失败，请重试",
     "unknownUser": "未知用户",
@@ -502,6 +535,32 @@
       "on": "随机播放",
       "off": "顺序播放"
     }
+  },
+  "quickToggle": {
+    "trigger": "更多快捷操作",
+    "group": {
+      "quick": "快捷开关",
+      "amll": "歌词渲染组件"
+    },
+    "spectrum": "音频频谱",
+    "spectrumPc": "PC方案",
+    "spectrumAndroid": "安卓默认",
+    "wordHighlight": "逐词效果",
+    "onlineTTML": "在线 TTML 歌词",
+    "volume": "音量",
+    "fontSize": "歌词字号",
+    "fontSizeLandscape": "横屏字号",
+    "landscapeCoverOffset": "横屏封面",
+    "landscapeLyricPadding": "横屏边距",
+    "lyricPadding": "歌词边距",
+    "renderModeDefault": "默认",
+    "renderModeAmll": "AMLL",
+    "renderModeKotlin": "Kotlin",
+    "amllEngineWarning": "使用此模式将增加发热与耗电",
+    "amllSpring": "弹簧效果",
+    "amllDynamicBg": "AMLL 动态背景",
+    "hidePassed": "隐藏已播放",
+    "lyricBlur": "歌词模糊"
   },
   "songList": {
     "title": "标题",
@@ -676,14 +735,34 @@
     "empty": "暂无每日推荐内容",
     "needLogin": "登录后查看每日推荐"
   },
+  "myPlaylists": {
+    "title": "我的歌单",
+    "create": "新建歌单",
+    "needLogin": "登录后才能查看在线歌单",
+    "emptyLocal": "还没有本地歌单，先新建一个吧",
+    "emptyOnline": "还没有在线歌单，先新建一个吧"
+  },
   "favorites": {
     "title": "我的收藏",
     "empty": "这里还空空如也，去发现一些喜欢的内容吧",
+    "emptyVideo": "还没有收藏视频",
+    "emptyRadio": "还没有收藏播客",
     "notLogin": "登录后才能查看收藏的内容",
+    "totalVideos": "共 {count} 个视频",
+    "totalRadios": "共 {count} 个播客",
+    "unsupportedVideo": "视频详情暂未支持",
+    "unsupportedRadio": "播客详情暂未支持",
+    "playlistGroups": {
+      "created": "我创建的",
+      "subscribed": "我收藏的"
+    },
     "tabs": {
+      "liked": "红心歌曲",
       "playlist": "歌单",
       "album": "专辑",
-      "artist": "歌手"
+      "artist": "歌手",
+      "video": "视频",
+      "radio": "播客"
     }
   },
   "library": {
@@ -706,6 +785,7 @@
   "settings": {
     "title": "设置",
     "subtitle": "调整您的专属配置",
+    "desktopOnly": "仅在桌面端可用",
     "search": "搜索设置项...",
     "group": {
       "general": "常规设置",
@@ -721,6 +801,7 @@
       "localCache": "本地与缓存",
       "plugins": "插件管理",
       "other": "其他设置",
+      "lanShare": "局域网分享",
       "about": "关于软件"
     },
     "section": {
@@ -744,6 +825,7 @@
       "lyricAMLLOptimize": "歌词优化",
       "lyricSpring": "弹簧动画",
       "lyricLayout": "布局与透明度",
+      "externalLyricInputMode": "输入方式",
       "desktopLyric": "桌面歌词",
       "dynamicIsland": "灵动岛歌词",
       "taskbarLyric": "任务栏歌词",
@@ -753,8 +835,11 @@
       "font": "字体",
       "playerBar": "播放栏",
       "nowPlaying": "播放页",
+      "mobilePlayer": "播放器进度样式",
+      "lanShare": "局域网分享",
       "media": "媒体控制",
       "device": "输出设备",
+      "androidSystem": "安卓系统",
       "hotkeys": "快捷键",
       "musicSpectrum": "音乐频谱",
       "discord": "Discord RPC",
@@ -896,6 +981,22 @@
       "label": "进度调节吸附最近歌词",
       "description": "调节进度时自动吸附到最近的歌词行"
     },
+    "androidShowStatusBar": {
+      "label": "显示系统状态栏",
+      "description": "在应用内显示顶部系统状态栏，关闭则进入沉浸式模式"
+    },
+    "androidHidePortraitNavBar": {
+      "label": "隐藏底部导航栏",
+      "description": "隐藏系统底部导航栏与手势条，上滑可临时呼出"
+    },
+    "androidMediaControllerEnabled": {
+      "label": "通知栏媒体控制",
+      "description": "在系统通知栏显示播放控制按钮"
+    },
+    "androidAllowMixWithOthers": {
+      "label": "与其他应用混播",
+      "description": "允许与其他应用同时播放音频"
+    },
     "enableSpectrum": {
       "label": "启用音乐频谱",
       "description": "实时频谱分析会持续占用一定的 CPU，性能敏感设备建议关闭"
@@ -907,6 +1008,12 @@
     "reverseSpectrum": {
       "label": "频谱反向",
       "description": "启用后频率从中间向两侧递减，否则递增"
+    },
+    "spectrumAlgorithm": {
+      "label": "频谱算法方案",
+      "description": "PC 对齐方案使用 Hamming 窗+无重叠+0dB 起始，冲击感更强；Android 原生方案使用 Hann 窗+50%重叠，更平滑",
+      "pc": "PC 对齐",
+      "android": "Android 原生"
     },
     "lyricSourcePreference": {
       "label": "歌词来源偏好",
@@ -961,6 +1068,14 @@
     "enableOnlineTTMLLyric": {
       "label": "启用在线 TTML 歌词",
       "description": "从 AMLL TTML DB 获取歌词，支持逐字、翻译、音译"
+    },
+    "enableSidecarMatch": {
+      "label": "同名外挂歌词",
+      "description": "优先读取本地音乐同文件夹下的同名或元信息匹配的歌词文件"
+    },
+    "enableLocalTTMLOverride": {
+      "label": "本地 TTML 歌词库",
+      "description": "从指定目录读取按元信息匹配的 .ttml 文件，命中时优先于在线源"
     },
     "amllDbServer": {
       "label": "AMLL TTML DB 地址",
@@ -1045,7 +1160,8 @@
     },
     "lyricEngine": {
       "physics": "默认",
-      "amll": "AMLL"
+      "amll": "AMLL",
+      "kotlin": "Kotlin"
     },
     "confirm": {
       "highResourceTitle": "高占用功能",
@@ -1055,7 +1171,9 @@
       "testChannelTitle": "切换到测试通道",
       "testChannelContent": "Beta 与 Alpha 通道会提前收到测试版本，其中 Alpha 版本可能非常不稳定。确定切换吗？",
       "kugouLoginVersionTitle": "切换 KG 登录版本",
-      "kugouLoginVersionContent": "切换后当前登录凭据与新版本不匹配，需退出登录并重新扫码，否则会员权益与高音质解析会失效。确定切换吗？"
+      "kugouLoginVersionContent": "切换后当前登录凭据与新版本不匹配，需退出登录并重新扫码，否则会员权益与高音质解析会失效。确定切换吗？",
+      "fpsUnlockTitle": "耗电与发热警告",
+      "fpsUnlockContent": "解锁后帧率提升，但可能加重设备耗电与发热，低配设备不建议开启。确定开启吗？"
     },
     "useAMSpring": {
       "label": "弹簧动画调试开关",
@@ -1125,9 +1243,25 @@
       "label": "自适应字号",
       "description": "歌词字号根据窗口大小自动调整"
     },
+    "lyricGeneralManualInput": {
+      "label": "手动输入此栏数值",
+      "description": "开启后，内容样式中的滑块改为单独的数值输入框"
+    },
     "fontSize": {
       "label": "歌词字号",
       "description": "关闭自适应后生效"
+    },
+    "fontSizeLandscape": {
+      "label": "横屏歌词字号",
+      "description": "手机横屏分栏布局的独立歌词字号"
+    },
+    "landscapeCoverOffsetX": {
+      "label": "横屏封面位置",
+      "description": "调整手机横屏分栏布局中封面区域的水平位置"
+    },
+    "landscapeLyricPaddingX": {
+      "label": "横屏歌词边距",
+      "description": "调整手机横屏和平板歌词区域的左右边距，负值向外扩展"
     },
     "fontWeight": {
       "label": "歌词字重",
@@ -1168,6 +1302,10 @@
       "label": "逐字高亮",
       "description": "逐字显示歌词高亮进度"
     },
+    "androidLyricUnlockFpsLimit": {
+      "label": "解锁默认歌词渲染帧率限制",
+      "description": "启用后解锁帧率限制，但仅在部分设备生效"
+    },
     "enableFloatAnimation": {
       "label": "逐字上浮",
       "description": "播放到的文字向上微浮"
@@ -1195,6 +1333,10 @@
       "noBounce": "无弹跳",
       "custom": "自定义"
     },
+    "lyricSpringManualInput": {
+      "label": "手动输入此栏数值",
+      "description": "开启后，弹簧动画中的滑块改为单独的数值输入框"
+    },
     "springMass": {
       "label": "质量",
       "description": "值越大运动越迟钝，惯性越大"
@@ -1206,6 +1348,10 @@
     "springStiffness": {
       "label": "刚度",
       "description": "值越大弹簧回弹越快，频率越高"
+    },
+    "lyricLayoutManualInput": {
+      "label": "手动输入此栏数值",
+      "description": "开启后，布局与透明度中的滑块改为单独的数值输入框"
     },
     "alignPosition": {
       "label": "对齐位置",
@@ -1222,6 +1368,10 @@
     "desktopLyricEnabled": {
       "label": "开启桌面歌词",
       "description": "在桌面显示一个独立的歌词悬浮窗口"
+    },
+    "externalLyricManualInput": {
+      "label": "手动输入此区域数值",
+      "description": "开启后，本页的字号和字重改为单独的数值输入框"
     },
     "desktopLyricFontSize": {
       "label": "字号",
@@ -1303,9 +1453,9 @@
       "label": "开启灵动岛",
       "description": "在屏幕顶部显示一个简洁的悬浮歌词窗口，可拖离至任意位置"
     },
-    "dynamicIslandScale": {
-      "label": "缩放比例",
-      "description": "窗口高度与字号同步缩放，100% 为默认大小"
+    "dynamicIslandHeight": {
+      "label": "窗口高度",
+      "description": "灵动岛主行高度（dp），越大窗口越高"
     },
     "dynamicIslandFontWeight": {
       "label": "字重",
@@ -1357,9 +1507,65 @@
       "label": "非遮挡模式",
       "description": "鼠标穿透窗口，悬停时隐藏内容"
     },
-    "dynamicIslandUseCSSDrag": {
-      "label": "使用 CSS 拖拽",
-      "description": "使用 CSS -webkit-app-region 拖拽，在 Wayland 环境建议启用"
+    "dynamicIslandFontSize": {
+      "label": "字号",
+      "description": "灵动岛歌词的文字大小（像素）"
+    },
+    "dynamicIslandAutoGenerateWordByWord": {
+      "label": "自动生成逐字效果",
+      "description": "关闭后仅真正的逐字歌词生效"
+    },
+    "dynamicIslandStrokeColor": {
+      "label": "描边颜色",
+      "description": "歌词文字的描边颜色，透明则视为关闭描边"
+    },
+    "dynamicIslandBackgroundMask": {
+      "label": "文本背景遮罩",
+      "description": "为每行歌词文字加半透明背景色块，提升弱对比下的可读性"
+    },
+    "dynamicIslandBackgroundMaskColor": {
+      "label": "遮罩颜色",
+      "description": "文本背景遮罩的颜色与透明度"
+    },
+    "dynamicIslandAlign": {
+      "label": "对齐方式",
+      "description": "歌词文本的水平对齐",
+      "left": "居左",
+      "center": "居中",
+      "right": "居右",
+      "justify": "两端对齐"
+    },
+    "dynamicIslandAnimation": {
+      "label": "切换动画",
+      "description": "歌词行切换时的滑入 / 滑出过渡动画"
+    },
+    "dynamicIslandLocked": {
+      "label": "锁定窗口",
+      "description": "锁定后鼠标点击将穿透到下层窗口，无法拖动"
+    },
+    "dynamicIslandDragByLongPress": {
+      "label": "长按拖动",
+      "description": "开启后需长按灵动岛后再拖动，关闭则触摸后可直接拖动"
+    },
+    "dynamicIslandLimitBounds": {
+      "label": "限制在屏幕内",
+      "description": "拖拽时把窗口边界限制在当前屏幕的工作区范围内"
+    },
+    "dynamicIslandAlwaysShowSongInfo": {
+      "label": "显示封面与歌曲信息",
+      "description": "开启后封面位置显示专辑封面，无歌词行时显示歌曲名与艺术家"
+    },
+    "dynamicIslandPosX": {
+      "label": "X 坐标",
+      "description": "悬浮窗水平位置（绝对像素，0 表示屏幕水平居中）"
+    },
+    "dynamicIslandPosY": {
+      "label": "Y 坐标",
+      "description": "悬浮窗垂直位置（绝对像素，0 表示顶部吸附）"
+    },
+    "dynamicIslandMaxWidth": {
+      "label": "最大宽度",
+      "description": "窗口伸缩上限（像素，0 表示默认 70% 屏宽）；超出后歌词文本水平滚动"
     },
     "taskbarLyricEnabled": {
       "label": "开启任务栏歌词",
@@ -1528,6 +1734,66 @@
       "slide": "滑动",
       "zoom": "缩放"
     },
+    "wavyProgressBar": {
+      "label": "波浪进度条",
+      "description": "播放进度条使用 Android 13 风格的波浪动画效果"
+    },
+    "appIcon": {
+      "label": "图标颜色",
+      "description": "切换桌面图标配色，自动适配深浅色模式；更换后桌面图标可能需要片刻刷新",
+      "green": "绿色（默认）",
+      "red": "红色",
+      "blue": "蓝色",
+      "purple": "紫色",
+      "orange": "橙色",
+      "pink": "粉色"
+    },
+    "lanShare": {
+      "menuLabel": "局域网页面流转",
+      "mainToggle": "局域网分享模式",
+      "mainToggleDesc": "开启后，局域网内其他设备可通过浏览器访问本机服务；关闭后仅允许本机访问，所有 API 接口拒绝外部请求",
+      "serverInfo": "服务地址",
+      "noNetwork": "未检测到局域网连接",
+      "deviceList": "从设备",
+      "noDevices": "暂无从设备打开主机页面",
+      "ipPlaceholder": "设备 IP 地址",
+      "namePlaceholder": "设备名称（可选）",
+      "quickFill": "本机 IP：",
+      "shareCollab": "允许协同",
+      "shareLogin": "共享登录",
+      "shareUserInfo": "共享用户信息",
+      "shareUserInfoDesc": "授权设备可使用本机登录的账号播放在线歌曲",
+      "collabToggle": "局域网协同广播",
+      "collabToggleDesc": "将播放状态实时广播到局域网，从设备可同步收听并遥控主机（播放/暂停/切歌/进度/速度/音调），连接经 token 鉴权",
+      "joinTitle": "作为从设备加入",
+      "joinDesc": "输入主机 IP，主机允许此设备协同后，将实时同步歌曲、进度和歌词，并可遥控主机",
+      "joinBtn": "加入",
+      "leaveBtn": "断开",
+      "joined": "已加入主机",
+      "hostIpPlaceholder": "主机 IP 地址（如 192.168.1.10）",
+      "roleChooser": {
+        "title": "选择进入方式",
+        "desc": "检测到你正通过浏览器访问主机页面，请选择本设备的角色",
+        "receiver": "以从设备进入",
+        "receiverDesc": "实时同步主机播放的歌曲、进度与歌词，可遥控主机播放/暂停/切歌/进度/速度/音调",
+        "host": "以主设备进入",
+        "hostDesc": "作为独立设备使用，自行播放，不与主机同步"
+      },
+      "toast": {
+        "enabled": "局域网分享已开启",
+        "disabled": "局域网分享已关闭",
+        "collabEnabled": "协同广播已开启",
+        "collabDisabled": "协同广播已关闭",
+        "invalidIp": "请输入合法的 IPv4 地址",
+        "deviceAdded": "设备已添加",
+        "securityWarning": "已通过 token 鉴权保护连接安全，请注意仅在可信网络内使用",
+        "shareEnabled": "用户信息共享已开启",
+        "shareDisabled": "用户信息共享已关闭",
+        "joined": "已加入主机，开始同步",
+        "left": "已断开主机同步",
+        "receiverCannotBroadcast": "当前作为从设备同步中，请先断开主机再开启本机广播"
+      }
+    },
     "sidebarCollapsed": {
       "label": "折叠侧边栏",
       "description": "将侧边栏折叠为图标模式"
@@ -1574,6 +1840,9 @@
       "modeHint": "下方所有字段统一使用该方式",
       "modeSelect": "手动选择",
       "modeCustom": "自定义字体",
+      "importFont": "导入字体",
+      "importSuccess": "成功导入字体：{name}",
+      "importFailed": "字体导入失败，请重试",
       "resetRow": "恢复默认",
       "fieldLabel": "{name}字体",
       "groups": {
@@ -1773,7 +2042,12 @@
       "restarted": "服务已重启",
       "portInUse": "端口 {port} 已被占用，请换一个",
       "running": "服务运行中",
-      "stopped": "服务未运行"
+      "pendingChange": "待重启",
+      "pendingChangeHint": "配置已变更，重启服务后生效",
+      "endpoint": "服务地址",
+      "stopped": "服务未运行",
+      "token": "访问令牌",
+      "tokenHint": "局域网客户端访问 REST 与 WebSocket 时需携带此令牌"
     },
     "mcpEnabled": {
       "label": "启用 MCP 服务",
@@ -1874,7 +2148,8 @@
       "button": "重置",
       "confirmTitle": "重置设置？",
       "confirmDesc": "全部设置项将还原为默认值，操作不可恢复",
-      "done": "设置已重置"
+      "done": "设置已重置",
+      "failed": "重置失败"
     },
     "resetAll": {
       "label": "清除全部数据",
@@ -1957,18 +2232,23 @@
         "homepage": "主页"
       },
       "grant": {
-        "network": { "label": "联网", "desc": "插件可发起网络请求" },
-        "control": { "label": "控制", "desc": "插件可控制播放器" },
-        "ui": { "label": "界面", "desc": "插件可扩展或修改应用界面" }
+        "network": {
+          "label": "联网",
+          "desc": "插件可发起网络请求"
+        },
+        "control": {
+          "label": "控制",
+          "desc": "插件可控制播放器"
+        },
+        "ui": {
+          "label": "界面",
+          "desc": "插件可扩展或修改应用界面"
+        }
       }
     },
     "pluginManager": {
       "label": "插件管理",
       "description": "导入、启用或卸载扩展脚本"
-    },
-    "enableLocalTTMLOverride": {
-      "label": "启用本地 TTML 歌词库",
-      "description": "从指定目录按歌曲元信息匹配 .ttml，命中后优先于在线歌词"
     },
     "localLyricRepoDir": {
       "label": "歌词库目录",
@@ -2011,7 +2291,14 @@
       "songs": "歌曲文件",
       "lyric": "歌词内容缓存",
       "lyricTTML": "TTML 歌词缓存",
-      "lyricMatch": "歌词匹配缓存"
+      "lyricMatch": "歌词匹配缓存",
+      "lyrics": "歌词缓存",
+      "list-covers": "列表封面缓存",
+      "list-data": "列表数据缓存"
+    },
+    "enableCache": {
+      "label": "启用缓存",
+      "description": "开启后封面、列表数据、歌曲音频等将缓存至本地"
     },
     "enableSongCache": {
       "label": "歌曲缓存",
@@ -2230,6 +2517,7 @@
     "TAG_READ_FAILED": "读取标签失败",
     "TAG_WRITE_FAILED": "写入标签失败",
     "MAX_CONSECUTIVE_FAILURES": "连续播放失败次数过多",
+    "WRITABLE_PERMISSION_REQUIRED": "目录缺少写权限，请重新选取本地音乐目录",
     "UNKNOWN": "操作失败"
   },
   "tagEditor": {

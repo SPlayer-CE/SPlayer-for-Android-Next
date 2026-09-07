@@ -190,13 +190,23 @@
   "uiZoom": {
     "title": "Interface Zoom",
     "range": "Range: 50% - 200%",
-    "reset": "Reset to default"
+    "reset": "Reset to default",
+    "deviceMode": "Device Form",
+    "deviceModeHint": "Manually switch if auto-detection fails",
+    "deviceModeAuto": "Auto",
+    "deviceModePhone": "Phone Mode",
+    "deviceModePad": "Tablet Mode",
+    "deviceModeConfirmTitle": "Switch Device Form",
+    "deviceModeConfirmContent": "Manual switching may cause UI issues. Do not use if everything works normally.",
+    "deviceModeConfirm": "Continue"
   },
   "nav": {
     "home": "Home",
     "library": "Library",
     "liked": "Liked Songs",
+    "playlists": "My Playlists",
     "history": "Play History",
+    "recent": "Recent",
     "download": "Downloads",
     "favorites": "Favorites",
     "cloud": "My Cloud",
@@ -381,6 +391,17 @@
     "cookiePlaceholder": "Paste cookie, must contain MUSIC_U=xxx;",
     "cookieInvalid": "Invalid cookie. MUSIC_U is required.",
     "cookieConfirm": "Sign in",
+    "phoneLogin": "Captcha Login",
+    "phoneLoginBtn": "Sign in",
+    "phoneCountry": "Country/Region",
+    "phonePlaceholder": "Enter phone number",
+    "phoneCaptchaPlaceholder": "Enter SMS code",
+    "phoneSendCaptcha": "Send code",
+    "phoneCaptchaSent": "Code sent",
+    "phoneCaptchaSendFailed": "Failed to send code, please retry",
+    "phoneCaptchaInvalid": "Invalid code, please retry",
+    "phoneEmpty": "Please enter phone number first",
+    "phoneEmptyFields": "Please fill in phone and code",
     "success": "Signed in",
     "failed": "Sign-in failed, please try again",
     "unknownUser": "Unknown user",
@@ -514,6 +535,32 @@
       "on": "Shuffle on",
       "off": "Shuffle off"
     }
+  },
+  "quickToggle": {
+    "trigger": "More quick actions",
+    "group": {
+      "quick": "Quick Toggles",
+      "amll": "Lyric Renderer"
+    },
+    "spectrum": "Audio Spectrum",
+    "spectrumPc": "PC",
+    "spectrumAndroid": "Android",
+    "wordHighlight": "Word Highlight",
+    "onlineTTML": "Online TTML Lyrics",
+    "volume": "Volume",
+    "fontSize": "Lyric Font Size",
+    "fontSizeLandscape": "Landscape Font Size",
+    "landscapeCoverOffset": "Landscape Cover Position",
+    "landscapeLyricPadding": "Landscape Lyric Margin",
+    "lyricPadding": "Lyric Margin",
+    "renderModeDefault": "Default",
+    "renderModeAmll": "AMLL",
+    "renderModeKotlin": "Kotlin",
+    "amllEngineWarning": "This mode will increase heat and power consumption",
+    "amllSpring": "Spring Effect",
+    "amllDynamicBg": "AMLL Dynamic Background",
+    "hidePassed": "Hide Played Lines",
+    "lyricBlur": "Lyric Blur"
   },
   "songList": {
     "title": "Title",
@@ -688,14 +735,34 @@
     "empty": "No daily recommendations available",
     "needLogin": "Sign in to see daily recommendations"
   },
+  "myPlaylists": {
+    "title": "My Playlists",
+    "create": "New Playlist",
+    "needLogin": "Sign in to see your online playlists",
+    "emptyLocal": "No local playlists yet — create one first",
+    "emptyOnline": "No online playlists yet — create one first"
+  },
   "favorites": {
     "title": "Favorites",
     "empty": "Nothing here yet — go explore and save something you like",
+    "emptyVideo": "No saved videos yet",
+    "emptyRadio": "No saved podcasts yet",
     "notLogin": "Sign in to see your favorites",
+    "totalVideos": "{count} videos",
+    "totalRadios": "{count} podcasts",
+    "unsupportedVideo": "Video details are not supported yet",
+    "unsupportedRadio": "Podcast details are not supported yet",
+    "playlistGroups": {
+      "created": "Created by me",
+      "subscribed": "Saved by me"
+    },
     "tabs": {
+      "liked": "Liked",
       "playlist": "Playlists",
       "album": "Albums",
-      "artist": "Artists"
+      "artist": "Artists",
+      "video": "Videos",
+      "radio": "Podcasts"
     }
   },
   "library": {
@@ -718,6 +785,7 @@
   "settings": {
     "title": "Settings",
     "subtitle": "Tailor your experience",
+    "desktopOnly": "Desktop only",
     "search": "Search settings...",
     "group": {
       "general": "General",
@@ -733,6 +801,7 @@
       "localCache": "Local & Cache",
       "plugins": "Plugin Manager",
       "other": "Other",
+      "lanShare": "LAN Sharing",
       "about": "About"
     },
     "section": {
@@ -756,6 +825,7 @@
       "lyricAMLLOptimize": "Lyric Optimization",
       "lyricSpring": "Spring Animation",
       "lyricLayout": "Layout & Opacity",
+      "externalLyricInputMode": "Input Mode",
       "desktopLyric": "Desktop Lyric",
       "dynamicIsland": "Dynamic Island Lyric",
       "taskbarLyric": "Taskbar Lyric",
@@ -765,8 +835,12 @@
       "font": "Fonts",
       "playerBar": "Player Bar",
       "nowPlaying": "Now Playing",
+      "mobilePlayer": "Player Progress Style",
+      "appIcon": "App Icon",
+      "lanShare": "LAN Sharing",
       "media": "Media Controls",
       "device": "Output Device",
+      "androidSystem": "Android System",
       "hotkeys": "Hotkeys",
       "musicSpectrum": "Music Spectrum",
       "discord": "Discord RPC",
@@ -908,6 +982,22 @@
       "label": "Snap to Nearest Lyric",
       "description": "Automatically snap to the nearest lyric line when adjusting progress"
     },
+    "androidShowStatusBar": {
+      "label": "Show Status Bar",
+      "description": "Show the system status bar inside the app; disable for immersive mode"
+    },
+    "androidHidePortraitNavBar": {
+      "label": "Hide Navigation Bar",
+      "description": "Hide the system navigation bar and gesture bar; swipe up to reveal temporarily"
+    },
+    "androidMediaControllerEnabled": {
+      "label": "Notification Media Control",
+      "description": "Show playback controls in the system notification bar"
+    },
+    "androidAllowMixWithOthers": {
+      "label": "Mix With Other Apps",
+      "description": "Allow audio playback simultaneously with other apps"
+    },
     "enableSpectrum": {
       "label": "Enable Spectrum",
       "description": "Real-time spectrum analysis adds some CPU load — consider disabling on lower-power devices"
@@ -919,6 +1009,12 @@
     "reverseSpectrum": {
       "label": "Reverse Spectrum",
       "description": "When enabled, the frequency of the bars decreases from the center toward the sides; otherwise it increases."
+    },
+    "spectrumAlgorithm": {
+      "label": "Spectrum Algorithm",
+      "description": "PC-aligned uses Hamming window + no overlap + 0dB offset for stronger impact; Android native uses Hann window + 50% overlap for smoother visuals",
+      "pc": "PC Aligned",
+      "android": "Android Native"
     },
     "lyricSourcePreference": {
       "label": "Lyric Source Preference",
@@ -973,6 +1069,14 @@
     "enableOnlineTTMLLyric": {
       "label": "Enable Online TTML Lyrics",
       "description": "Fetch lyrics from AMLL TTML DB. Supports word-level timing, translation, and romanization."
+    },
+    "enableSidecarMatch": {
+      "label": "Match Local Sidecar Lyrics",
+      "description": "Prioritize lyric files in the same folder as the local track matching the filename or metadata."
+    },
+    "enableLocalTTMLOverride": {
+      "label": "Local TTML Repository",
+      "description": "Read .ttml files matching metadata from a specific directory, prioritizing them over online sources."
     },
     "amllDbServer": {
       "label": "AMLL TTML DB Server",
@@ -1057,7 +1161,8 @@
     },
     "lyricEngine": {
       "physics": "Default",
-      "amll": "AMLL"
+      "amll": "AMLL",
+      "kotlin": "Kotlin"
     },
     "confirm": {
       "highResourceTitle": "Resource-Intensive Feature",
@@ -1067,7 +1172,9 @@
       "testChannelTitle": "Switch to a Test Channel",
       "testChannelContent": "Beta and Alpha channels receive test releases early. Alpha releases may be highly unstable. Switch anyway?",
       "kugouLoginVersionTitle": "Switch KG Login Version",
-      "kugouLoginVersionContent": "After switching, the current credentials will not match the new version. You must log out and scan the QR code again, or VIP privileges and high-quality playback will stop working. Switch anyway?"
+      "kugouLoginVersionContent": "After switching, the current credentials will not match the new version. You must log out and scan the QR code again, or VIP privileges and high-quality playback will stop working. Switch anyway?",
+      "fpsUnlockTitle": "Power & Heat Warning",
+      "fpsUnlockContent": "Unlocking raises frame rate but may increase power consumption and heat. Not recommended for low-end devices. Enable anyway?"
     },
     "useAMSpring": {
       "label": "Spring Animation Debug Switch",
@@ -1137,9 +1244,25 @@
       "label": "Adaptive Font Size",
       "description": "Auto-adjust lyric font size based on window size"
     },
+    "lyricGeneralManualInput": {
+      "label": "Manual Input For This Section",
+      "description": "When enabled, sliders in Content & Style switch to standalone number inputs"
+    },
     "fontSize": {
       "label": "Font Size",
       "description": "Effective when adaptive is off"
+    },
+    "fontSizeLandscape": {
+      "label": "Landscape Font Size",
+      "description": "Independent lyric font size for phone landscape split layout"
+    },
+    "landscapeCoverOffsetX": {
+      "label": "Landscape Cover Position",
+      "description": "Adjust the horizontal position of the cover area in phone landscape split layout"
+    },
+    "landscapeLyricPaddingX": {
+      "label": "Landscape Lyric Margin",
+      "description": "Adjust lyric margins on phone landscape and tablets; negative values expand outward"
     },
     "fontWeight": {
       "label": "Font Weight",
@@ -1180,6 +1303,10 @@
       "label": "Word Highlight",
       "description": "Show word-by-word lyric highlight progress"
     },
+    "androidLyricUnlockFpsLimit": {
+      "label": "Unlock Lyric FPS Limit",
+      "description": "Unlocks the frame rate limit, but only effective on some devices"
+    },
     "enableFloatAnimation": {
       "label": "Word Float",
       "description": "Active words float up slightly"
@@ -1207,6 +1334,10 @@
       "noBounce": "No Bounce",
       "custom": "Custom"
     },
+    "lyricSpringManualInput": {
+      "label": "Manual Input For This Section",
+      "description": "When enabled, sliders in Spring Animation switch to standalone number inputs"
+    },
     "springMass": {
       "label": "Mass",
       "description": "Higher values make motion sluggish with more inertia"
@@ -1218,6 +1349,10 @@
     "springStiffness": {
       "label": "Stiffness",
       "description": "Higher values make spring snap back faster"
+    },
+    "lyricLayoutManualInput": {
+      "label": "Manual Input For This Section",
+      "description": "When enabled, sliders in Layout & Opacity switch to standalone number inputs"
     },
     "alignPosition": {
       "label": "Align Position",
@@ -1234,6 +1369,10 @@
     "desktopLyricEnabled": {
       "label": "Enable Desktop Lyric",
       "description": "Show a floating lyric window on desktop"
+    },
+    "externalLyricManualInput": {
+      "label": "Manually Input Values In This Area",
+      "description": "When enabled, font size and font weight on this page switch to standalone number inputs"
     },
     "desktopLyricFontSize": {
       "label": "Font Size",
@@ -1315,9 +1454,9 @@
       "label": "Enable Dynamic Island",
       "description": "Show a compact floating lyric window at the top of the screen; drag it anywhere"
     },
-    "dynamicIslandScale": {
-      "label": "Scale",
-      "description": "Scale window height and font size together; 100% is the default size"
+    "dynamicIslandHeight": {
+      "label": "Window Height",
+      "description": "Dynamic island main row height (dp); larger value makes the window taller"
     },
     "dynamicIslandFontWeight": {
       "label": "Font Weight",
@@ -1369,9 +1508,65 @@
       "label": "Non-Occlusive Mode",
       "description": "Click-through window; hide on hover"
     },
-    "dynamicIslandUseCSSDrag": {
-      "label": "Enable CSS Drag",
-      "description": "Enable CSS-based drag, recommended for Wayland environments"
+    "dynamicIslandFontSize": {
+      "label": "Font Size",
+      "description": "Dynamic Island lyric text size (px)"
+    },
+    "dynamicIslandAutoGenerateWordByWord": {
+      "label": "Auto-generate Word Effect",
+      "description": "When off, only real per-word lyrics apply"
+    },
+    "dynamicIslandStrokeColor": {
+      "label": "Stroke Color",
+      "description": "Outline color of lyric text; transparent means stroke is off"
+    },
+    "dynamicIslandBackgroundMask": {
+      "label": "Text Background Mask",
+      "description": "Add a translucent background block behind each lyric line for readability"
+    },
+    "dynamicIslandBackgroundMaskColor": {
+      "label": "Mask Color",
+      "description": "Color and opacity of the text background mask"
+    },
+    "dynamicIslandAlign": {
+      "label": "Alignment",
+      "description": "Horizontal alignment of lyric text",
+      "left": "Left",
+      "center": "Center",
+      "right": "Right",
+      "justify": "Justify"
+    },
+    "dynamicIslandAnimation": {
+      "label": "Line Transition",
+      "description": "Enable slide-in / slide-out animation when lyric line switches"
+    },
+    "dynamicIslandLocked": {
+      "label": "Lock Window",
+      "description": "Make window click-through and non-draggable"
+    },
+    "dynamicIslandDragByLongPress": {
+      "label": "Long-Press to Drag",
+      "description": "Require a long press before dragging the Dynamic Island; when off, dragging starts immediately"
+    },
+    "dynamicIslandLimitBounds": {
+      "label": "Confine to Screen",
+      "description": "Clamp window position within the current display's work area while dragging"
+    },
+    "dynamicIslandAlwaysShowSongInfo": {
+      "label": "Show Cover and Song Info",
+      "description": "Show album cover at cover slot and track title/artist when no active lyric line"
+    },
+    "dynamicIslandPosX": {
+      "label": "X Position",
+      "description": "Horizontal position in pixels (0 = screen center)"
+    },
+    "dynamicIslandPosY": {
+      "label": "Y Position",
+      "description": "Vertical position in pixels (0 = top snap)"
+    },
+    "dynamicIslandMaxWidth": {
+      "label": "Max Width",
+      "description": "Maximum window width in pixels (0 = default 70% screen); lyrics scroll horizontally beyond this"
     },
     "taskbarLyricEnabled": {
       "label": "Enable Taskbar Lyric",
@@ -1540,6 +1735,66 @@
       "slide": "Slide",
       "zoom": "Zoom"
     },
+    "wavyProgressBar": {
+      "label": "Wavy Progress Bar",
+      "description": "Use Android 13 style wavy animation for the playback progress bar"
+    },
+    "appIcon": {
+      "label": "Icon Color",
+      "description": "Switch the launcher icon color with automatic dark/light mode support; the home screen icon may take a moment to refresh",
+      "green": "Green (Default)",
+      "red": "Red",
+      "blue": "Blue",
+      "purple": "Purple",
+      "orange": "Orange",
+      "pink": "Pink"
+    },
+    "lanShare": {
+      "menuLabel": "LAN Page Transfer",
+      "mainToggle": "LAN Share Mode",
+      "mainToggleDesc": "Allow other devices on the local network to access this device's service via browser; when disabled, only localhost is allowed and all API endpoints reject external requests",
+      "serverInfo": "Service Address",
+      "noNetwork": "No LAN connection detected",
+      "deviceList": "Receiver Devices",
+      "noDevices": "No receiver has opened the host page",
+      "ipPlaceholder": "Device IP address",
+      "namePlaceholder": "Device name (optional)",
+      "quickFill": "Local IP: ",
+      "shareCollab": "Allow Sync",
+      "shareLogin": "Share Login",
+      "shareUserInfo": "Share User Info",
+      "shareUserInfoDesc": "Authorized devices can play online songs using the host's logged-in account",
+      "collabToggle": "LAN Collaboration Broadcast",
+      "collabToggleDesc": "Broadcast playback state to LAN in real-time; receivers can sync and remote-control the host (play/pause/skip/seek/speed/pitch), connections are token-authenticated",
+      "joinTitle": "Join as Receiver",
+      "joinDesc": "Enter the host IP. Once the host allows this device, songs, progress, and lyrics will sync and remote controls will be enabled",
+      "joinBtn": "Join",
+      "leaveBtn": "Disconnect",
+      "joined": "Joined host",
+      "hostIpPlaceholder": "Host IP address (e.g. 192.168.1.10)",
+      "roleChooser": {
+        "title": "Choose how to enter",
+        "desc": "You're viewing the host page in a browser. Pick this device's role.",
+        "receiver": "Enter as receiver",
+        "receiverDesc": "Mirror the host's song, progress and lyrics; remote-control play/pause/skip/seek/speed/pitch",
+        "host": "Enter as standalone",
+        "hostDesc": "Act as an independent device; play on your own, no sync with the host."
+      },
+      "toast": {
+        "enabled": "LAN sharing enabled",
+        "disabled": "LAN sharing disabled",
+        "collabEnabled": "Collaboration broadcast enabled",
+        "collabDisabled": "Collaboration broadcast disabled",
+        "invalidIp": "Please enter a valid IPv4 address",
+        "deviceAdded": "Device added",
+        "securityWarning": "Connections are protected by token authentication; please use only on trusted networks",
+        "shareEnabled": "User info sharing enabled",
+        "shareDisabled": "User info sharing disabled",
+        "joined": "Joined host, syncing started",
+        "left": "Disconnected from host sync",
+        "receiverCannotBroadcast": "This device is syncing as a receiver. Disconnect from the host before broadcasting."
+      }
+    },
     "sidebarCollapsed": {
       "label": "Collapse Sidebar",
       "description": "Collapse the sidebar to icon-only mode"
@@ -1586,6 +1841,9 @@
       "modeHint": "All fields below use this method",
       "modeSelect": "Manual pick",
       "modeCustom": "Custom font",
+      "importFont": "Import font",
+      "importSuccess": "Imported font: {name}",
+      "importFailed": "Font import failed, please try again",
       "resetRow": "Reset to default",
       "fieldLabel": "{name} font",
       "groups": {
@@ -1785,7 +2043,12 @@
       "restarted": "Server restarted",
       "portInUse": "Port {port} is already in use, pick another",
       "running": "Server is running",
-      "stopped": "Server not running"
+      "pendingChange": "Pending restart",
+      "pendingChangeHint": "Settings changed, restart the server to apply",
+      "endpoint": "Address",
+      "stopped": "Server not running",
+      "token": "Access token",
+      "tokenHint": "LAN clients must send this token when calling REST or WebSocket endpoints"
     },
     "mcpEnabled": {
       "label": "Enable MCP server",
@@ -1886,7 +2149,8 @@
       "button": "Reset",
       "confirmTitle": "Reset settings?",
       "confirmDesc": "All settings will be restored to their defaults. This cannot be undone.",
-      "done": "Settings have been reset"
+      "done": "Settings have been reset",
+      "failed": "Reset failed"
     },
     "resetAll": {
       "label": "Clear All Data",
@@ -1978,10 +2242,6 @@
       "label": "Plugin Manager",
       "description": "Import, enable, or uninstall extension scripts"
     },
-    "enableLocalTTMLOverride": {
-      "label": "Enable Local TTML Library",
-      "description": "Match .ttml in a chosen folder by song metadata; takes priority over online lyrics when found"
-    },
     "localLyricRepoDir": {
       "label": "Library Folder",
       "description": "Choose a folder containing TTML lyrics; the app searches it by metadata",
@@ -2023,7 +2283,14 @@
       "songs": "Song Files",
       "lyric": "Lyric Content Cache",
       "lyricTTML": "TTML Lyric Cache",
-      "lyricMatch": "Lyric Match Cache"
+      "lyricMatch": "Lyric Match Cache",
+      "lyrics": "Lyric Cache",
+      "list-covers": "List Cover Cache",
+      "list-data": "List Data Cache"
+    },
+    "enableCache": {
+      "label": "Enable Cache",
+      "description": "Cache covers, list data, and song audio locally when enabled"
     },
     "enableSongCache": {
       "label": "Song Cache",
@@ -2242,6 +2509,7 @@
     "TAG_READ_FAILED": "Failed to read tags",
     "TAG_WRITE_FAILED": "Failed to write tags",
     "MAX_CONSECUTIVE_FAILURES": "Too many consecutive playback failures",
+    "WRITABLE_PERMISSION_REQUIRED": "Directory lacks write permission, please re-select the local music folder",
     "UNKNOWN": "Operation failed"
   },
   "tagEditor": {

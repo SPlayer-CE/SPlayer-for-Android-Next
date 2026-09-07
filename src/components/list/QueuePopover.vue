@@ -5,14 +5,24 @@ import { useQueuePanel } from "@/composables/useQueuePanel";
 import { useDragSort } from "@/composables/useDragSort";
 import * as player from "@/core/player";
 
+const props = withDefaults(
+  defineProps<{
+    dragSort?: boolean;
+  }>(),
+  {
+    dragSort: true,
+  },
+);
+
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 const listRef = shallowRef<SVirtualListExposed | null>(null);
 const {
-  statusStore,
   queue,
   queueLength,
+  activePlayIndex,
+  lanRemoteQueue,
   formatArtists,
   playAt,
   removeAt,
@@ -31,7 +41,11 @@ const {
 } = useDragSort({
   virtualListRef: listRef,
   itemCount: queueLength,
-  onReorder: (from, to) => player.moveInQueue(from, to),
+  // 从设备不可重排主机队列，拖动仅作视觉跟随不入库
+  onReorder: (from, to) => {
+    if (lanRemoteQueue.value) return;
+    player.moveInQueue(from, to);
+  },
   triggerMode: "longpress",
 });
 
@@ -49,7 +63,7 @@ const onClear = (): void => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex h-full min-h-0 flex-col">
     <div
       class="shrink-0 flex items-start justify-between gap-2 px-3 pt-3.5 pb-2.5 border-b border-b-solid border-b-on-surface/8"
     >
@@ -70,6 +84,7 @@ const onClear = (): void => {
           <template #icon><IconLucideLocate /></template>
         </SButton>
         <SButton
+          v-if="!lanRemoteQueue"
           variant="ghost"
           circle
           size="small"
@@ -92,10 +107,10 @@ const onClear = (): void => {
       <SVirtualList
         ref="listRef"
         :items="queue"
-        :item-height="56"
+        :item-height="60"
         item-fixed
         height="100%"
-        :default-scroll-index="Math.max(0, statusStore.playIndex)"
+        :default-scroll-index="Math.max(0, activePlayIndex)"
         :get-item-key="(item: Track) => item.id"
       >
         <template #default="{ item, index }: { item: Track; index: number }">
@@ -108,30 +123,43 @@ const onClear = (): void => {
               ]"
             />
             <div
-              class="group flex items-center gap-2.5 px-2 h-13 rounded-md cursor-pointer transition-[background-color,opacity] duration-150"
+              class="group flex items-center gap-3 px-2 h-14 rounded-lg cursor-pointer transition-[background-color,opacity] duration-150 relative overflow-hidden"
               :class="[
-                index === statusStore.playIndex
-                  ? 'bg-primary/15 text-primary'
+                index === activePlayIndex
+                  ? 'bg-primary/20 text-primary'
                   : 'hover:bg-on-surface/8 active:bg-on-surface/14',
                 isDragging && draggedIndex === index ? 'opacity-30' : 'opacity-100',
               ]"
               @click="onPlay(index)"
-              @mousedown="handlePointerDown($event, index, item.title)"
-              @touchstart.passive="handlePointerDown($event, index, item.title)"
+              @mousedown="
+                props.dragSort && !lanRemoteQueue && handlePointerDown($event, index, item.title)
+              "
+              @touchstart.passive="
+                props.dragSort && !lanRemoteQueue && handlePointerDown($event, index, item.title)
+              "
             >
-              <SImg :src="item.cover" class="size-9 rounded shrink-0" />
+              <!-- 当前播放左侧指示条 -->
+              <div
+                v-if="index === activePlayIndex"
+                class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-7 rounded-full bg-primary"
+              />
+              <SImg
+                :src="item.cover"
+                cache-type="list-covers"
+                class="size-10 rounded shrink-0"
+                :class="index === activePlayIndex ? 'ring-2 ring-primary/50' : ''"
+              />
               <div class="flex-1 min-w-0">
-                <div class="text-xs truncate font-medium leading-tight">{{ item.title }}</div>
+                <div class="text-[13px] truncate font-medium leading-tight">{{ item.title }}</div>
                 <div
                   class="text-[11px] truncate leading-tight mt-0.5"
-                  :class="
-                    index === statusStore.playIndex ? 'text-primary/70' : 'text-on-surface-variant'
-                  "
+                  :class="index === activePlayIndex ? 'text-primary/70' : 'text-on-surface-variant'"
                 >
                   {{ formatArtists(item.artists) }}
                 </div>
               </div>
               <SButton
+                v-if="!lanRemoteQueue"
                 variant="ghost"
                 circle
                 size="tiny"

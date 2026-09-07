@@ -7,7 +7,6 @@ import { broadcast } from "@main/utils/broadcast";
 import { isMac } from "@main/utils/config";
 import { setTrayDynamicIsland } from "@main/services/tray";
 import { isAppQuitting } from "@main/utils/lifecycle";
-import { DYNAMIC_ISLAND_BASE_HEIGHT } from "@shared/defaults/settings";
 
 let dynamicIslandWindow: BrowserWindow | null = null;
 
@@ -494,8 +493,7 @@ export const createDynamicIslandWindow = (): BrowserWindow => {
   const initialNotch = getNotchMetrics(initialDisplay);
   cachedSize.width = clampWidth(INITIAL_WIDTH, initialDisplay);
   cachedSize.height = clampHeight(
-    (floatingPos ? 0 : fusionEnabled ? initialNotch.height + NOTCH_TOP_FILL : 0) +
-      DYNAMIC_ISLAND_BASE_HEIGHT * config.scale,
+    (floatingPos ? 0 : fusionEnabled ? initialNotch.height + NOTCH_TOP_FILL : 0) + config.height,
   );
 
   let initialPos: { x: number; y: number };

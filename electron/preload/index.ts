@@ -1,5 +1,5 @@
 import os from "os";
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
 import { electronAPI } from "@electron-toolkit/preload";
 import type { ExternalApiStatus, McpStatus, TaskbarLyricSettings } from "@shared/types/settings";
 import type {
@@ -132,6 +132,8 @@ const api = {
     dispatch: (type: string) => ipcRenderer.send("player:dispatch", type),
     // 订阅主进程推送的播放事件
     onEvent: (callback: (event: unknown) => void) => subscribe("player:event", callback),
+    // 桌面端无需解锁音频（无自动播放限制）；提供 no-op 以满足 PlayerApi 契约
+    unlockAudio: () => Promise.resolve(),
   },
   system: {
     installType: getInstallType(),
@@ -159,11 +161,16 @@ const api = {
       subscribe<{ category?: string; highlight?: string }>("system:openSettings", callback),
     // 获取系统已安装字体
     listFonts: () => ipcRenderer.invoke("system:listFonts"),
+    importFont: () => Promise.resolve({ success: false, error: "NOT_SUPPORTED_ON_DESKTOP" }),
     // 拉远端字节回渲染层
     fetchRemoteBytes: (url: string) => ipcRenderer.invoke("system:fetchRemoteBytes", url),
     // 保存文件到下载目录
     saveFile: (data: ArrayBuffer, defaultName: string) =>
       ipcRenderer.invoke("system:saveFile", data, defaultName),
+    // 写文本到系统剪贴板（clipboard 为同步 API，包装为 Promise 对齐 bridge 类型）
+    writeClipboardText: (text: string) => Promise.resolve(clipboard.writeText(text)),
+    // 读取系统剪贴板文本
+    readClipboardText: () => Promise.resolve(clipboard.readText()),
     // 重启应用
     relaunch: () => ipcRenderer.invoke("system:relaunch"),
     // 测试当前网络代理

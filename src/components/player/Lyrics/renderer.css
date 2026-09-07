@@ -13,8 +13,8 @@
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  padding-left: var(--lp-padding-x, 1em);
-  padding-right: var(--lp-padding-x, 1em);
+  padding-left: var(--lp-padding-x, 0.7em);
+  padding-right: var(--lp-padding-x, 0.6em);
 }
 
 /* ---- 歌词行 ---- */
@@ -25,7 +25,7 @@
   left: 0;
   width: 100%;
   box-sizing: border-box;
-  padding: var(--lp-line-padding, 0.4em 1em);
+  padding: var(--lp-line-padding, 0.4em 0.6em 0.4em 0.6em);
   color: var(--lp-color, #fff);
   font-size: inherit;
   font-weight: inherit;
@@ -45,8 +45,8 @@
   /* 背景行（和声） */
   &.bg {
     font-size: var(--lp-bg-font-size, 0.75em);
-    padding-left: calc(1em / 0.75);
-    padding-right: calc(1em / 0.75);
+    padding-left: calc(0.6em / 0.75);
+    padding-right: calc(0.6em / 0.75);
     transform-origin: left top;
     opacity: 0.0001;
     transition: opacity 0.25s;
@@ -143,18 +143,34 @@
   position: relative;
   max-width: 100%;
   word-break: normal;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
   pointer-events: auto;
   overflow: visible;
 
-  & > span {
+  &.lp-balanced {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  & > span,
+  & .lp-word-block > span {
     display: inline-block;
-    white-space: pre-wrap;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  & .lp-balanced-break {
+    display: block;
+  }
+
+  & .lp-word-block {
+    display: inline-block;
+    white-space: nowrap;
     vertical-align: bottom;
   }
 
   /* 强调单词包裹层（逐字符拆分的容器） */
-  & > span.lp-emp-wrapper {
+  & .lp-emp-wrapper {
     display: inline-block;
     white-space: pre;
     vertical-align: bottom;

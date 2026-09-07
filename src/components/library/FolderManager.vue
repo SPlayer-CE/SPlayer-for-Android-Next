@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useLibraryStore } from "@/stores/library";
 import { toast } from "@/composables/useToast";
+import { safDirName, safToHumanPath } from "@/utils/safUri";
 import IconLucideFolder from "~icons/lucide/folder";
 import IconLucideFolderPlus from "~icons/lucide/folder-plus";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
@@ -14,10 +15,7 @@ const emit = defineEmits<{
   (e: "removed", dir: string): void;
 }>();
 
-const folderName = (dir: string): string => {
-  const parts = dir.replace(/\\/g, "/").split("/").filter(Boolean);
-  return parts[parts.length - 1] || dir;
-};
+const folderName = safDirName;
 
 const adding = ref(false);
 const removingDir = ref<string | null>(null);
@@ -69,7 +67,7 @@ onMounted(() => {
       <IconLucideFolder class="size-4 text-on-surface-variant shrink-0" />
       <div class="flex-1 min-w-0">
         <div class="text-sm truncate text-on-surface">{{ folderName(dir) }}</div>
-        <div class="text-xs truncate text-on-surface-variant/60">{{ dir }}</div>
+        <div class="text-xs truncate text-on-surface-variant/60">{{ safToHumanPath(dir) }}</div>
       </div>
       <SButton variant="ghost" size="small" @click="confirmRemove(dir)">
         <template #icon><IconLucideTrash2 /></template>
@@ -88,7 +86,9 @@ onMounted(() => {
     <SDialog v-model:open="removeConfirmOpen" :title="t('library.removeFolder')">
       <template #default>
         <p class="text-sm text-on-surface-variant">{{ t("library.removeFolderConfirm") }}</p>
-        <p class="text-xs text-on-surface-variant/60 mt-2 break-all">{{ removingDir }}</p>
+        <p class="text-xs text-on-surface-variant/60 mt-2 break-all">
+          {{ removingDir ? safToHumanPath(removingDir) : "" }}
+        </p>
       </template>
       <template #footer="{ close }">
         <SButton variant="secondary" @click="close">
