@@ -229,11 +229,11 @@ Caches: `lyricMatchCache` (fingerprint = title + artists + 5s duration bucket, 3
 
 Render surfaces — pick by target, never mix. The main-player lyric has a three-way component chain (same chain in `FullPlayer/index.vue` and `FullPlayerMobile.vue`, which mounts it twice for portrait/landscape layouts):
 
-| Condition (first match wins) | Component | Renderer |
-|---|---|---|
-| `settings.lyric.engine === "amll"` | `Lyrics/AMLLLyrics.vue` | `@applemusic-like-lyrics/core` `LyricPlayer` (upstream library) |
-| `isAndroid` | `FullPlayer/AndroidMainLyricHost.vue` | dual-mode adapter — see below |
-| everything else (desktop default) | `Lyrics/index.vue` | self-built engine: `Lyrics/engine/` (line/word builders, springs, interlude, `renderer.css`), translation/romaji, `bg.ts`/`poster.ts` |
+| Condition (first match wins)       | Component                             | Renderer                                                                                                                              |
+| ---------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `settings.lyric.engine === "amll"` | `Lyrics/AMLLLyrics.vue`               | `@applemusic-like-lyrics/core` `LyricPlayer` (upstream library)                                                                       |
+| `isAndroid`                        | `FullPlayer/AndroidMainLyricHost.vue` | dual-mode adapter — see below                                                                                                         |
+| everything else (desktop default)  | `Lyrics/index.vue`                    | self-built engine: `Lyrics/engine/` (line/word builders, springs, interlude, `renderer.css`), translation/romaji, `bg.ts`/`poster.ts` |
 
 `AndroidMainLyricHost` resolves its own `renderMode` prop (`settings.lyric.engine === "kotlin" ? "kotlin" : "legacy"`):
 
