@@ -264,7 +264,9 @@ class KotlinApiServer(
     uri == "/api/apis/call" ||
       uri == "/api/apis/setCookie" ||
       uri == "/api/apis/clearSession" ||
-      uri == "/api/apis/openLoginWeb"
+      uri == "/api/apis/openLoginWeb" ||
+      // 插件安装等于向 Node vm 沙箱注入任意代码，必须仅限本机触发，禁止经 LAN 代理
+      uri.startsWith("/api/plugins/install")
 
   private fun extractExternalApiToken(session: IHTTPSession): String {
     val headerToken = session.headers["x-splayer-token"]?.trim().orEmpty()

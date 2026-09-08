@@ -41,6 +41,26 @@ const DEFAULT_PORT = Number(process.env["SP_API_PORT"] || process.env["VITE_SERV
 const DEFAULT_HOST = process.env["SP_API_HOST"] || "0.0.0.0";
 const DEFAULT_AMLL_DB_SERVER =
   process.env["SP_AMLL_DB_SERVER"] || "https://amlldb.bikonoo.com/%p/%s.ttml";
+
+/**
+ * 校验请求自带的 AMLL DB 模板地址：仅接受 http(s) 且非私网 host，
+ * 不合法时回落默认服务，防止被当作 SSRF 跳板探测内网。
+ */
+const resolveTtmlServerTemplate = (server: unknown): string => {
+  if (typeof server !== "string" || !server) return DEFAULT_AMLL_DB_SERVER;
+  try {
+    const parsed = new URL(server);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      !isPrivateDevHost(parsed.hostname)
+    ) {
+      return server;
+    }
+  } catch {
+    /* 非法 URL，回落默认 */
+  }
+  return DEFAULT_AMLL_DB_SERVER;
+};
 const ALLOWED_HEADERS =
   "Content-Type, Authorization, X-Requested-With, Accept, Origin, Range, X-SPlayer-Cookie";
 const EMBEDDED_API_READY_EVENT = "embedded-api-ready";
@@ -273,12 +293,26 @@ const isLoopbackHost = (host: string) => {
 };
 
 const isPrivateDevHost = (host: string) => {
-  return (
-    isLoopbackHost(host) ||
-    host.startsWith("192.168.") ||
-    host.startsWith("10.") ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-  );
+  if (!host) return false;
+  // 去掉 IPv6 字面量方括号（URL.hostname 保留 []）
+  const normalized = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isLoopbackHost(normalized) || normalized === "0.0.0.0") return true;
+  if (
+    normalized.startsWith("192.168.") ||
+    normalized.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized) ||
+    /^169\.254\./.test(normalized)
+  ) {
+    return true;
+  }
+  // IPv6 链路本地 fe80::/10、ULA fc00::/7、未指定地址 ::
+  if (normalized === "::" || /^fe[89ab]/.test(normalized) || /^f[cd]/.test(normalized)) {
+    return true;
+  }
+  // IPv4 映射形式 ::ffff:a.b.c.d —— 还原为 IPv4 再判
+  const mapped = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return isPrivateDevHost(mapped[1]);
+  return false;
 };
 
 const isAllowedLocalOrigin = (origin: string | undefined) => {
@@ -462,54 +496,6 @@ const serveStaticAsset = (
   return true;
 };
 
-const proxyHttpAudio = (
-  request: IncomingMessage,
-  response: ServerResponse,
-  source: string,
-): void => {
-  let parsed: URL;
-  try {
-    parsed = new URL(source);
-  } catch {
-    sendJson(request, response, 400, { error: "invalid audio source" });
-    return;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    sendJson(request, response, 400, { error: "unsupported audio protocol" });
-    return;
-  }
-
-  const client = (parsed.protocol === "https:" ? https : http) as typeof http;
-  const headers: Record<string, string> = { "User-Agent": "SPlayer-Next-Android" };
-  if (request.headers.range) headers.Range = String(request.headers.range);
-
-  const upstreamRequest = client.get(source, { headers }, (upstream: IncomingMessage) => {
-    const statusCode = upstream.statusCode ?? 502;
-    if (statusCode >= 300 && statusCode < 400 && upstream.headers.location) {
-      upstream.resume();
-      const nextUrl = new URL(upstream.headers.location, source).toString();
-      proxyHttpAudio(request, response, nextUrl);
-      return;
-    }
-
-    setCorsHeaders(request, response);
-    response.statusCode = statusCode;
-    for (const [key, value] of Object.entries(upstream.headers)) {
-      if (value === undefined) continue;
-      const lower = key.toLowerCase();
-      if (lower === "connection" || lower === "transfer-encoding") continue;
-      response.setHeader(key, value);
-    }
-    if (!response.hasHeader("Content-Type")) response.setHeader("Content-Type", "audio/mpeg");
-    upstream.pipe(response);
-  });
-
-  upstreamRequest.on("error", () => {
-    if (!response.headersSent) sendJson(request, response, 502, { error: "audio proxy failed" });
-    else response.end();
-  });
-};
-
 /** 远程取字节上限：4MB（封面与小图够用，挡掉异常大资源 OOM） */
 const REMOTE_FETCH_MAX_BYTES = 4 * 1024 * 1024;
 /** 最大重定向跳数 */
@@ -602,10 +588,20 @@ const fetchRemoteBytesSafely = (url: string, redirectsLeft = REMOTE_FETCH_MAX_RE
     );
   });
 
+/** 请求体上限：8MB。Node 与 WebView 同机，无上限时恶意/异常 body 可耗尽内存 */
+const REQUEST_BODY_MAX_BYTES = 8 * 1024 * 1024;
+
 const readRequestBody = async (request: IncomingMessage) => {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > REQUEST_BODY_MAX_BYTES) {
+      request.destroy();
+      throw Object.assign(new Error("REQUEST_BODY_TOO_LARGE"), { status: 413 });
+    }
+    chunks.push(buf);
   }
   return Buffer.concat(chunks).toString("utf8");
 };
@@ -1269,6 +1265,11 @@ const fetchText = (url: string, redirectsLeft = FETCH_TEXT_MAX_REDIRECTS) =>
       resolve(null);
       return;
     }
+    // 每一跳都拦截私网地址：该响应体会回传给调用方，防止经重定向打内网服务（SSRF）
+    if (isPrivateDevHost(parsed.hostname)) {
+      resolve(null);
+      return;
+    }
     const client = (parsed.protocol === "https:" ? https : http) as typeof http;
     const req = client.get(
       url,
@@ -1294,8 +1295,17 @@ const fetchText = (url: string, redirectsLeft = FETCH_TEXT_MAX_REDIRECTS) =>
           return;
         }
         const chunks: Buffer[] = [];
+        let total = 0;
         response.on("data", (chunk: string | Buffer) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          total += buf.length;
+          if (total > REMOTE_FETCH_MAX_BYTES) {
+            req.destroy();
+            chunks.length = 0;
+            resolve(null);
+            return;
+          }
+          chunks.push(buf);
         });
         response.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf8");
@@ -1573,6 +1583,9 @@ interface L1CacheEntry<T> {
 
 const l1Cache = new Map<string, L1CacheEntry<unknown>>();
 
+/** L1 硬上限（条）：歌词/TTML 单条可达数百 KB，无硬上限会在长会话中持续增长 */
+const L1_CACHE_MAX_ENTRIES = 150;
+
 const getL1Cache = <T>(key: string): T | undefined => {
   const entry = l1Cache.get(key);
   if (!entry) return undefined;
@@ -1580,16 +1593,21 @@ const getL1Cache = <T>(key: string): T | undefined => {
     l1Cache.delete(key);
     return undefined;
   }
+  // 命中重插刷新 LRU 新鲜度（Map 迭代按插入序）
+  l1Cache.delete(key);
+  l1Cache.set(key, entry);
   return entry.value as T;
 };
 
 const setL1Cache = <T>(key: string, value: T, ttlMs = 5 * 60 * 1000): void => {
+  l1Cache.delete(key);
   l1Cache.set(key, { value, expireAt: Date.now() + ttlMs });
-  if (l1Cache.size > 1000) {
-    const now = Date.now();
-    for (const [k, v] of l1Cache.entries()) {
-      if (now > v.expireAt) l1Cache.delete(k);
-    }
+  if (l1Cache.size <= L1_CACHE_MAX_ENTRIES) return;
+  // 超限时按最旧顺序强摘（Map 迭代按插入序，命中刷新已保证新项在尾部）
+  while (l1Cache.size > L1_CACHE_MAX_ENTRIES) {
+    const oldest = l1Cache.keys().next().value;
+    if (oldest === undefined) break;
+    l1Cache.delete(oldest);
   }
 };
 
@@ -3047,7 +3065,7 @@ export const startEmbeddedApiServer = async () => {
               sendJson(request, response, 200, { ok: false, error: "missing track id" });
               return;
             }
-            const urlTemplate = server || DEFAULT_AMLL_DB_SERVER;
+            const urlTemplate = resolveTtmlServerTemplate(server);
             for (const id of ids) {
               const cacheKey = `ttml:${platform}:${id}`;
               const l1 = getL1Cache<{ status: "hit" | "negative" | "miss"; content?: string }>(
@@ -3318,8 +3336,15 @@ export const startEmbeddedApiServer = async () => {
       console.warn(`[embedded-api] unhandled API route: ${request.method} ${pathname}`);
       sendJson(request, response, 200, {});
     } catch (err) {
+      const status = (err as { status?: number }).status === 413 ? 413 : 500;
       console.error(`[embedded-api] request handler error for ${request.url}:`, err);
-      sendJson(request, response, 500, { error: "Internal Server Error" });
+      if (!response.headersSent) {
+        sendJson(request, response, status, {
+          error: status === 413 ? "Payload Too Large" : "Internal Server Error",
+        });
+      } else {
+        response.end();
+      }
     }
   });
 
@@ -3330,6 +3355,9 @@ export const startEmbeddedApiServer = async () => {
       resolve();
     });
   });
+  // 慢连接防护：headers 上限 30s；socket 空闲上限需大于 /api/plugins/watch 的 25s 长轮询
+  server.headersTimeout = 30_000;
+  server.timeout = 120_000;
 
   console.log(`[embedded-api] listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}/api`);
   notifyEmbeddedApiReady();

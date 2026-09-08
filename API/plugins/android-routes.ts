@@ -45,48 +45,7 @@ export const handleAndroidPluginRoute = async (
   if (!pathname.startsWith("/api/plugins/")) return null;
   await androidPluginRegistry.ensureInitialized();
 
-  if (
-    pathname === "/api/plugins/watch" ||
-    pathname.startsWith("/api/plugins/watch?") ||
-    pathname.startsWith("/api/plugins/watch&")
-  ) {
-    /**
-     * 硬约束：Kotlin 代理读超时 30000ms，server 等待必须 ≤25000ms，否则会被掐连接。
-     * 此路由为 HTTP 长轮询：无变更时 25s 空轮返回 {events:[], cursor:N}。
-     */
-    let sinceCursor = 0;
-    const rawCursor = (body as Record<string, unknown>).cursor;
-    let cursorSource: unknown = rawCursor;
-    if (cursorSource === undefined && pathname.includes("cursor=")) {
-      const urlMatch = pathname.match(/[?&]cursor=([^&]*)/);
-      if (urlMatch) {
-        try {
-          cursorSource = decodeURIComponent(urlMatch[1]);
-        } catch {
-          cursorSource = urlMatch[1];
-        }
-      }
-    }
-    if (cursorSource !== undefined && cursorSource !== null && String(cursorSource).trim() !== "") {
-      const parsed = Number(cursorSource);
-      sinceCursor = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
-      if (sinceCursor < 0) sinceCursor = 0;
-    }
-    const immediate = androidPluginRegistry.getWatchEventsSince(sinceCursor);
-    if ("reset" in immediate) {
-      return { statusCode: 200, body: { reset: true, cursor: immediate.cursor } };
-    }
-    if (immediate.events.length > 0) {
-      return { statusCode: 200, body: { events: immediate.events, cursor: immediate.cursor } };
-    }
-    // 硬约束：25s 超时 < Kotlin 30s，避免代理掐连接
-    const waited = await androidPluginRegistry.waitForChange(sinceCursor, 25000);
-    const rechecked = androidPluginRegistry.getWatchEventsSince(sinceCursor);
-    if ("reset" in rechecked) {
-      return { statusCode: 200, body: { reset: true, cursor: rechecked.cursor } };
-    }
-    return { statusCode: 200, body: { events: waited.events, cursor: waited.cursor } };
-  }
+  // /api/plugins/watch 长轮询由 mobile-server.ts 主分发器直接处理，不经过本路由
 
   if (pathname === "/api/plugins/list") {
     return {
