@@ -26,9 +26,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 守门：仅当 tag 位于桌面分支（dev）时才执行桌面发布；Android 分支的 tag 由 android.yml 处理
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.check.outputs.desktop }}
+    steps:
+      - name: Check out git repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check tag belongs to desktop branch
+        id: check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+          elif git merge-base --is-ancestor "${GITHUB_SHA}" origin/dev; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+            echo "tag ${{ github.ref_name }} 不在 dev 分支上，跳过桌面发布"
+          fi
+
   # 各平台/架构在对应的原生 runner 上独立构建
   build:
     name: Build on ${{ matrix.name }}
+    needs: guard
+    if: needs.guard.outputs.desktop == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
