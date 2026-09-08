@@ -45,8 +45,9 @@ export const resolveUrl = async (args: PluginResolveUrlArgs): Promise<MusicUrlRe
     ...((getSystemConfigValue("plugins.priority.musicUrl") as string[] | undefined) ?? []),
     ...androidPluginRegistry.listInfo().map((info) => info.manifest.id),
   ];
-  let failureCount = 0;
-
+  // 并行竞速：所有可用候选同时发起，取最快返回的有效 URL。
+  // 串行逐个等待时最坏 N×20s，是切歌黑窗（音频停在上一首）的主要来源之一。
+  const attempts: Array<Promise<MusicUrlRes | null>> = [];
   for (const id of order) {
     if (!id || tried.has(id)) continue;
     tried.add(id);
@@ -55,26 +56,32 @@ export const resolveUrl = async (args: PluginResolveUrlArgs): Promise<MusicUrlRe
     if (runtime.status.state !== "ready" || !runtime.sandbox?.isAlive()) continue;
     const sourceCapability = runtime.status.sources[params.source];
     if (!sourceCapability?.actions.includes("musicUrl")) continue;
-    try {
-      const result = await withTimeout(
+    attempts.push(
+      withTimeout(
         runtime.sandbox.call("musicUrl", params) as Promise<MusicUrlRes>,
         ACTION_TIMEOUTS.musicUrl,
         `plugin ${id} request timeout`,
         () => {
           androidPluginRegistry.markFailed(id, PluginErrorCodes.REQUEST_TIMEOUT, "request timeout");
         },
-      );
-      if (typeof result?.url === "string" && result.url.trim()) return result;
-      console.info(`[embedded-api] plugin resolveUrl returned empty url: ${id}`);
-    } catch (error) {
-      failureCount += 1;
-      console.warn(`[embedded-api] plugin resolveUrl failed: ${id}`, error);
-    }
-  }
-  if (failureCount > 0) {
-    console.info(
-      `[embedded-api] plugin resolveUrl exhausted all candidates without valid url: ${params.source}`,
+      )
+        .then((result) => (typeof result?.url === "string" && result.url.trim() ? result : null))
+        .catch((error) => {
+          console.warn(`[embedded-api] plugin resolveUrl failed: ${id}`, error);
+          return null;
+        }),
     );
   }
-  return { url: "" };
+  if (attempts.length === 0) return { url: "" };
+
+  return await new Promise<MusicUrlRes>((resolve) => {
+    let remaining = attempts.length;
+    for (const attempt of attempts) {
+      // attempt 已自带 catch，只会以 null 兜底 resolve，不会 reject
+      attempt.then((result) => {
+        if (result) resolve(result);
+        else if (--remaining === 0) resolve({ url: "" });
+      });
+    }
+  });
 };

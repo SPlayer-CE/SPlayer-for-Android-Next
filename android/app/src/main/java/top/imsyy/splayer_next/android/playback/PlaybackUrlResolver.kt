@@ -11,6 +11,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.ArrayList
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -170,6 +171,9 @@ class PlaybackUrlResolver(
    * 出现「音频停留在上一首、元信息已切走」的长窗口。
    */
   private val playExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+
+  /** 插件候选竞速线程池：候选通常 ≤5 个，4 线程足够并行发起。 */
+  private val pluginRaceExecutor: ExecutorService = Executors.newFixedThreadPool(4)
   private val cacheLock = Any()
 
   /** cacheKey("songId:level") → URL。level 不同 → 文件/码率/endpoint 都可能不同，必须分键。 */
@@ -482,12 +486,35 @@ class PlaybackUrlResolver(
     val origin = apiOrigin()
     if (origin.isEmpty() || candidates.isEmpty()) return null
     val musicInfo = buildPluginMusicInfo(track, pluginSource) ?: return null
-    for (pluginId in candidates) {
-      val url = fetchPluginUrl(origin, pluginId, pluginSource, musicInfo)
-      if (url != null) {
-        Log.d(TAG, "plugin resolve ok songId=${track.songId} plugin=$pluginId")
-        return url
+    // 并行竞速：所有候选同时发起，取最快成功的 URL；串行等待最坏 N×30s，是切歌黑窗主因
+    val pending =
+      candidates
+        .map { pluginId ->
+          CompletableFuture.supplyAsync(
+            { fetchPluginUrl(origin, pluginId, pluginSource, musicInfo) },
+            pluginRaceExecutor,
+          )
+        }
+        .toMutableList()
+    try {
+      while (pending.isNotEmpty()) {
+        CompletableFuture.anyOf(*pending.toTypedArray()).get()
+        val iterator = pending.iterator()
+        while (iterator.hasNext()) {
+          val future = iterator.next()
+          if (!future.isDone) continue
+          val url = future.get()
+          if (!url.isNullOrEmpty()) {
+            Log.d(TAG, "plugin resolve ok songId=${track.songId} source=$pluginSource")
+            return url
+          }
+          iterator.remove()
+        }
       }
+    } catch (e: Exception) {
+      Log.w(TAG, "plugin resolve race aborted songId=${track.songId} source=$pluginSource", e)
+    } finally {
+      for (future in pending) future.cancel(true)
     }
     Log.w(TAG, "plugin resolve failed songId=${track.songId} source=$pluginSource")
     return null
