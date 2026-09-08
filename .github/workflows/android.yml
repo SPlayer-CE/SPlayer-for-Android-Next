@@ -1,0 +1,100 @@
+name: Android Build
+
+on:
+  push:
+    branches: [Android]
+    tags: ["v*"]
+  pull_request:
+    branches: [Android]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # PR 时仅做静态校验（ktlint / Kotlin 编译 / detekt），拦截破坏构建的改动
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 静态校验
+        run: pnpm android:check
+
+  # push Android 分支 / 打 tag 时构建 Release 签名 APK（分 ABI 出包）
+  build:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 配置签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
+            echo "已从 secrets 恢复正式签名密钥"
+          else
+            echo "未配置签名 secrets，回退 debug 签名（app/build.gradle 自带回退逻辑）"
+          fi
+      - name: 构建 WebView 与嵌入 Node 资源
+        run: pnpm build:android
+      - name: 构建 Release APK
+        run: cd android && ./gradlew assembleRelease --stacktrace
+      - name: 收集 APK
+        run: |
+          mkdir -p dist-android
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            src="android/app/build/outputs/apk/release/app-${abi}-release.apk"
+            if [ -f "$src" ]; then
+              cp "$src" "dist-android/SPlayer-Next-${GITHUB_REF_NAME}-${abi}.apk"
+            fi
+          done
+          ls -la dist-android
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPlayer-Next-APKs-${{ github.run_number }}
+          path: dist-android/*.apk
+      - name: 发布到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-android/*.apk
+          generate_release_notes: true
