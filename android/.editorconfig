@@ -12,3 +12,5 @@ max_line_length = 140
 ij_kotlin_imports_layout = *
 ij_kotlin_name_count_to_use_star_import = 99
 ij_kotlin_name_count_to_use_star_import_for_members = 99
+# 包名 top.imsyy.splayer_next 源自 appId（含下划线），appId 是应用身份标识不可改，放行包名下划线检查
+ktlint_standard_package-name = disabled

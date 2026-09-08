@@ -238,10 +238,10 @@ class AndroidMediaSessionManager(
   }
 
   private fun readNullableString(
-    obj: JSONObject,
+    obj: JSONObject?,
     key: String,
   ): String? {
-    if (obj.isNull(key)) return null
+    if (obj == null || obj.isNull(key)) return null
     val value = obj.optString(key, "")
     return if (value.isEmpty() || value == "null") null else value
   }

@@ -59,8 +59,7 @@
     "build:android": "pnpm build:web && cap sync android && pnpm build:android:node && pnpm prepare:android:embedded",
     "android:check": "cd android && gradlew ktlintCheck compileKotlin detekt",
     "android:format": "cd android && gradlew ktlintFormat",
-    "android:check:log": "powershell -NoProfile -Command \"cd android; .\\gradlew ktlintCheck compileKotlin detekt --console=plain *>&1 | Tee-Object -FilePath ..\\android-check.log; exit $LASTEXITCODE\"",
-    "android:dep-check": "cd android && gradlew dependencyCheckAnalyze"
+    "android:check:log": "powershell -NoProfile -Command \"cd android; .\\gradlew ktlintCheck compileKotlin detekt --console=plain *>&1 | Tee-Object -FilePath ..\\android-check.log; exit $LASTEXITCODE\""
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

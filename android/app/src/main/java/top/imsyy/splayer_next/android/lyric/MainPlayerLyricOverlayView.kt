@@ -1789,12 +1789,6 @@ class MainPlayerLyricOverlayView
       mainPaint.shader = null
     }
 
-    /**
-     * 开始一轮遮罩扫光段的构建：确保复用缓冲容量并清空段计数。
-     * 段数不超过词数，容量只增不减，避免逐帧分配。
-     * @param wordCount - 本行词数
-     */
-
     /** QW-2: 确保复用 FloatArray 容量足够,只增不减避免逐帧重分配 */
     private fun ensureReusableFloats(size: Int) {
       if (tmpTextWidths.size < size) tmpTextWidths = FloatArray(size)
@@ -1832,6 +1826,11 @@ class MainPlayerLyricOverlayView
       return rubyFontMetricsCache
     }
 
+    /**
+     * 开始一轮遮罩扫光段的构建：确保复用缓冲容量并清空段计数，容量只增不减，避免逐帧分配。
+     * @param wordCount - 本行词数
+     * @param segmentCapacity - 预留的扫光段总容量（注音词拆字符子段后可能超过词数）
+     */
     private fun beginMaskSweep(
       wordCount: Int,
       segmentCapacity: Int = wordCount,
