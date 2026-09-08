@@ -1337,6 +1337,8 @@ class PlaybackManager private constructor(
       emitError(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, "playIndex out of bounds: $index")
       return
     }
+    // 锚定游标到点击曲目：否则解析失败跳曲、后续 next/prev、预取 upcoming 都仍以旧曲目为基准
+    if (!personalFmMode) playbackQueue.setCurrentIndex(index)
     if (track.playable()) {
       playFromQueue(track, "index")
       restoreSeekAfterStart(positionMs)

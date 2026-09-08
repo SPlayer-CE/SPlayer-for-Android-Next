@@ -158,6 +158,17 @@ class PlaybackQueue {
   }
 
   /**
+   * 锚定当前游标到指定索引（点击任意歌曲入口）。
+   * 不锚定会导致后续 advanceRaw 跳曲、预取 upcoming 仍以旧曲目为基准：
+   * 解析失败跳错目标、next/prev 从旧位置推进。
+   */
+  @Synchronized
+  fun setCurrentIndex(index: Int) {
+    if (index < 0 || index >= tracks.size) return
+    currentIndex = index
+  }
+
+  /**
    * 推进下一首；跳过 skipSong=true 的曲目（Fuck DJ 等用户级屏蔽），
    * 但不跳过 url==null（让 UrlResolver 后台解析）。
    *

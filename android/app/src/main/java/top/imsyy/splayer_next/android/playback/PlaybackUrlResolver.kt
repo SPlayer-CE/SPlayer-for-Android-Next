@@ -163,6 +163,13 @@ class PlaybackUrlResolver(
 
   /** 2 线程：避免「播放刚起 + 用户立刻 NEXT」被串行。上游接口有节流，不宜调高。 */
   private val executor: ExecutorService = Executors.newFixedThreadPool(2)
+
+  /**
+   * 播放关键路径专用线程池：submitResolve（点击切歌/下一首）与 prefetchAsync（预取）隔离，
+   * 防止点击解析排在最多 3 个预取任务（插件源单次可达 30s）之后，
+   * 出现「音频停留在上一首、元信息已切走」的长窗口。
+   */
+  private val playExecutor: ExecutorService = Executors.newFixedThreadPool(2)
   private val cacheLock = Any()
 
   /** cacheKey("songId:level") → URL。level 不同 → 文件/码率/endpoint 都可能不同，必须分键。 */
@@ -726,7 +733,7 @@ class PlaybackUrlResolver(
       callback?.accept(null)
       return
     }
-    executor.submit {
+    playExecutor.submit {
       val url = resolveTrack(track)
       callback?.accept(url)
     }
@@ -740,7 +747,7 @@ class PlaybackUrlResolver(
       callback?.accept(null)
       return
     }
-    executor.submit {
+    playExecutor.submit {
       val url = resolveSync(songId)
       callback?.accept(url)
     }
