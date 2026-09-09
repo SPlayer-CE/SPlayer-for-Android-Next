@@ -169,6 +169,28 @@ class PlaybackQueue {
   }
 
   /**
+   * 向前窥视待播曲目（跳过 skipSong，不移动游标）；右缘耗尽时普通模式回绕到队首。
+   * 供预加载/预取使用，与 advanceRaw 的选曲口径保持一致。
+   */
+  @Synchronized
+  fun peekUpcomingTracks(count: Int): List<Track> {
+    if (tracks.isEmpty() || count <= 0) return emptyList()
+    val out = ArrayList<Track>(count)
+    var probe = currentIndex + 1
+    while (probe < tracks.size && out.size < count) {
+      if (!tracks[probe].skipSong) out.add(tracks[probe])
+      probe++
+    }
+    if (out.size < count && !personalFmMode) {
+      for (t in tracks) {
+        if (out.size >= count) break
+        if (!t.skipSong) out.add(t)
+      }
+    }
+    return out
+  }
+
+  /**
    * 推进下一首；跳过 skipSong=true 的曲目（Fuck DJ 等用户级屏蔽），
    * 但不跳过 url==null（让 UrlResolver 后台解析）。
    *

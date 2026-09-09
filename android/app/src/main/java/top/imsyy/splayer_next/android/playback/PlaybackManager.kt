@@ -19,8 +19,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
@@ -43,6 +45,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
+import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
@@ -61,8 +66,10 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.LinkedHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
@@ -85,6 +92,42 @@ class PlaybackManager private constructor(
   private val resolveTokenCounter = AtomicLong()
   private val artworkTokenCounter = AtomicLong()
 
+  /**
+   * 播放专用线程：ExoPlayer、MediaSession 与 DefaultPreloadManager 的统一 application looper。
+   * media3 要求 player 访问线程与 preload looper 一致且禁止主线程，所有引擎交互经
+   * [runOnPlaybackThread] 收口；跨线程调用方使用 [onPlaybackThread] 同步等待。
+   */
+  private val playbackThread =
+    HandlerThread("SPlayerPlayback", Process.THREAD_PRIORITY_AUDIO).apply { start() }
+  private val playbackHandler = Handler(playbackThread.looper)
+
+  /** 下一曲预加载项（官方 DefaultPreloadManager 模式），随切歌增删。 */
+  private var preloadManager: DefaultPreloadManager? = null
+
+  /** 预加载目标：候选曲目一律预载开头 10s 数据（SourcePreloadControl 按此停止续载）。 */
+  private val preloadTargetStatusControl: TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> =
+    object : TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> {
+      override fun getTargetPreloadStatus(rankingData: Int): DefaultPreloadManager.PreloadStatus =
+        DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(0L, PRELOAD_RANGE_US)
+    }
+
+  /** 预加载中的下一曲 MediaItem 与其 URL（仅播放线程访问）；URL 是起播复用的命中键。 */
+  private var preloadedNextItem: MediaItem? = null
+  private var preloadedNextUrl: String? = null
+
+  /** 播放线程之外的线程读取进度/状态时使用的快照（250ms tick 与各 emit 点维持）。 */
+  @Volatile
+  private var cachedDurationMs: Long = 0
+
+  @Volatile
+  private var cachedIsPlaying = false
+
+  @Volatile
+  private var cachedIsBuffering = false
+
+  @Volatile
+  private var cachedPlaybackRate = 1f
+
   private var player: ExoPlayer? = null
   private var sessionPlayer: Player? = null
   var session: MediaSession? = null
@@ -95,6 +138,8 @@ class PlaybackManager private constructor(
 
   @Volatile
   private var serviceStarted = false
+
+  @Volatile
   private var plugin: AndroidNativePlaybackPlugin? = null
 
   /**
@@ -130,6 +175,7 @@ class PlaybackManager private constructor(
   private val urlResolver = PlaybackUrlResolver(appContext)
   private val songCacheExecutor: ExecutorService = Executors.newSingleThreadExecutor()
   private val fmFetcher = FmFetcher()
+  @Volatile
   private var currentMetadata = TrackMetadata()
 
   private var nativeRecoverySongId = 0L
@@ -145,14 +191,25 @@ class PlaybackManager private constructor(
   private var urlExpireRetried: Boolean = false
   private val playbackQueue = PlaybackQueue()
 
+  @Volatile
   private var controllerEnabled = true
+
+  @Volatile
   private var desktopLyricButtonEnabled = false
+
+  @Volatile
   private var desktopLyricEnabled = false
   private var allowMixWithOthers = true
   private var pauseOnDeviceSwitch = false
   private var audioBecomingNoisyReceiver: BroadcastReceiver? = null
+
+  @Volatile
   private var canSkipPrevious = true
+
+  @Volatile
   private var personalFmMode = false
+
+  @Volatile
   private var liked = false
   private var collapsed = false
   private var favoriteRequestInFlight = false
@@ -171,9 +228,12 @@ class PlaybackManager private constructor(
 
   private var pendingSeekPositionMs = C.TIME_UNSET
   private var pendingSeekDeadlineMs = 0L
+
+  @Volatile
   private var lastKnownPositionMs = 0L
   private var durationCalibratedForSource = ""
 
+  @Volatile
   private var dynamicIslandService: DynamicIslandService? = null
   private var bufferedLrcJson: String? = null
   private var bufferedYrcJson: String? = null
@@ -183,12 +243,22 @@ class PlaybackManager private constructor(
   private var bufferedCoverBitmap: Bitmap? = null
   private var bufferedTimeMs: Long = 0L
   private var bufferedPlaying: Boolean = false
+  @Volatile
   private var mainLyricClockListener: (() -> Unit)? = null
 
+  @Volatile
   private var remoteMode = false
+
+  @Volatile
   private var remoteIsPlaying = false
+
+  @Volatile
   private var remotePositionMs = 0L
+
+  @Volatile
   private var remoteDurationMs = 0L
+
+  @Volatile
   private var remoteAnchorNano = System.nanoTime()
   private var remoteWakeLock: PowerManager.WakeLock? = null
 
@@ -309,14 +379,14 @@ class PlaybackManager private constructor(
           emitProgressChanged()
         }
         if (p != null && p.currentMediaItem != null) {
-          mainHandler.postDelayed(this, 250L)
+          playbackHandler.postDelayed(this, 250L)
         }
       }
     }
 
   init {
     AudioCacheProvider.setDiagnosticListener { tag, message ->
-      mainHandler.post { emitDiagnosticLog(tag, message) }
+      playbackHandler.post { emitDiagnosticLog(tag, message) }
     }
   }
 
@@ -337,6 +407,9 @@ class PlaybackManager private constructor(
     private const val PROMOTE_AFTER_MS = 10_000L
     private const val NATIVE_ERROR_RECOVERY_MAX_ATTEMPTS = 2
 
+    /** 预加载下一曲开头的时长（微秒；PreloadStatus 参数单位为 us）。 */
+    private const val PRELOAD_RANGE_US = 10_000_000L
+
     /** 播放该时长后才调度歌曲缓存下载，跳歌频繁场景避免浪费带宽。 */
     private const val SONG_CACHE_DOWNLOAD_DELAY_MS = 30_000L
 
@@ -353,30 +426,45 @@ class PlaybackManager private constructor(
       }
   }
 
-  @Synchronized
+  /** Service 生命周期在主线程回调；ensureInitialized/MediaSession 必须在播放线程创建，统一派发。 */
   fun attachService(playbackService: PlaybackService) {
+    runOnPlaybackThread { attachServiceInternal(playbackService) }
+  }
+
+  @Synchronized
+  private fun attachServiceInternal(playbackService: PlaybackService) {
     service = playbackService
     serviceStarted = true
     ensureInitialized()
     updateNotification()
   }
 
-  @Synchronized
   fun detachService(playbackService: PlaybackService) {
+    runOnPlaybackThread { detachServiceInternal(playbackService) }
+  }
+
+  @Synchronized
+  private fun detachServiceInternal(playbackService: PlaybackService) {
     if (service === playbackService) {
       service = null
       serviceStarted = false
     }
   }
 
+  fun attachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) =
+    onPlaybackThread { attachPluginInternal(playbackPlugin) }
+
   @Synchronized
-  fun attachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) {
+  private fun attachPluginInternal(playbackPlugin: AndroidNativePlaybackPlugin) {
     plugin = playbackPlugin
     emitPlaybackState(true)
   }
 
+  fun detachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) =
+    onPlaybackThread { detachPluginInternal(playbackPlugin) }
+
   @Synchronized
-  fun detachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) {
+  private fun detachPluginInternal(playbackPlugin: AndroidNativePlaybackPlugin) {
     if (plugin === playbackPlugin) {
       plugin = null
       visualizerRequested = false
@@ -389,8 +477,14 @@ class PlaybackManager private constructor(
     webViewVisible = visible
   }
 
-  @Synchronized
   fun load(
+    url: String?,
+    positionMs: Long,
+    autoPlay: Boolean,
+  ): JSObject = onPlaybackThread { loadInternal(url, positionMs, autoPlay) }
+
+  @Synchronized
+  private fun loadInternal(
     url: String?,
     positionMs: Long,
     autoPlay: Boolean,
@@ -432,7 +526,7 @@ class PlaybackManager private constructor(
     cancelSongCacheDownload()
 
     val p = player ?: return buildState()
-    p.setMediaItem(buildMediaItem(currentSource))
+    p.setMediaItem(buildMediaItem(currentSource, currentMetadata))
     p.prepare()
     durationCalibratedForSource = ""
     if (positionMs > 0) {
@@ -445,8 +539,10 @@ class PlaybackManager private constructor(
     return buildState()
   }
 
+  fun play(): JSObject = onPlaybackThread { playInternal() }
+
   @Synchronized
-  fun play(): JSObject {
+  private fun playInternal(): JSObject {
     ensureInitialized()
     ensureServiceRunning()
     player?.play()
@@ -455,8 +551,10 @@ class PlaybackManager private constructor(
     return buildState()
   }
 
+  fun pause(): JSObject = onPlaybackThread { pauseInternal() }
+
   @Synchronized
-  fun pause(): JSObject {
+  private fun pauseInternal(): JSObject {
     ensureInitialized()
     player?.pause()
     updateNotification()
@@ -464,8 +562,10 @@ class PlaybackManager private constructor(
     return buildState()
   }
 
+  fun stop(): JSObject = onPlaybackThread { stopInternal() }
+
   @Synchronized
-  fun stop(): JSObject {
+  private fun stopInternal(): JSObject {
     ensureInitialized()
     player?.pause()
     player?.seekTo(0L)
@@ -501,21 +601,23 @@ class PlaybackManager private constructor(
       }
     holder[0] = r
     pendingPromotionRunnable = r
-    mainHandler.postDelayed(r, PROMOTE_AFTER_MS)
+    playbackHandler.postDelayed(r, PROMOTE_AFTER_MS)
   }
 
   private fun cancelPromotion() {
     val r = pendingPromotionRunnable
     if (r != null) {
-      mainHandler.removeCallbacks(r)
+      playbackHandler.removeCallbacks(r)
       pendingPromotionRunnable = null
     }
   }
 
+  fun shutdownAll() = onPlaybackThread { shutdownAllInternal() }
+
   @Synchronized
-  fun shutdownAll() {
+  private fun shutdownAllInternal() {
     try {
-      cleanup()
+      cleanupInternal()
     } catch (e: Exception) {
       Log.w(TAG, "shutdownAll cleanup failed", e)
     }
@@ -536,8 +638,10 @@ class PlaybackManager private constructor(
     }
   }
 
+  fun cleanup(): JSObject = onPlaybackThread { cleanupInternal() }
+
   @Synchronized
-  fun cleanup(): JSObject {
+  private fun cleanupInternal(): JSObject {
     ensureInitialized()
     val p = player
     if (p != null) {
@@ -558,13 +662,20 @@ class PlaybackManager private constructor(
     urlExpireRetriedSongId = 0L
     cancelSongCacheDownload()
     stopProgressUpdates()
+    preloadedNextItem?.let { preloadManager?.remove(it) }
+    preloadedNextItem = null
+    preloadedNextUrl = null
+    preloadManager?.release()
+    preloadManager = null
     clearNotification()
     emitPlaybackState(true)
     return buildState()
   }
 
+  fun seek(positionMs: Long): JSObject = onPlaybackThread { seekInternal(positionMs) }
+
   @Synchronized
-  fun seek(positionMs: Long): JSObject {
+  private fun seekInternal(positionMs: Long): JSObject {
     ensureInitialized()
     val safePositionMs = max(0L, positionMs)
     beginPendingSeek(safePositionMs)
@@ -574,7 +685,7 @@ class PlaybackManager private constructor(
     if (p != null) {
       if (p.currentMediaItem == null || currentSource.isEmpty() || p.playbackState == Player.STATE_IDLE) {
         val wasPlaying = p.playWhenReady
-        p.setMediaItem(buildMediaItem(currentSource), safePositionMs)
+        p.setMediaItem(buildMediaItem(currentSource, currentMetadata), safePositionMs)
         p.prepare()
         p.playWhenReady = wasPlaying
       } else {
@@ -587,24 +698,30 @@ class PlaybackManager private constructor(
     return buildState()
   }
 
+  fun setVolume(volume: Float) = onPlaybackThread { setVolumeInternal(volume) }
+
   @Synchronized
-  fun setVolume(volume: Float) {
+  private fun setVolumeInternal(volume: Float) {
     ensureInitialized()
     player?.volume = volume.coerceIn(0f, 1f)
     emitPlaybackState(false)
     updateNotification()
   }
 
+  fun setRate(rate: Float) = onPlaybackThread { setRateInternal(rate) }
+
   @Synchronized
-  fun setRate(rate: Float) {
+  private fun setRateInternal(rate: Float) {
     ensureInitialized()
     player?.setPlaybackSpeed(rate.coerceIn(0.25f, 3f))
     emitPlaybackState(false)
     updateNotification()
   }
 
+  fun updateMetadata(metadata: TrackMetadata?) = onPlaybackThread { updateMetadataInternal(metadata) }
+
   @Synchronized
-  fun updateMetadata(metadata: TrackMetadata?) {
+  private fun updateMetadataInternal(metadata: TrackMetadata?) {
     currentMetadata = metadata ?: TrackMetadata()
     loadCoverBitmapAsync(currentMetadata.coverUrl)
     refreshCurrentMediaItemMetadata()
@@ -613,8 +730,34 @@ class PlaybackManager private constructor(
     emitPlaybackState(true)
   }
 
-  @Synchronized
   fun updateQueueContext(
+    likedState: Boolean,
+    canSkipPreviousState: Boolean,
+    personalFmModeState: Boolean,
+    controllerEnabledState: Boolean,
+    desktopLyricButtonEnabledState: Boolean,
+    desktopLyricEnabledState: Boolean,
+    queueTracks: List<PlaybackQueue.Track>?,
+    queueCurrentIndex: Int,
+    repeatMode: String,
+    fmRecentSongIds: List<Long>,
+  ) = onPlaybackThread {
+    updateQueueContextInternal(
+      likedState,
+      canSkipPreviousState,
+      personalFmModeState,
+      controllerEnabledState,
+      desktopLyricButtonEnabledState,
+      desktopLyricEnabledState,
+      queueTracks,
+      queueCurrentIndex,
+      repeatMode,
+      fmRecentSongIds,
+    )
+  }
+
+  @Synchronized
+  private fun updateQueueContextInternal(
     likedState: Boolean,
     canSkipPreviousState: Boolean,
     personalFmModeState: Boolean,
@@ -648,8 +791,13 @@ class PlaybackManager private constructor(
     emitPlaybackState(false)
   }
 
-  @Synchronized
   fun updateNotificationPrefs(
+    controllerEnabledState: Boolean,
+    desktopLyricButtonEnabledState: Boolean,
+  ) = onPlaybackThread { updateNotificationPrefsInternal(controllerEnabledState, desktopLyricButtonEnabledState) }
+
+  @Synchronized
+  private fun updateNotificationPrefsInternal(
     controllerEnabledState: Boolean,
     desktopLyricButtonEnabledState: Boolean,
   ) {
@@ -659,8 +807,10 @@ class PlaybackManager private constructor(
     updateNotification()
   }
 
+  fun setAllowMixWithOthers(allow: Boolean) = onPlaybackThread { setAllowMixWithOthersInternal(allow) }
+
   @Synchronized
-  fun setAllowMixWithOthers(allow: Boolean) {
+  private fun setAllowMixWithOthersInternal(allow: Boolean) {
     allowMixWithOthers = allow
     player?.setAudioAttributes(
       AudioAttributes
@@ -672,13 +822,38 @@ class PlaybackManager private constructor(
     )
   }
 
+  fun setPauseOnDeviceSwitch(enabled: Boolean) =
+    onPlaybackThread { setPauseOnDeviceSwitchInternal(enabled) }
+
   @Synchronized
-  fun setPauseOnDeviceSwitch(enabled: Boolean) {
+  private fun setPauseOnDeviceSwitchInternal(enabled: Boolean) {
     pauseOnDeviceSwitch = enabled
   }
 
-  @Synchronized
   fun syncApiContext(
+    baseUrl: String?,
+    cookieValue: String?,
+    level: String?,
+    rawLevel: String?,
+    disableAiAudioState: Boolean,
+    playSongDemoState: Boolean,
+    songCacheEnabledState: Boolean,
+    pluginSourcesState: Map<String, List<String>>,
+  ) = onPlaybackThread {
+    syncApiContextInternal(
+      baseUrl,
+      cookieValue,
+      level,
+      rawLevel,
+      disableAiAudioState,
+      playSongDemoState,
+      songCacheEnabledState,
+      pluginSourcesState,
+    )
+  }
+
+  @Synchronized
+  private fun syncApiContextInternal(
     baseUrl: String?,
     cookieValue: String?,
     level: String?,
@@ -709,8 +884,14 @@ class PlaybackManager private constructor(
     prefetchUpcomingUrls()
   }
 
-  @Synchronized
   fun syncRemoteState(
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+  ) = onPlaybackThread { syncRemoteStateInternal(playing, positionMs, durationMs) }
+
+  @Synchronized
+  private fun syncRemoteStateInternal(
     playing: Boolean,
     positionMs: Long,
     durationMs: Long,
@@ -729,11 +910,13 @@ class PlaybackManager private constructor(
 
   private fun isEffectivelyPlaying(): Boolean {
     if (remoteMode) return remoteIsPlaying
+    if (!onPlaybackLooper()) return cachedIsPlaying
     return player?.isPlaying == true
   }
 
   private fun isEffectivelyBuffering(): Boolean {
     if (remoteMode) return false
+    if (!onPlaybackLooper()) return cachedIsBuffering
     return player?.playbackState == Player.STATE_BUFFERING
   }
 
@@ -758,8 +941,10 @@ class PlaybackManager private constructor(
     }
   }
 
+  fun buildState(): JSObject = onPlaybackThread { buildStateInternal() }
+
   @Synchronized
-  fun buildState(): JSObject {
+  private fun buildStateInternal(): JSObject {
     ensureInitialized()
     val state = JSObject()
     val p = player
@@ -777,32 +962,36 @@ class PlaybackManager private constructor(
     return state
   }
 
-  @Synchronized
   fun getLyricPositionMs(): Long {
-    if (!remoteMode) return getPositionMs()
-    val elapsedMs =
-      if (remoteIsPlaying) {
-        (System.nanoTime() - remoteAnchorNano) / 1_000_000L
-      } else {
-        0L
-      }
-    val positionMs = max(0L, remotePositionMs + elapsedMs)
-    return if (remoteDurationMs > 0L) positionMs.coerceAtMost(remoteDurationMs) else positionMs
+    if (remoteMode) {
+      val elapsedMs =
+        if (remoteIsPlaying) {
+          (System.nanoTime() - remoteAnchorNano) / 1_000_000L
+        } else {
+          0L
+        }
+      val positionMs = max(0L, remotePositionMs + elapsedMs)
+      return if (remoteDurationMs > 0L) positionMs.coerceAtMost(remoteDurationMs) else positionMs
+    }
+    // 播放线程外返回 250ms tick 维护的快照，避免跨线程读 player
+    if (!onPlaybackLooper()) return max(0L, lastKnownPositionMs)
+    return getPositionMs()
   }
 
-  @Synchronized
   fun getLyricPlaybackRate(): Float {
     if (remoteMode) return 1f
+    if (!onPlaybackLooper()) return cachedPlaybackRate
     return player?.playbackParameters?.speed ?: 1f
   }
 
-  @Synchronized
   fun setMainLyricClockListener(listener: (() -> Unit)?) {
     mainLyricClockListener = listener
   }
 
+  fun handleNotificationAction(action: String?) = onPlaybackThread { handleNotificationActionInternal(action) }
+
   @Synchronized
-  fun handleNotificationAction(action: String?) {
+  private fun handleNotificationActionInternal(action: String?) {
     if (action == null) return
     Log.d(
       TAG,
@@ -815,7 +1004,7 @@ class PlaybackManager private constructor(
           emitCustomAction(if (remoteIsPlaying) "pause" else "play", null, null, null, null, true, null)
         } else {
           val p = player ?: return
-          if (p.isPlaying) pause() else play()
+          if (p.isPlaying) pauseInternal() else playInternal()
         }
       }
       PlaybackConstants.ACTION_NEXT -> {
@@ -891,6 +1080,40 @@ class PlaybackManager private constructor(
     }
   }
 
+  /** 是否处于播放线程（内联快路径判定）。 */
+  private fun onPlaybackLooper(): Boolean = Looper.myLooper() == playbackThread.looper
+
+  /** 把动作派发到播放线程（异步，不等待）。供外部跨线程调用方使用。 */
+  fun runOnPlaybackThread(action: () -> Unit) {
+    if (onPlaybackLooper()) action() else playbackHandler.post(action)
+  }
+
+  /**
+   * 在播放线程执行并同步返回结果：播放线程内联直调，其它线程 latch 等待。
+   * 仅顶层入口使用；播放线程内部链路禁止经此跨线程重入（本实现无跨线程阻塞点，无死锁风险）。
+   */
+  private fun <T> onPlaybackThread(block: () -> T): T {
+    if (onPlaybackLooper()) return block()
+    val latch = CountDownLatch(1)
+    var result: T? = null
+    var error: Throwable? = null
+    playbackHandler.post {
+      try {
+        result = block()
+      } catch (t: Throwable) {
+        error = t
+      } finally {
+        latch.countDown()
+      }
+    }
+    if (!latch.await(10, TimeUnit.SECONDS)) {
+      throw IllegalStateException("playback thread dispatch timeout")
+    }
+    error?.let { throw it }
+    @Suppress("UNCHECKED_CAST")
+    return result as T
+  }
+
   @Synchronized
   private fun ensureInitialized() {
     if (player != null && session != null) return
@@ -921,22 +1144,32 @@ class PlaybackManager private constructor(
           .setConstantBitrateSeekingAlwaysEnabled(true),
       )
 
-    val newPlayer =
-      ExoPlayer
-        .Builder(appContext, renderersFactory)
+    // 官方预加载集成：同一 Builder 构建 DefaultPreloadManager 与 ExoPlayer，
+    // 共享 mediaSourceFactory/renderersFactory/trackSelector/allocator/bandwidthMeter，
+    // 使 player.setMediaSource 能复用预加载好的 PreloadMediaSource（timeline/tracks/SampleQueue）。
+    // 播放线程由 preloadLooperProvider 提供（禁止主线程），所有引擎交互已在播放线程收口。
+    val preloadManagerBuilder =
+      DefaultPreloadManager
+        .Builder(appContext, preloadTargetStatusControl)
         .setMediaSourceFactory(mediaSourceFactory)
-        .build()
+        .setRenderersFactory(renderersFactory)
+        .setPreloadLooper(playbackThread.looper)
 
-    newPlayer.setAudioAttributes(
-      AudioAttributes
-        .Builder()
-        .setUsage(C.USAGE_MEDIA)
-        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-        .build(),
-      !allowMixWithOthers,
-    )
-    newPlayer.setHandleAudioBecomingNoisy(false)
-    newPlayer.setWakeMode(C.WAKE_MODE_NETWORK)
+    preloadManager = preloadManagerBuilder.build()
+    val newPlayer =
+      preloadManagerBuilder.buildExoPlayer(
+        ExoPlayer
+          .Builder(appContext, renderersFactory)
+          .setAudioAttributes(
+            AudioAttributes
+              .Builder()
+              .setUsage(C.USAGE_MEDIA)
+              .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+              .build(),
+            !allowMixWithOthers,
+          ).setHandleAudioBecomingNoisy(false)
+          .setWakeMode(C.WAKE_MODE_NETWORK)
+      )
 
     newPlayer.addListener(
       object : Player.Listener {
@@ -1047,7 +1280,7 @@ class PlaybackManager private constructor(
         ) {
           if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
           if (!pauseOnDeviceSwitch) return
-          mainHandler.post { pause() }
+          playbackHandler.post { pause() }
         }
       }
     val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
@@ -1111,7 +1344,16 @@ class PlaybackManager private constructor(
     ContextCompat.startForegroundService(appContext, intent)
   }
 
-  private fun buildMediaItem(url: String?): MediaItem {
+  private fun buildMediaItem(url: String?): MediaItem = buildMediaItem(url, currentMetadata)
+
+  /**
+   * 纯函数构造 MediaItem：与 currentMetadata/player 状态解耦。
+   * 预加载复用按 URL 命中（见 startTrackFromState），item 本身保持确定性构造。
+   */
+  private fun buildMediaItem(
+    url: String?,
+    metadata: TrackMetadata,
+  ): MediaItem {
     val builder = MediaItem.Builder()
     if (!url.isNullOrEmpty()) {
       val uri = Uri.parse(url)
@@ -1120,7 +1362,7 @@ class PlaybackManager private constructor(
         resolveContentMimeType(uri)?.let { builder.setMimeType(it) }
       }
     }
-    builder.setMediaMetadata(buildMediaMetadata())
+    builder.setMediaMetadata(buildMediaMetadata(metadata))
     return builder.build()
   }
 
@@ -1142,22 +1384,16 @@ class PlaybackManager private constructor(
     }
   }
 
-  private fun buildMediaMetadata(): MediaMetadata {
+  private fun buildMediaMetadata(metadata: TrackMetadata): MediaMetadata {
     val builder = MediaMetadata.Builder()
-    if (currentMetadata.title.isNotEmpty()) builder.setTitle(currentMetadata.title)
-    if (currentMetadata.artist.isNotEmpty()) builder.setArtist(currentMetadata.artist)
-    if (currentMetadata.album.isNotEmpty()) builder.setAlbumTitle(currentMetadata.album)
+    if (metadata.title.isNotEmpty()) builder.setTitle(metadata.title)
+    if (metadata.artist.isNotEmpty()) builder.setArtist(metadata.artist)
+    if (metadata.album.isNotEmpty()) builder.setAlbumTitle(metadata.album)
 
-    var resolvedDurationMs = currentMetadata.durationMs
-    player?.let {
-      val realDurationMs = it.duration
-      if (realDurationMs != C.TIME_UNSET && realDurationMs > 0L) {
-        resolvedDurationMs = realDurationMs
-      }
-    }
+    val resolvedDurationMs = metadata.durationMs
     if (resolvedDurationMs > 0L) builder.setDurationMs(resolvedDurationMs)
 
-    val artworkUrl = normalizeMediaUrl(currentMetadata.coverUrl)
+    val artworkUrl = normalizeMediaUrl(metadata.coverUrl)
     if (!artworkUrl.isNullOrEmpty() && !artworkUrl.startsWith("blob:")) {
       try {
         builder.setArtworkUri(Uri.parse(artworkUrl))
@@ -1174,7 +1410,7 @@ class PlaybackManager private constructor(
     val p = player ?: return
     val current = p.currentMediaItem ?: return
     try {
-      val updated = current.buildUpon().setMediaMetadata(buildMediaMetadata()).build()
+      val updated = current.buildUpon().setMediaMetadata(buildMediaMetadata(currentMetadata)).build()
       val index = p.currentMediaItemIndex
       if (index in 0 until p.mediaItemCount) {
         p.replaceMediaItem(index, updated)
@@ -1228,7 +1464,7 @@ class PlaybackManager private constructor(
     val target = next
     val myToken = resolveTokenCounter.incrementAndGet()
     urlResolver.submitResolve(target) { url ->
-      mainHandler.post {
+      playbackHandler.post {
         if (myToken != resolveTokenCounter.get()) return@post
         if (url != null) {
           target.url = url
@@ -1272,7 +1508,30 @@ class PlaybackManager private constructor(
         if (!resolvedUrl.isNullOrEmpty()) {
           AudioCacheProvider.prefetchUrl(appContext, resolvedUrl)
         }
+        // 池线程回调：下一曲 URL 就绪后重排预载
+        runOnPlaybackThread { scheduleNextTrackPreload() }
       }
+    }
+    scheduleNextTrackPreload()
+  }
+
+  /**
+   * 预加载下一曲：URL 就绪后注册进 DefaultPreloadManager（预载开头 10s），
+   * 起播时按 URL 命中并复用准备好的 PreloadMediaSource，切歌免首帧缓冲。
+   */
+  private fun scheduleNextTrackPreload() {
+    val manager = preloadManager ?: return
+    val next = playbackQueue.peekUpcomingTracks(1).firstOrNull { it.playable() }
+    val nextUrl = next?.url
+    if (nextUrl != null && nextUrl == preloadedNextUrl) return
+    preloadedNextItem?.let { manager.remove(it) }
+    preloadedNextItem = null
+    preloadedNextUrl = nextUrl
+    if (next != null && !nextUrl.isNullOrEmpty()) {
+      val item = buildMediaItem(nextUrl, trackToMetadata(next))
+      preloadedNextItem = item
+      manager.add(item, 0)
+      manager.invalidate()
     }
   }
 
@@ -1322,8 +1581,13 @@ class PlaybackManager private constructor(
    * @param index 队列索引
    * @param positionMs 起播进度（恢复播放/热重载场景），0 表示从头播
    */
-  @Synchronized
   fun playIndexAt(
+    index: Int,
+    positionMs: Long,
+  ) = onPlaybackThread { playIndexAtInternal(index, positionMs) }
+
+  @Synchronized
+  private fun playIndexAtInternal(
     index: Int,
     positionMs: Long,
   ) {
@@ -1347,7 +1611,7 @@ class PlaybackManager private constructor(
     }
     val myToken = resolveTokenCounter.incrementAndGet()
     urlResolver.submitResolve(track) { url ->
-      mainHandler.post {
+      playbackHandler.post {
         if (myToken != resolveTokenCounter.get()) return@post
         if (url == null) {
           // 点击曲目解析失败：跳下一首（复用既有跳曲链路，重试 4 次）
@@ -1388,7 +1652,7 @@ class PlaybackManager private constructor(
     val cookieSnapshot = cookie
     networkExecutor.execute {
       val fetched = fmFetcher.fetch(baseUrlSnapshot, cookieSnapshot, exclude)
-      mainHandler.post {
+      playbackHandler.post {
         if (fetched.isEmpty()) {
           Log.w(TAG, "fm refill empty or failed")
           stopAndEmitResolveFailure()
@@ -1440,13 +1704,13 @@ class PlaybackManager private constructor(
         }
       }
     pendingSongCacheRunnable = r
-    mainHandler.postDelayed(r, SONG_CACHE_DOWNLOAD_DELAY_MS)
+    playbackHandler.postDelayed(r, SONG_CACHE_DOWNLOAD_DELAY_MS)
   }
 
   private fun cancelSongCacheDownload() {
     val r = pendingSongCacheRunnable
     if (r != null) {
-      mainHandler.removeCallbacks(r)
+      playbackHandler.removeCallbacks(r)
       pendingSongCacheRunnable = null
     }
   }
@@ -1530,7 +1794,7 @@ class PlaybackManager private constructor(
         }
       }
       val resolvedFreshUrl = freshUrl
-      mainHandler.post {
+      playbackHandler.post {
         if (generation != urlExpireRetryGeneration.get()) {
           Log.d(TAG, "url expire retry stale gen=$generation current=${urlExpireRetryGeneration.get()} songId=$songId")
           return@post
@@ -1559,7 +1823,7 @@ class PlaybackManager private constructor(
         clearPendingSeek()
         durationCalibratedForSource = ""
         try {
-          player?.setMediaItem(buildMediaItem(resolvedFreshUrl))
+          player?.setMediaItem(buildMediaItem(resolvedFreshUrl, metadataSnapshot))
           player?.prepare()
           if (positionMs > 0) {
             player?.seekTo(positionMs)
@@ -1603,7 +1867,7 @@ class PlaybackManager private constructor(
     val myToken = resolveTokenCounter.incrementAndGet()
     urlResolver.clear(songId)
     urlResolver.submitResolve(songId) { url ->
-      mainHandler.post {
+      playbackHandler.post {
         if (player == null || myToken != resolveTokenCounter.get()) return@post
         if (url.isNullOrEmpty()) {
           emitError(error.errorCode, error.message)
@@ -1617,7 +1881,7 @@ class PlaybackManager private constructor(
         liked = likedSnapshot
         clearPendingSeek()
         durationCalibratedForSource = ""
-        player?.setMediaItem(buildMediaItem(url))
+        player?.setMediaItem(buildMediaItem(url, metadataSnapshot))
         player?.prepare()
         if (positionMs > 0) {
           player?.seekTo(positionMs)
@@ -1689,11 +1953,26 @@ class PlaybackManager private constructor(
     clearPendingSeek()
     lastKnownPositionMs = 0L
     durationCalibratedForSource = ""
-
-    player?.setMediaItem(buildMediaItem(currentSource))
-    player?.prepare()
-    player?.seekTo(0L)
-    player?.play()
+    player?.let {
+      val item = buildMediaItem(source, metadata ?: TrackMetadata())
+      // 下一曲已在 DefaultPreloadManager 预加载：按 URL 命中预载项并直接复用其 PreloadMediaSource。
+      // 不按 MediaItem.equals 匹配——封面字节在预载与起播之间可能已被 loadCoverBitmapAsync 更新
+      val preloadedItem = preloadedNextItem
+      val preloaded =
+        if (preloadedItem != null && source == preloadedNextUrl) preloadManager?.getMediaSource(preloadedItem) else null
+      if (preloaded != null && preloadedItem != null) {
+        player?.setMediaSource(preloaded)
+        // 起播后移出预载管理器避免条目累积；isUsedByPlayer 守卫保证只清理预载侧资源
+        preloadManager?.remove(preloadedItem)
+        preloadedNextItem = null
+        preloadedNextUrl = null
+      } else {
+        player?.setMediaItem(item)
+      }
+      player?.prepare()
+      player?.seekTo(0L)
+      player?.play()
+    }
     loadCoverBitmapAsync(currentMetadata.coverUrl)
     updateMediaSessionButtons()
     updateNotification()
@@ -2029,16 +2308,20 @@ class PlaybackManager private constructor(
   }
 
   private fun startProgressUpdates() {
-    mainHandler.removeCallbacks(progressRunnable)
-    mainHandler.post(progressRunnable)
+    playbackHandler.removeCallbacks(progressRunnable)
+    playbackHandler.post(progressRunnable)
   }
 
   private fun stopProgressUpdates() {
-    mainHandler.removeCallbacks(progressRunnable)
+    playbackHandler.removeCallbacks(progressRunnable)
   }
 
   private fun emitPlaybackState(retain: Boolean) {
     val state = buildState()
+    cachedIsPlaying = player?.isPlaying == true
+    cachedIsBuffering = player?.playbackState == Player.STATE_BUFFERING
+    cachedPlaybackRate = player?.playbackParameters?.speed ?: 1f
+    cachedDurationMs = getDurationMs()
     mainLyricClockListener?.invoke()
     pushDynamicIslandProgress(getLyricPositionMs(), isEffectivelyPlaying())
     plugin?.emitEvent("playbackStateChanged", state, retain)
@@ -2129,7 +2412,7 @@ class PlaybackManager private constructor(
   }
 
   /**
-   * 切换 FFT 算法方案。主线程调用，音频线程下次 analyze 生效。
+   * 切换 FFT 算法方案。字段 @Volatile，任意线程调用；音频线程下次 analyze 生效。
    * @param mode "pc" 对齐桌面端；"android" 保留原生方案
    */
   fun setSpectrumAlgorithm(mode: String): Boolean {
@@ -2137,17 +2420,17 @@ class PlaybackManager private constructor(
     return true
   }
 
-  /** 启用/禁用均衡器。主线程调用，音频线程下次 queueInput 生效。 */
+  /** 启用/禁用均衡器。字段 @Volatile，任意线程调用；音频线程下次 queueInput 生效。 */
   fun setEqualizerEnabled(enabled: Boolean) {
     eqAudioProcessor.setEnabled(enabled)
   }
 
-  /** 更新 10 频段增益（dB）。主线程调用，原子替换系数快照。 */
+  /** 更新 10 频段增益（dB）。任意线程调用，原子替换系数快照。 */
   fun setEqualizerBands(gainsDb: FloatArray) {
     eqAudioProcessor.setBands(gainsDb)
   }
 
-  /** 更新前级增益（dB）。主线程调用，原子替换系数快照。 */
+  /** 更新前级增益（dB）。任意线程调用，原子替换系数快照。 */
   fun setEqualizerPreamp(preampDb: Float) {
     eqAudioProcessor.setPreamp(preampDb)
   }
@@ -2276,7 +2559,7 @@ class PlaybackManager private constructor(
       val resolvedBitmap = bitmap ?: BitmapFactory.decodeResource(appContext.resources, R.mipmap.ic_launcher)
       val encodedBytes = encodeArtworkBytes(resolvedBitmap)
 
-      mainHandler.post {
+      playbackHandler.post {
         if (artworkToken != artworkTokenCounter.get()) {
           emitDiagnosticLog("DIAG-Artwork", "stale cover ignored")
           return@post
@@ -2314,7 +2597,7 @@ class PlaybackManager private constructor(
 
     networkExecutor.execute {
       val requestResult = performFavoriteRequest(songId, targetLike)
-      mainHandler.post {
+      playbackHandler.post {
         favoriteRequestInFlight = false
         if (requestResult.success) {
           liked = targetLike
@@ -2426,13 +2709,18 @@ class PlaybackManager private constructor(
   }
 
   private fun getDurationMs(): Long {
-    val p = player ?: return currentMetadata.durationMs
+    val p = player ?: return max(0L, currentMetadata.durationMs)
     val duration = p.duration
-    if (duration > 0) return duration
+    if (duration > 0) {
+      cachedDurationMs = duration
+      return duration
+    }
     return max(0L, currentMetadata.durationMs)
   }
 
   private fun getPositionMs(): Long {
+    // 播放线程外禁止读 player，返回 250ms tick 维护的快照
+    if (!onPlaybackLooper()) return max(0L, lastKnownPositionMs)
     val p = player ?: return max(0L, lastKnownPositionMs)
 
     val playerPositionMs = max(0L, p.currentPosition)

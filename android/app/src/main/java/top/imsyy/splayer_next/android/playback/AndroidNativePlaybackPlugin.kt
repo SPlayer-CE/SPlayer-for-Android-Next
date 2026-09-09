@@ -57,20 +57,20 @@ class AndroidNativePlaybackPlugin : Plugin() {
     // Capacitor 从 JS 传 number 时底层是 Double，getDouble 转 long
     val positionMs = call.getDouble("positionMs", 0.0)?.toLong() ?: 0L
     val autoPlay = call.getBoolean("autoPlay", false) ?: false
-    resolveOnMainThread(call) {
+    resolveOnPlayback(call) {
       PlaybackManager.getInstance(context).load(url, positionMs, autoPlay)
     }
   }
 
   @PluginMethod
   fun play(call: PluginCall) {
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).play() }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).play() }
   }
 
   /** 切下一首（原生队列权威推进，前台 UI 入口）。 */
   @PluginMethod
   fun next(call: PluginCall) {
-    resolveOnMainThread(call) {
+    resolveOnPlayback(call) {
       PlaybackManager.getInstance(context).handleNotificationAction(PlaybackConstants.ACTION_NEXT)
       JSObject()
     }
@@ -79,7 +79,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   /** 切上一首（原生队列权威推进，前台 UI 入口）。 */
   @PluginMethod
   fun previous(call: PluginCall) {
-    resolveOnMainThread(call) {
+    resolveOnPlayback(call) {
       PlaybackManager.getInstance(context).handleNotificationAction(PlaybackConstants.ACTION_PREVIOUS)
       JSObject()
     }
@@ -90,7 +90,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun playIndex(call: PluginCall) {
     val index = call.getInt("index", -1) ?: -1
     val positionMs = call.getDouble("positionMs", 0.0)?.toLong() ?: 0L
-    resolveOnMainThread(call) {
+    resolveOnPlayback(call) {
       PlaybackManager.getInstance(context).playIndexAt(index, positionMs)
       JSObject()
     }
@@ -98,17 +98,17 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun pause(call: PluginCall) {
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).pause() }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).pause() }
   }
 
   @PluginMethod
   fun stop(call: PluginCall) {
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).stop() }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).stop() }
   }
 
   @PluginMethod
   fun cleanup(call: PluginCall) {
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).cleanup() }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).cleanup() }
   }
 
   /** 关闭界面但保留进程，让嵌入式服务继续在后台运行。 */
@@ -129,7 +129,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun shutdownApp(call: PluginCall) {
     val activity = activity
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).shutdownAll()
       call.resolve()
       // 等桥消息送达 JS 后再退，给 100ms 余量
@@ -149,13 +149,13 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun seek(call: PluginCall) {
     // Capacitor 从 JS 传 number 时底层是 Double
     val positionMs = call.getDouble("positionMs", 0.0)?.toLong() ?: 0L
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).seek(positionMs) }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).seek(positionMs) }
   }
 
   @PluginMethod
   fun setVolume(call: PluginCall) {
     val volume = call.getFloat("volume", 1f) ?: 1f
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).setVolume(volume)
       call.resolve()
     }
@@ -164,7 +164,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun setSpeed(call: PluginCall) {
     val speed = call.getFloat("speed", 1f) ?: 1f
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).setRate(speed)
       call.resolve()
     }
@@ -172,7 +172,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun updateMetadata(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.updateMetadata(call.data)
       call.resolve()
     }
@@ -180,7 +180,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun updateQueueContext(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.updateQueueContext(call.data)
       call.resolve()
     }
@@ -188,7 +188,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun updateNotificationPrefs(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.updateNotificationPrefs(call.data)
       call.resolve()
     }
@@ -196,7 +196,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun setAllowMixWithOthers(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.setAllowMixWithOthers(call.data)
       call.resolve()
     }
@@ -260,7 +260,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun syncApiContext(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.syncApiContext(call.data)
       call.resolve()
     }
@@ -268,12 +268,12 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun getStatus(call: PluginCall) {
-    resolveOnMainThread(call) { PlaybackManager.getInstance(context).buildState() }
+    resolveOnPlayback(call) { PlaybackManager.getInstance(context).buildState() }
   }
 
   @PluginMethod
   fun syncRemoteState(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       mediaSessionManager.syncRemoteState(call.data)
       call.resolve()
     }
@@ -309,7 +309,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
       call.reject("OVERLAY_PERMISSION_DENIED")
       return
     }
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).showDynamicIsland()
       val payload = JSObject()
       payload.put("open", true)
@@ -320,7 +320,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
 
   @PluginMethod
   fun hideDynamicIsland(call: PluginCall) {
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).hideDynamicIsland()
       val payload = JSObject()
       payload.put("open", false)
@@ -340,7 +340,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun updateDynamicIslandData(call: PluginCall) {
     val lrcJson = call.getString("lrcData", "[]") ?: "[]"
     val yrcJson = call.getString("yrcData", "[]") ?: "[]"
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).updateDynamicIslandData(lrcJson, yrcJson)
       call.resolve()
     }
@@ -350,7 +350,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun updateDynamicIslandProgress(call: PluginCall) {
     val timeMs = call.getDouble("timeMs", 0.0)?.toLong() ?: 0L
     val playing = call.getBoolean("playing", false) ?: false
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).updateDynamicIslandProgress(timeMs, playing)
       call.resolve()
     }
@@ -360,7 +360,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun updateDynamicIslandSongInfo(call: PluginCall) {
     val name = call.getString("name", "") ?: ""
     val artist = call.getString("artist", "") ?: ""
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).updateDynamicIslandSongInfo(name, artist)
       call.resolve()
     }
@@ -370,7 +370,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   fun updateDynamicIslandConfig(call: PluginCall) {
     val data = call.getObject("config")
     val payload = data ?: call.data
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).updateDynamicIslandConfig(payload)
       call.resolve()
     }
@@ -405,7 +405,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun setFftEnabled(call: PluginCall) {
     val enabled = call.getBoolean("enabled", false) ?: false
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       val ok = PlaybackManager.getInstance(context).enableVisualizer(enabled)
       call.resolve(permissionResult(ok))
     }
@@ -414,7 +414,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun setSpectrumAlgorithm(call: PluginCall) {
     val mode = call.getString("mode", "pc") ?: "pc"
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       val ok = PlaybackManager.getInstance(context).setSpectrumAlgorithm(mode)
       call.resolve(permissionResult(ok))
     }
@@ -423,7 +423,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun setEqualizerEnabled(call: PluginCall) {
     val enabled = call.getBoolean("enabled", false) ?: false
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).setEqualizerEnabled(enabled)
       call.resolve()
     }
@@ -438,7 +438,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
       val value = arr.optDouble(i, 0.0)
       gains[i] = if (value.isFinite()) value.toFloat() else 0f
     }
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).setEqualizerBands(gains)
       call.resolve()
     }
@@ -447,7 +447,7 @@ class AndroidNativePlaybackPlugin : Plugin() {
   @PluginMethod
   fun setPreampGain(call: PluginCall) {
     val preampDb = call.getDouble("preampDb", 0.0)?.toFloat() ?: 0f
-    runOnMainThread(call) {
+    runOnPlayback(call) {
       PlaybackManager.getInstance(context).setEqualizerPreamp(preampDb)
       call.resolve()
     }
@@ -477,12 +477,30 @@ class AndroidNativePlaybackPlugin : Plugin() {
     notifyListeners(eventName, payload, retainUntilConsumed)
   }
 
-  private fun resolveOnMainThread(
+  /** 引擎方法派发到播放线程（与 ExoPlayer/PreloadManager 的 application looper 一致）。 */
+  private fun resolveOnPlayback(
     call: PluginCall,
     action: () -> JSObject,
   ) {
-    runOnMainThread(call) {
-      call.resolve(action())
+    PlaybackManager.getInstance(context).runOnPlaybackThread {
+      try {
+        call.resolve(action())
+      } catch (error: Exception) {
+        call.reject(error.message, error)
+      }
+    }
+  }
+
+  private fun runOnPlayback(
+    call: PluginCall,
+    action: () -> Unit,
+  ) {
+    PlaybackManager.getInstance(context).runOnPlaybackThread {
+      try {
+        action()
+      } catch (error: Exception) {
+        call.reject(error.message, error)
+      }
     }
   }
 
