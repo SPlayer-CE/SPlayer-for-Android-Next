@@ -103,7 +103,9 @@ jobs:
           {
             echo "## 提交详情"
             echo
-            git log --no-merges --format='### %s (%h)%n%n%b%n' "$RANGE"
+            # 转义 @提及（如提交正文里的 Kotlin 注解 @Synchronized 会被 GitHub 渲染成对用户 @synchronized 的引用）
+            git log --no-merges --format='### %s (%h)%n%n%b%n' "$RANGE" \
+              | sed -E 's/@([A-Za-z0-9][A-Za-z0-9-]*)/\\@\1/g'
             if [ -n "$PREV" ]; then
               echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
             fi
