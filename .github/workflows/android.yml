@@ -41,7 +41,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 完整历史：tag 构建需读取上一 tag..当前 tag 区间的提交正文生成 Release 说明
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -92,9 +95,24 @@ jobs:
         with:
           name: SPlayer-Next-APKs-${{ github.run_number }}
           path: dist-android/*.apk
+      - name: 生成 Release 说明
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          RANGE="${PREV:+$PREV..}${GITHUB_REF_NAME}"
+          {
+            echo "## 提交详情"
+            echo
+            git log --no-merges --format='### %s (%h)%n%n%b%n' "$RANGE"
+            if [ -n "$PREV" ]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+            fi
+          } > release-notes.md
+          cat release-notes.md
       - name: 发布到 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist-android/*.apk
+          body_path: release-notes.md
           generate_release_notes: true
