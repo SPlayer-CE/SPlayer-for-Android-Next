@@ -424,6 +424,41 @@ class PlaybackManager private constructor(
       instance ?: synchronized(this) {
         instance ?: PlaybackManager(context).also { instance = it }
       }
+
+    /** 通知渠道（幂等创建），Service 主线程升级前台与引擎初始化共用。 */
+    @JvmStatic
+    fun ensureNotificationChannel(context: Context) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+      val channel =
+        NotificationChannel(
+          PlaybackConstants.CHANNEL_ID,
+          context.getString(R.string.playback_notification_channel_name),
+          NotificationManager.IMPORTANCE_LOW,
+        )
+      channel.description = context.getString(R.string.playback_notification_channel_description)
+      ContextCompat.getSystemService(context, NotificationManager::class.java)?.createNotificationChannel(channel)
+    }
+
+    /**
+     * FGS 启动时限兜底的占位通知：Service onCreate 在主线程立即 startForeground 用，
+     * 引擎就绪后由 updateNotification 替换为带 MediaStyle 的完整通知。
+     */
+    @JvmStatic
+    fun buildStartupNotification(context: Context): Notification {
+      ensureNotificationChannel(context)
+      return NotificationCompat
+        .Builder(context, PlaybackConstants.CHANNEL_ID)
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentTitle(context.getString(R.string.app_name))
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .setOnlyAlertOnce(true)
+        .setSilent(true)
+        .setShowWhen(false)
+        .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setOngoing(true)
+        .build()
+    }
   }
 
   /** Service 生命周期在主线程回调；ensureInitialized/MediaSession 必须在播放线程创建，统一派发。 */
@@ -1118,7 +1153,7 @@ class PlaybackManager private constructor(
   private fun ensureInitialized() {
     if (player != null && session != null) return
 
-    createNotificationChannel()
+    ensureNotificationChannel(appContext)
 
     val renderersFactory =
       object : DefaultRenderersFactory(appContext) {
@@ -2292,19 +2327,6 @@ class PlaybackManager private constructor(
       Log.w(TAG, "Failed to stop foreground playback service", error)
     }
     NotificationManagerCompat.from(appContext).cancel(PlaybackConstants.NOTIFICATION_ID)
-  }
-
-  private fun createNotificationChannel() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val channel =
-      NotificationChannel(
-        PlaybackConstants.CHANNEL_ID,
-        appContext.getString(R.string.playback_notification_channel_name),
-        NotificationManager.IMPORTANCE_LOW,
-      )
-    channel.description = appContext.getString(R.string.playback_notification_channel_description)
-    val notificationManager = ContextCompat.getSystemService(appContext, NotificationManager::class.java)
-    notificationManager?.createNotificationChannel(channel)
   }
 
   private fun startProgressUpdates() {
