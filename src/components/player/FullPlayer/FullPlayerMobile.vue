@@ -657,6 +657,8 @@ const onSeekDragEnd = (value: number) => {
 const lyricControlsVisible = ref(false);
 const lyricControlsWakeBlocking = ref(false);
 const quickActionsOpen = ref(false);
+/** 竖屏快捷操作面板选择器：面板打开期间其矩形从原生歌词层触摸命中区中排除 */
+const QUICK_ACTIONS_PANEL_SELECTOR = ".quick-actions-popover";
 let lyricControlsTimer = 0;
 let lyricControlsWakeBlockTimer = 0;
 let ignoreControlsClickUntil = 0;
@@ -1457,6 +1459,7 @@ watch(
             :bottom-exclusion-height-px="lyricBottomExclusionPx"
             :visible="lyricRendererVisible && !pickerOpen"
             :interactive="lyricRendererInteractive"
+            :touch-exclusion-selector="quickActionsOpen ? QUICK_ACTIONS_PANEL_SELECTOR : undefined"
             :kotlin-align-offset="0.1"
             @seek="player.seek($event)"
           />

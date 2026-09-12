@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.util.AttributeSet
@@ -456,6 +457,9 @@ class MainPlayerLyricOverlayView
 
     private var bottomExclusionHeightPx = 0f
     private var touchEnabled = true
+
+    // 前端浮层（如快捷操作面板）的触摸排除区（屏幕物理像素）：命中的 ACTION_DOWN 不消费，放行给 WebView
+    private val touchExclusionRects = ArrayList<RectF>()
     private var lastTouchX = 0f
     private var lastTouchY = 0f
     private var touchStartX = 0f
@@ -697,6 +701,23 @@ class MainPlayerLyricOverlayView
       }
     }
 
+    /** 更新浮层触摸排除区；浮层关闭时下发空列表，恢复整层歌词触摸 */
+    fun setTouchExclusionRects(rects: List<RectF>) {
+      touchExclusionRects.clear()
+      touchExclusionRects.addAll(rects)
+    }
+
+    private fun isTouchInExclusionRect(
+      x: Float,
+      y: Float,
+    ): Boolean {
+      for (index in touchExclusionRects.indices) {
+        val rect = touchExclusionRects[index]
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true
+      }
+      return false
+    }
+
     private var viewportLeft = 0
     private var viewportTop = 0
     private var viewportWidth = 0
@@ -738,6 +759,7 @@ class MainPlayerLyricOverlayView
       // M-5: 清理已投递的延迟帧与惯性/时钟状态,避免离屏后仍被唤醒一次或复用时带入旧动量
       handler?.removeCallbacksAndMessages(null)
       inertialVelocity = 0f
+      touchExclusionRects.clear()
       scrollResetNano = 0L
       lastDrawNano = 0L
       invalidateAllLineBitmaps()
@@ -763,6 +785,8 @@ class MainPlayerLyricOverlayView
           return false
         }
         if (event.x < viewportLeft || event.x > viewportLeft + viewportWidth) return false
+        // 浮层排除区内的触摸不消费，交由下层 WebView 处理浮层自身交互，避免误触歌词 tap seek
+        if (isTouchInExclusionRect(event.x, event.y)) return false
       }
       when (event.actionMasked) {
         MotionEvent.ACTION_DOWN -> {

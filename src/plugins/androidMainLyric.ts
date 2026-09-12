@@ -1,10 +1,19 @@
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+/** 浮层触摸排除区（屏幕物理像素），命中区内的触摸放行给 WebView */
+export interface AndroidMainLyricTouchExclusionRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 export interface AndroidMainLyricPlugin {
   show(): Promise<void>;
   hide(): Promise<void>;
   clear(): Promise<void>;
   setTouchEnabled(options: { enabled: boolean }): Promise<void>;
+  setTouchExclusionRects(options: { rects: AndroidMainLyricTouchExclusionRect[] }): Promise<void>;
   setViewport(options: {
     left: number;
     top: number;

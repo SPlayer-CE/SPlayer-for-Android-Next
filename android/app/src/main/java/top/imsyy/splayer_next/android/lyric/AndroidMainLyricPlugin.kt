@@ -1,8 +1,10 @@
 package top.imsyy.splayer_next.android.lyric
 
 import android.app.Activity
+import android.graphics.RectF
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -63,6 +65,27 @@ class AndroidMainLyricPlugin : Plugin() {
     val enabled = call.getBoolean("enabled", true) ?: true
     runOnMainThread(call) {
       overlayView?.setTouchEnabled(enabled)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun setTouchExclusionRects(call: PluginCall) {
+    val array = call.getArray("rects") ?: JSArray()
+    val rects = ArrayList<RectF>(array.length())
+    for (index in 0 until array.length()) {
+      val item = array.optJSONObject(index) ?: continue
+      rects.add(
+        RectF(
+          item.optDouble("left", 0.0).toFloat(),
+          item.optDouble("top", 0.0).toFloat(),
+          item.optDouble("right", 0.0).toFloat(),
+          item.optDouble("bottom", 0.0).toFloat(),
+        ),
+      )
+    }
+    runOnMainThread(call) {
+      overlayView?.setTouchExclusionRects(rects)
       call.resolve()
     }
   }

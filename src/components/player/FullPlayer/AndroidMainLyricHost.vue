@@ -4,7 +4,10 @@ import type { LyricLine } from "@shared/types/lyrics";
 import type { AndroidLyricRenderMode } from "@shared/types/settings";
 import type { SpringParams } from "@/components/player/Lyrics/engine/spring";
 import { isAndroidNative } from "@/services/bridge";
-import { AndroidMainLyric } from "@/plugins/androidMainLyric";
+import {
+  AndroidMainLyric,
+  type AndroidMainLyricTouchExclusionRect,
+} from "@/plugins/androidMainLyric";
 import Lyrics from "@/components/player/Lyrics/index.vue";
 import { applyScrollPreroll } from "@/components/player/Lyrics/utils/scroll-preroll";
 
@@ -33,6 +36,7 @@ const props = withDefaults(
     bottomExclusionHeightPx?: number;
     visible?: boolean;
     interactive?: boolean;
+    touchExclusionSelector?: string;
   }>(),
   {
     initialTime: 0,
@@ -99,6 +103,10 @@ let touchStateRaf = 0;
 /** 上次推送到原生的播放时间，暂停时用于判断时间是否变化 */
 let lastPushedTime = -1;
 let lastTouchEnabled: boolean | null = null;
+/** 上次下发的浮层触摸排除区签名，浮层位置稳定时跳过重复下发 */
+let lastTouchExclusionKey = "";
+/** 浮层触摸排除区的逐帧跟踪句柄 */
+let exclusionSyncRaf = 0;
 // 播放器入场动画期间 getBoundingClientRect 返回过渡位置，导致视口被设为错误值。
 // ResizeObserver 只监听尺寸变化不监听位置变化，无法自动修正。
 // 在初始同步后延迟重新同步视口，确保动画结束后位置正确。
@@ -226,6 +234,58 @@ const syncKotlinTouchState = async (force = false): Promise<void> => {
   await AndroidMainLyric.setTouchEnabled({ enabled });
 };
 
+/**
+ * 解析浮层触摸排除区：浮层经 portal 渲染在歌词层之上，位置随碰撞翻转/开合动画变化，
+ * 因此按选择器实时取矩形，换算为屏幕物理像素（与 setViewport 同一坐标系）
+ */
+const resolveTouchExclusionRects = (): AndroidMainLyricTouchExclusionRect[] => {
+  const selector = props.touchExclusionSelector;
+  if (!selector) return [];
+  const dpr = window.devicePixelRatio || 1;
+  const rects: AndroidMainLyricTouchExclusionRect[] = [];
+  document.querySelectorAll<HTMLElement>(selector).forEach((element) => {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    rects.push({
+      left: Math.round(rect.left * dpr),
+      top: Math.round(rect.top * dpr),
+      right: Math.round(rect.right * dpr),
+      bottom: Math.round(rect.bottom * dpr),
+    });
+  });
+  return rects;
+};
+
+const syncKotlinTouchExclusion = async (force = false): Promise<void> => {
+  if (activeRenderer.value !== "kotlin") return;
+  const rects = resolveTouchExclusionRects();
+  const key = rects
+    .map((rect) => `${rect.left},${rect.top},${rect.right},${rect.bottom}`)
+    .join(";");
+  if (!force && key === lastTouchExclusionKey) return;
+  lastTouchExclusionKey = key;
+  await AndroidMainLyric.setTouchExclusionRects({ rects });
+};
+
+const stopTouchExclusionTracking = (): void => {
+  window.cancelAnimationFrame(exclusionSyncRaf);
+  exclusionSyncRaf = 0;
+};
+
+// 浮层开合动画期间矩形逐帧变化，用 RAF 跟踪并在位置稳定后跳过下发
+const startTouchExclusionTracking = (): void => {
+  stopTouchExclusionTracking();
+  void syncKotlinTouchExclusion();
+  const step = (): void => {
+    exclusionSyncRaf = window.requestAnimationFrame(() => {
+      exclusionSyncRaf = 0;
+      void syncKotlinTouchExclusion();
+      if (props.touchExclusionSelector) step();
+    });
+  };
+  step();
+};
+
 const scheduleViewportSync = (): void => {
   if (activeRenderer.value !== "kotlin") return;
   window.cancelAnimationFrame(viewportRaf);
@@ -316,9 +376,13 @@ const teardownKotlinRenderer = async (): Promise<void> => {
   window.cancelAnimationFrame(viewportRaf);
   window.cancelAnimationFrame(progressPushRaf);
   window.cancelAnimationFrame(touchStateRaf);
+  stopTouchExclusionTracking();
   lastTouchEnabled = null;
+  lastTouchExclusionKey = "";
   // 非 native 环境（LAN 网页客户端/预览）无原生歌词层，跳过 clear 避免插件 web 端未实现报错
   if (!isAndroidNative) return;
+  // 清空排除区：渲染器拆除后视图可能被复用，残留矩形会让对应区域的歌词触摸失效
+  await AndroidMainLyric.setTouchExclusionRects({ rects: [] });
   await AndroidMainLyric.clear();
 };
 
@@ -428,6 +492,21 @@ watch(
       return;
     }
     scheduleKotlinTouchSync();
+  },
+  { flush: "post" },
+);
+
+watch(
+  // 渲染器切到 kotlin 时浮层可能已打开，用组合表达式保证此时重新开始跟踪
+  () => (activeRenderer.value === "kotlin" ? props.touchExclusionSelector : undefined),
+  (selector) => {
+    if (!selector) {
+      // 浮层关闭后立即清空排除区，避免浮层消失期间残留矩形继续放行触摸
+      stopTouchExclusionTracking();
+      void syncKotlinTouchExclusion(true);
+      return;
+    }
+    startTouchExclusionTracking();
   },
   { flush: "post" },
 );
