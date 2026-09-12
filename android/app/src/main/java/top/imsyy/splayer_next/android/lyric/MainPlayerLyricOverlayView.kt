@@ -780,10 +780,11 @@ class MainPlayerLyricOverlayView
       if (!visibleState || lyricLines.isEmpty()) return false
       if (viewportWidth <= 0 || viewportHeight <= 0) return false
       if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-        if (event.y < viewportTop || event.y >= viewportTop + viewportHeight - bottomExclusionHeightPx
-        ) {
-          return false
-        }
+        // 排除区最多占视口高度的 60%：Web 侧下发的是浮层高度，视口极小时排除区可能覆盖整层，
+        // 直接使用会让所有歌词行都收不到点击（整层不可点），这里做失效安全钳制
+        val effectiveBottomExclusion = bottomExclusionHeightPx.coerceAtMost(viewportHeight * 0.6f)
+        val touchBottom = viewportTop + viewportHeight - effectiveBottomExclusion
+        if (event.y < viewportTop || event.y >= touchBottom) return false
         if (event.x < viewportLeft || event.x > viewportLeft + viewportWidth) return false
         // 浮层排除区内的触摸不消费，交由下层 WebView 处理浮层自身交互，避免误触歌词 tap seek
         if (isTouchInExclusionRect(event.x, event.y)) return false

@@ -139,10 +139,15 @@ const shouldHandleOverlayMutations = (mutations: MutationRecord[]): boolean =>
 
 const schedulePostMountViewportSync = (): void => {
   for (const t of postMountSyncTimers) window.clearTimeout(t);
-  // 420ms 覆盖 380ms 入场动画 + 一帧余量；800ms 兜底慢设备
+  // 420ms 覆盖 380ms 入场动画 + 一帧余量；800ms 兜底慢设备。
+  // 视口同步后一并复核触摸状态：动画期间下发的视口与触摸判定都可能是过渡中间态，
+  // 只在挂载时纠正视口会让原生层残留在"视口偏移/触摸被禁用"的错误状态
+  const syncViewportAndTouch = (): void => {
+    void syncKotlinViewport().then(() => syncKotlinTouchState(true));
+  };
   postMountSyncTimers = [
-    window.setTimeout(() => void syncKotlinViewport(), 420),
-    window.setTimeout(() => void syncKotlinViewport(), 800),
+    window.setTimeout(syncViewportAndTouch, 420),
+    window.setTimeout(syncViewportAndTouch, 800),
   ];
 };
 
@@ -188,13 +193,42 @@ const syncKotlinViewport = async (): Promise<void> => {
   await AndroidMainLyric.show();
 };
 
-const resolveKotlinTouchEnabled = (): boolean => {
-  if (activeRenderer.value !== "kotlin") return false;
-  if (!props.visible || !props.interactive) return false;
-  if (hasBlockingOverlay()) return false;
-  if (document.body.hasAttribute("data-scroll-locked")) return false;
-  if (document.body.style.pointerEvents === "none") return false;
+/** 采样失败后的重试节奏：过渡动画/瞬时遮挡会让采样短暂失效，逐档重试直到恢复 */
+const TOUCH_RECOVERY_DELAYS_MS = [160, 420, 900, 1800];
+let touchRecoveryTimer = 0;
+let touchRecoveryAttempt = 0;
 
+const clearTouchRecovery = (): void => {
+  if (touchRecoveryTimer) {
+    window.clearTimeout(touchRecoveryTimer);
+    touchRecoveryTimer = 0;
+  }
+  touchRecoveryAttempt = 0;
+};
+
+/**
+ * 触摸可用性的确定性阻塞项：只依赖可见性/交互标志与页面级锁，与过渡动画无关。
+ * 返回非 null 即直接禁用且不再重试；返回 null 表示需继续用采样确认可交互性
+ */
+const resolveKotlinTouchBlockReason = (): string | null => {
+  if (activeRenderer.value !== "kotlin") return "renderer";
+  if (!props.visible || !props.interactive) return "visibility";
+  if (hasBlockingOverlay()) return "overlay";
+  if (document.body.hasAttribute("data-scroll-locked")) return "scroll-lock";
+  if (document.body.style.pointerEvents === "none") return "pointer-events";
+
+  const host = kotlinHostRef.value;
+  if (!host) return "host";
+  const rect = host.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return "size";
+  return null;
+};
+
+/**
+ * 采样歌词区是否真实可交互：过渡动画/浮层展开期间采样点可能暂时命中歌词层之外的元素，
+ * 因此失败结果不稳定——交由重试确认，不能直接当作长期禁用
+ */
+const isKotlinTouchReachable = (): boolean => {
   const host = kotlinHostRef.value;
   if (!host) return false;
   const interactionRoot = host.parentElement ?? host;
@@ -223,15 +257,46 @@ const resolveKotlinTouchEnabled = (): boolean => {
   return false;
 };
 
+/**
+ * 采样失败但无确定性阻塞时调度重试，并顺带重试视口同步
+ * （过渡期间 getBoundingClientRect 会返回中间位置，视口需要一并修正）
+ */
+const scheduleKotlinTouchRecovery = (): void => {
+  if (touchRecoveryTimer || touchRecoveryAttempt >= TOUCH_RECOVERY_DELAYS_MS.length) return;
+  const delay = TOUCH_RECOVERY_DELAYS_MS[touchRecoveryAttempt++] ?? 0;
+  touchRecoveryTimer = window.setTimeout(() => {
+    touchRecoveryTimer = 0;
+    if (activeRenderer.value !== "kotlin") {
+      clearTouchRecovery();
+      return;
+    }
+    void syncKotlinViewport().then(() => syncKotlinTouchState(true));
+  }, delay);
+};
+
 const syncKotlinTouchState = async (force = false): Promise<void> => {
   if (activeRenderer.value !== "kotlin") {
     lastTouchEnabled = null;
+    clearTouchRecovery();
     return;
   }
-  const enabled = resolveKotlinTouchEnabled();
-  if (!force && lastTouchEnabled === enabled) return;
+  const blockReason = resolveKotlinTouchBlockReason();
+  if (blockReason !== null) {
+    clearTouchRecovery();
+    if (!force && lastTouchEnabled === false) return;
+    lastTouchEnabled = false;
+    await AndroidMainLyric.setTouchEnabled({ enabled: false });
+    return;
+  }
+  const enabled = isKotlinTouchReachable();
+  if (enabled) clearTouchRecovery();
+  if (!force && lastTouchEnabled === enabled) {
+    if (!enabled) scheduleKotlinTouchRecovery();
+    return;
+  }
   lastTouchEnabled = enabled;
   await AndroidMainLyric.setTouchEnabled({ enabled });
+  if (!enabled) scheduleKotlinTouchRecovery();
 };
 
 /**
@@ -302,6 +367,15 @@ const scheduleKotlinTouchSync = (): void => {
   touchStateRaf = window.requestAnimationFrame(() => {
     void syncKotlinTouchState();
   });
+};
+
+/**
+ * 触摸失效兜底：原生歌词层触摸被禁用期间，触摸事件会落到 WebView，
+ * 借 pointerdown 重新评估一次，避免采样瞬时失败造成的长期"歌词行点不动"
+ */
+const probeKotlinTouchState = (): void => {
+  if (lastTouchEnabled !== false) return;
+  void syncKotlinTouchState();
 };
 
 const syncKotlinConfig = async (): Promise<void> => {
@@ -377,6 +451,7 @@ const teardownKotlinRenderer = async (): Promise<void> => {
   window.cancelAnimationFrame(progressPushRaf);
   window.cancelAnimationFrame(touchStateRaf);
   stopTouchExclusionTracking();
+  clearTouchRecovery();
   lastTouchEnabled = null;
   lastTouchExclusionKey = "";
   // 非 native 环境（LAN 网页客户端/预览）无原生歌词层，跳过 clear 避免插件 web 端未实现报错
@@ -459,6 +534,8 @@ watch(
   async (visible) => {
     if (activeRenderer.value !== "kotlin") return;
     if (!visible) {
+      // 确定性禁用：取消采样重试，避免隐藏态被重试重新开启触摸
+      clearTouchRecovery();
       await AndroidMainLyric.setTouchEnabled({ enabled: false });
       lastTouchEnabled = false;
       await AndroidMainLyric.hide();
@@ -485,6 +562,8 @@ watch(
       // 取消并重新调度 RAF，导致 setTouchEnabled(false) 延迟多帧才到达原生层，
       // 这段时间原生覆盖层仍在消费本该传递给弹层的触摸事件。
       window.cancelAnimationFrame(touchStateRaf);
+      // 确定性禁用：取消采样重试，避免弹层存续期间被重试重新开启
+      clearTouchRecovery();
       if (lastTouchEnabled !== false) {
         lastTouchEnabled = false;
         void AndroidMainLyric.setTouchEnabled({ enabled: false });
@@ -596,6 +675,8 @@ onMounted(async () => {
         window.cancelAnimationFrame(touchStateRaf);
         window.cancelAnimationFrame(viewportRaf);
         window.clearTimeout(overlayRecoverTimer);
+        // 确定性禁用：取消采样重试，避免弹层存续期间被重试重新开启触摸
+        clearTouchRecovery();
         if (lastTouchEnabled !== false) {
           lastTouchEnabled = false;
           void AndroidMainLyric.setTouchEnabled({ enabled: false });
@@ -630,6 +711,7 @@ onMounted(async () => {
   }
   window.addEventListener("resize", scheduleViewportSync, { passive: true });
   window.addEventListener("scroll", scheduleKotlinTouchSync, { passive: true, capture: true });
+  window.addEventListener("pointerdown", probeKotlinTouchState, { passive: true, capture: true });
 });
 
 onBeforeUnmount(async () => {
@@ -645,6 +727,7 @@ onBeforeUnmount(async () => {
   seekListener = null;
   window.removeEventListener("resize", scheduleViewportSync);
   window.removeEventListener("scroll", scheduleKotlinTouchSync, true);
+  window.removeEventListener("pointerdown", probeKotlinTouchState, true);
   await teardownKotlinRenderer();
 });
 </script>

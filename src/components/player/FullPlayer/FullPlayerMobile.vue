@@ -725,15 +725,31 @@ const onControlsClickCapture = (event: MouseEvent): void => {
 };
 
 const getLyricControlsWakeZoneHeight = (): number => {
+  // 用响应式视口高度而非 window.innerHeight：排除区 computed 依赖它，
+  // 旋转/窗口尺寸变化后需要重新计算
+  const viewportHeight = height.value || window.innerHeight;
   const baseHeight = Math.min(
     LYRIC_CONTROLS_WAKE_ZONE_MAX,
-    Math.max(LYRIC_CONTROLS_WAKE_ZONE_MIN, window.innerHeight * LYRIC_CONTROLS_WAKE_ZONE_RATIO),
+    Math.max(LYRIC_CONTROLS_WAKE_ZONE_MIN, viewportHeight * LYRIC_CONTROLS_WAKE_ZONE_RATIO),
   );
   const safeBottom = getComputedStyle(document.documentElement)
     .getPropertyValue("--android-fullscreen-safe-bottom")
     .trim();
   return baseHeight + (Number.parseFloat(safeBottom) || 0);
 };
+
+/**
+ * 原生歌词层底部触摸排除高度：跟随当前真正压在歌词区底部的 Web 浮层。
+ * 浮层显示时按浮层高度排除；浮层收起到仅剩唤起区时按唤起区高度排除，
+ * 否则唤起区上方的歌词行会落在「原生层不放行、WebView 又没有接收者」的死区导致点击无响应；
+ * 横屏底栏位于歌词区下方不重叠，无需排除。
+ */
+const kotlinBottomExclusionPx = computed(() => {
+  if (isPhoneLandscape.value) return 0;
+  if (sharedControlsVisible.value) return lyricBottomExclusionPx.value;
+  if (!lyricControlsWakeShieldVisible.value) return 0;
+  return getLyricControlsWakeZoneHeight();
+});
 
 const isLyricControlsWakeZone = (event: PointerEvent): boolean => {
   const lyricBody = event.currentTarget as HTMLElement | null;
@@ -1456,7 +1472,7 @@ watch(
             :show-romanization="settings.lyric.showRomanization"
             :unlock-fps-limit="settings.system.androidLyric.unlockFpsLimit"
             :render-mode="androidLyricRenderMode"
-            :bottom-exclusion-height-px="lyricBottomExclusionPx"
+            :bottom-exclusion-height-px="kotlinBottomExclusionPx"
             :visible="lyricRendererVisible && !pickerOpen"
             :interactive="lyricRendererInteractive"
             :touch-exclusion-selector="quickActionsOpen ? QUICK_ACTIONS_PANEL_SELECTOR : undefined"

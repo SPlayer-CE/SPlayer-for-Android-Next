@@ -301,6 +301,12 @@ const lyricToggleActive = computed(
 const androidLyricInteractive = computed(
   () => showLyric.value && !status.fullQueueOpen && !fullscreenCover.value,
 );
+/**
+ * 原生歌词层可见性：必须与 androidLyricInteractive 的歌词开关语义一致。
+ * 原生层挂在 Activity 顶层，不受 WebView 内 opacity-0 约束，
+ * 关闭歌词显示后若仍 visible 会在封面上残留一份可看不可点的歌词
+ */
+const androidLyricVisible = computed(() => showLyric.value && !pickerOpen.value);
 
 /** 切换歌词展示 */
 const toggleLyric = (): void => {
@@ -601,7 +607,7 @@ const showComments = (): void => {
                   :lyric-lines="media.parsedLyric"
                   :initial-time="initialLyricTimeMs"
                   :playing="isPlaying"
-                  :visible="!pickerOpen"
+                  :visible="androidLyricVisible"
                   :font-weight="settings.lyric.fontWeight"
                   :font-family="settings.lyric.fontFamily"
                   :align-position="settings.lyric.alignPosition"
