@@ -2,6 +2,77 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## Karpathy-Inspired Coding Principles
+
+**Tradeoff:** 这些原则偏向谨慎而非速度。对于简单任务，自行判断。
+
+### 1. 先思考再编码
+
+**不要假设。不要隐藏困惑。展示权衡。**
+
+实现之前：
+
+- 明确说明你的假设。如果不确定，提问。
+- 如果存在多种解释，展示它们 - 不要默默选择。
+- 如果存在更简单的方法，说出来。必要时反驳。
+- 如果某些事情不清楚，停下来。说明什么让你困惑。提问。
+
+### 2. 简单优先
+
+**解决问题的最小代码。不要投机。**
+
+- 不添加超出要求的功能。
+- 不为一次性使用的代码创建抽象。
+- 不添加未请求的"灵活性"或"可配置性"。
+- 不为不可能的场景添加错误处理。
+- 如果 200 行可以是 50 行，重写它。
+
+问自己："高级工程师会说这过度复杂了吗？" 如果是，简化。
+
+### 3. 精确修改
+
+**只修改必须修改的。只清理自己的遗留。**
+
+编辑现有代码时：
+
+- 不要"改进"相邻的代码、注释或格式。
+- 不要重构没有问题的东西。
+- 匹配现有风格，即使你会以不同方式做。
+- 如果注意到不相关的死代码，提及它 - 不要删除它。
+
+当你的更改产生孤立代码时：
+
+- 删除你的更改使其未使用的导入/变量/函数。
+- 除非被要求，不要删除预先存在的死代码。
+
+测试：每一行更改都应该直接追溯到用户的请求。
+
+### 4. 目标驱动执行
+
+**定义成功标准。循环直到验证。**
+
+将任务转化为可验证的目标：
+
+- "添加验证" → "为无效输入编写测试，然后使它们通过"
+- "修复 bug" → "编写重现它的测试，然后使它通过"
+- "重构 X" → "确保测试在之前和之后都通过"
+
+对于多步骤任务，说明简要计划：
+
+```
+1. [步骤] → 验证: [检查]
+2. [步骤] → 验证: [检查]
+3. [步骤] → 验证: [检查]
+```
+
+强大的成功标准让你能够独立循环。弱标准（"让它工作"）需要持续澄清。
+
+---
+
+**这些原则有效的标志：** diff 中更少不必要的更改，更少因过度复杂而重写，澄清问题在实现之前而不是错误之后提出。
+
+---
+
 ## Project Overview
 
 SPlayer-Next — music player on **Electron + Vue 3 + TypeScript** for desktop and **Capacitor + Android Kotlin** for Android. Desktop uses Rust native modules (NAPI-RS) for audio decoding, system media integration, and Windows taskbar lyric; Android uses Media3/ExoPlayer, Capacitor plugins, and an embedded Node.js Mobile API service.
@@ -29,6 +100,7 @@ Android local flow:
 
 - Web preview: `pnpm exec vite --config vite.config.android.ts --host 0.0.0.0` starts Android UI and a dev embedded API (`API/mobile-entry.ts`) on `SP_API_PORT` (default 13962 for Vite dev). Browser preview is not a native Capacitor container, so native plugins fall back to no-op or HTML audio behavior.
 - Native sync/build: run `pnpm build:android`, then build an APK from `android/` with `gradlew assembleDebug` or `gradlew assembleRelease`.
+- Kotlin-only changes: verify with `cd android && ./gradlew :app:compileDebugKotlin` (needs JDK 21 — a JDK 17 `JAVA_HOME` fails on `:capacitor-android:compileDebugJavaWithJavac` with `invalid source release: 21`). Style/static checks: `./gradlew :app:ktlintMainSourceSetCheck` and `./gradlew detekt` (both report-only).
 - Release install helper: `SPlayer-for-Android-build-and-install-android-release.cmd` selects connected ADB devices, runs `pnpm build:android`, runs `gradlew assembleRelease`, signs an unsigned arm64-v8a APK with the debug keystore if needed, installs it, and launches `top.imsyy.splayer_next`.
 - Do not run `pnpm build` for Android unless you explicitly need the desktop Electron production build; Android does not depend on desktop Rust native output.
 
@@ -187,6 +259,7 @@ Shared rules: `windows/*` must use `useNowPlayingSync` / `getNowPlayingCurrentMs
 - Ports: Kotlin `13962`, Node `13233`, Vite dev overrides host for LAN. SAF `content://` URIs are not file paths. Feed ExoPlayer only WebView-safe URLs (`/api/cache/song/play`, `/api/lanShare/audio`).
 - `scripts/build-android-node.ts` (embedded API bundle): alias resolution must verify candidates with `stat().isFile()` — `access()` succeeds on directories (Windows) and esbuild then fails with `Incorrect function`. Electron main-process imports pulled into `API/` (e.g. kugou `config.ts` → `@main/store`) need an `embedded-*-stub` plugin registered BEFORE the generic `@main/` alias plugin — the store can't run under Node.js Mobile (top-level `electron` import).
 - `postinstall` is a three-step chain: `node node_modules/electron/install.js && electron-rebuild -f -w better-sqlite3 && tsx scripts/patch-nodejs-mobile-cordova.ts`. The patch step is mandatory for Android builds — losing it breaks `build:android`. Run `pnpm install` in a regular terminal (not sandboxed), or the patch fails with EPERM.
+- Native main-player lyric clock: `MainPlayerLyricOverlayView.kt` reads `PlaybackManager.getLyricPositionMs()` every frame on the UI thread, and per-word sweep gradients (`AndroidLyricTimeline.computeSegmentTravel`) advance as a continuous function of that time — so this provider must stay smooth for off-looper callers too. Returning the 250ms `lastKnownPositionMs` tick snapshot there (an earlier cross-thread safety change) quantized the sweep into a 4Hz stop-motion animation. Off-looper reads go through `interpolatePositionSnapshot()` (snapshot + `lastKnownPositionAnchorNano` monotonic-clock interpolation at `cachedPlaybackRate`), and every snapshot write must go through `updateLastKnownPosition()` so the anchor stays in sync. Seeks must NOT freeze the interpolation: `beginPendingSeek()` moves the snapshot to the target so the sweep continues from the tapped line, and the pending state clears the moment the position catches up (`getPositionMs()` / `rememberReportedPosition()`) — adding a `pendingSeekPositionMs` freeze check once stalled the sweep for the whole 4s grace window. `onPlaybackParametersChanged` must keep `cachedPlaybackRate` fresh — MediaSession controllers can call `setPlaybackSpeed` on the forwarding player, bypassing `setRate()`.
 
 ### Type System
 
