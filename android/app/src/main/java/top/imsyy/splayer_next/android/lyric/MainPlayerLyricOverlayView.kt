@@ -3530,8 +3530,8 @@ class MainPlayerLyricOverlayView
 
     private fun resolveCurrentTimeMs(): Long {
       if (!playing || frozen) return baseTimeMs
-      // 丝滑时钟：逐帧直读原生媒体时钟（getLyricPositionMs = ExoPlayer 内部按速率插值的
-      // currentPosition，自带 pendingSeek 防回跳），替代 5Hz 推送锚点插值——
+      // 丝滑时钟：逐帧直读原生媒体时钟（getLyricPositionMs = 播放线程位置快照 + 本地单调时钟
+      // 按播放速率插值出的连续时间，自带 pendingSeek 防回跳），替代 5Hz 推送锚点插值——
       // 消除推送抖动、暂停/缓冲过冲与下一拍拽回造成的全局锯齿；provider 缺失时回退锚点插值
       playbackPositionProvider?.let { provider ->
         return (provider.invoke() + timeOffsetMs).coerceAtLeast(0L)

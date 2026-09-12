@@ -38,6 +38,7 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -231,6 +232,15 @@ class PlaybackManager private constructor(
 
   @Volatile
   private var lastKnownPositionMs = 0L
+
+  /**
+   * 上一次写 lastKnownPositionMs 时的系统单调时钟锚点（nanoTime）。
+   * 供播放线程外的歌词时钟（getLyricPositionMs）在 250ms tick 间隙做本地平滑插值，
+   * 保证主播放器逐词扫光等像素级动画拿到的是连续时间而不是阶梯快照。
+   */
+  @Volatile
+  private var lastKnownPositionAnchorNano = 0L
+
   private var durationCalibratedForSource = ""
 
   @Volatile
@@ -552,7 +562,7 @@ class PlaybackManager private constructor(
     }
 
     clearPendingSeek()
-    lastKnownPositionMs = 0L
+    updateLastKnownPosition(0L)
     resolveTokenCounter.incrementAndGet()
     // 切歌重置过期重试标记，避免旧 generation 误伤新 track；按 track 的 Exactly 一次语义由 tryHandleUrlExpireRetry 内 songId 比对保证
     urlExpireRetryGeneration.incrementAndGet()
@@ -605,7 +615,7 @@ class PlaybackManager private constructor(
     player?.pause()
     player?.seekTo(0L)
     clearPendingSeek()
-    lastKnownPositionMs = 0L
+    updateLastKnownPosition(0L)
     stopProgressUpdates()
     emitPlaybackState(true)
     return buildState()
@@ -688,7 +698,7 @@ class PlaybackManager private constructor(
     currentSource = ""
     cancelPromotion()
     clearPendingSeek()
-    lastKnownPositionMs = 0L
+    updateLastKnownPosition(0L)
     playbackQueue.replace(null, -1, PlaybackQueue.RepeatMode.OFF, false)
     durationCalibratedForSource = ""
     resolveTokenCounter.incrementAndGet()
@@ -1008,9 +1018,39 @@ class PlaybackManager private constructor(
       val positionMs = max(0L, remotePositionMs + elapsedMs)
       return if (remoteDurationMs > 0L) positionMs.coerceAtMost(remoteDurationMs) else positionMs
     }
-    // 播放线程外返回 250ms tick 维护的快照，避免跨线程读 player
-    if (!onPlaybackLooper()) return max(0L, lastKnownPositionMs)
+    // 播放线程外返回 250ms tick 快照并用本地单调时钟补齐阶梯间隙：
+    // 跨线程读 player 仍被避免，同时主播放器逐词扫光的渐变按连续时间推进，
+    // 直接暴露阶梯快照会把扫光退化成 4Hz 定格跳变
+    if (!onPlaybackLooper()) return interpolatePositionSnapshot()
     return getPositionMs()
+  }
+
+  /**
+   * 播放线程外的歌词时钟：以上次位置快照为锚点，按缓存播放速率用系统单调时钟推进，
+   * 把 250ms tick 的阶梯快照补成逐帧平滑的连续时间。
+   * 仅在播放中插值，暂停/缓冲时保持快照冻结；seek 时快照被同步为目标位置，
+   * 插值随即从目标处平滑推进，不做额外冻结（点击歌词行后扫光须立即跟上，
+   * 曾因按 pendingSeek 状态冻结导致定格数秒）；
+   * 结果钳制在缓存媒体时长内防止越界。
+   */
+  private fun interpolatePositionSnapshot(): Long {
+    val basePositionMs = max(0L, lastKnownPositionMs)
+    val anchorNano = lastKnownPositionAnchorNano
+    if (!cachedIsPlaying || anchorNano == 0L) return basePositionMs
+    val elapsedMs = (System.nanoTime() - anchorNano) / 1_000_000L
+    if (elapsedMs <= 0L) return basePositionMs
+    val interpolated = basePositionMs + (elapsedMs * cachedPlaybackRate).toLong()
+    return if (cachedDurationMs > 0L) interpolated.coerceAtMost(cachedDurationMs) else interpolated
+  }
+
+  /**
+   * 统一写入线程外可读的位置快照并刷新插值锚点。
+   * 切歌/seek/暂停/进度 tick 等所有更新快照的路径必须走此入口，
+   * 保证插值起点与快照值始终一一对应。
+   */
+  private fun updateLastKnownPosition(positionMs: Long) {
+    lastKnownPositionMs = positionMs
+    lastKnownPositionAnchorNano = System.nanoTime()
   }
 
   fun getLyricPlaybackRate(): Float {
@@ -1227,6 +1267,14 @@ class PlaybackManager private constructor(
           if (isPlaying) startProgressUpdates()
           updateNotification()
           emitPlaybackState(true)
+        }
+
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+          // MediaSession 控制器可绕过 setRate 直接改速（ForwardingPlayer 默认转发），
+          // 此处同步线程外插值时钟依赖的速率缓存与锚点，避免歌词时钟按旧速率推进
+          cachedPlaybackRate = playbackParameters.speed
+          updateLastKnownPosition(max(0L, player?.currentPosition ?: lastKnownPositionMs))
+          mainLyricClockListener?.invoke()
         }
 
         override fun onPositionDiscontinuity(
@@ -1986,7 +2034,7 @@ class PlaybackManager private constructor(
     currentMetadata = metadata?.copy() ?: TrackMetadata()
     liked = likedState
     clearPendingSeek()
-    lastKnownPositionMs = 0L
+    updateLastKnownPosition(0L)
     durationCalibratedForSource = ""
     player?.let {
       val item = buildMediaItem(source, metadata ?: TrackMetadata())
@@ -2352,6 +2400,8 @@ class PlaybackManager private constructor(
   }
 
   private fun emitProgressChanged() {
+    // 250ms tick 只在播放中执行，顺带校准播放状态缓存，保证线程外插值时钟及时生效
+    cachedIsPlaying = true
     emitProgressChanged(getPositionMs(), true, false)
   }
 
@@ -2364,7 +2414,7 @@ class PlaybackManager private constructor(
     if (acknowledgePendingSeek) {
       rememberReportedPosition(safePositionMs)
     } else {
-      lastKnownPositionMs = safePositionMs
+      updateLastKnownPosition(safePositionMs)
     }
     if (authoritative) mainLyricClockListener?.invoke()
     pushDynamicIslandProgress(safePositionMs, isEffectivelyPlaying())
@@ -2752,17 +2802,21 @@ class PlaybackManager private constructor(
         clearPendingSeek()
       } else if (playerPositionMs + 250L < pendingSeekPositionMs) {
         return max(0L, lastKnownPositionMs)
+      } else {
+        // 位置已追上目标，seek 落定即结束待定：线程外插值时钟的冻结必须随落定解除，
+        // 否则会一直冻结到 4s 宽限期结束，表现为 seek 后歌词扫光定格数秒
+        clearPendingSeek()
       }
     }
 
-    lastKnownPositionMs = playerPositionMs
+    updateLastKnownPosition(playerPositionMs)
     return playerPositionMs
   }
 
   private fun beginPendingSeek(positionMs: Long) {
     pendingSeekPositionMs = max(0L, positionMs)
     pendingSeekDeadlineMs = System.currentTimeMillis() + SEEK_STATE_GRACE_MS
-    lastKnownPositionMs = pendingSeekPositionMs
+    updateLastKnownPosition(pendingSeekPositionMs)
   }
 
   private fun clearPendingSeek() {
@@ -2778,9 +2832,12 @@ class PlaybackManager private constructor(
         clearPendingSeek()
       } else if (safePositionMs + 250L < pendingSeekPositionMs) {
         return
+      } else {
+        // 报告位置已追上目标（如 seek 完成的位置不连续事件），立即结束待定，解除插值冻结
+        clearPendingSeek()
       }
     }
-    lastKnownPositionMs = safePositionMs
+    updateLastKnownPosition(safePositionMs)
   }
 
   private fun safeText(
