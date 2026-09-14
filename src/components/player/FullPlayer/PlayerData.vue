@@ -138,6 +138,21 @@ const alignItems = computed(() => {
   if (props.align === "right") return "items-end";
   return "items-center";
 });
+
+/** 标题行（SMarquee 是组件，实例上取 $el 才是根节点） */
+const titleRowRef = ref<{ $el?: HTMLElement } | null>(null);
+/** 歌手行 */
+const artistRowRef = ref<HTMLElement | null>(null);
+
+/** 标题行矩形：本组件居中排版，Hero 浮层行必须按它横向对齐才不会在转场首帧瞬移 */
+const getHeroTitleRect = (): DOMRect | null =>
+  titleRowRef.value?.$el?.getBoundingClientRect() ?? null;
+
+/** 歌手行矩形：含行首麦克风图标，Hero 浮层行（同样渲染图标）按它横向对齐 */
+const getHeroArtistRect = (): DOMRect | null =>
+  artistRowRef.value?.getBoundingClientRect() ?? null;
+
+defineExpose({ getHeroTitleRect, getHeroArtistRect });
 </script>
 
 <template>
@@ -147,8 +162,13 @@ const alignItems = computed(() => {
     style="font-size: clamp(12px, calc(14 / 1080 * var(--page-zoom-100vh, 100vh)), 16px)"
     :class="alignItems"
   >
-    <!-- 标题 -->
-    <SMarquee fit class="max-w-full text-[2em] font-semibold leading-tight">
+    <!-- 标题。song-data-hero-row 标记竖屏 Hero 转场真正飞行的两行（标题 / 歌手）：
+         转场期间由 Hero 浮层精确接管，其余行随转场淡出，避免出现硬空洞 -->
+    <SMarquee
+      ref="titleRowRef"
+      fit
+      class="max-w-full text-[2em] font-semibold leading-tight song-data-hero-row"
+    >
       {{ displayTrack.title }}
     </SMarquee>
     <!-- 副标题/注释 -->
@@ -217,7 +237,10 @@ const alignItems = computed(() => {
       </SPopselect>
     </div>
     <!-- 歌手 -->
-    <div class="max-w-full flex items-center gap-1.5 text-[1.2em] text-cover/60">
+    <div
+      ref="artistRowRef"
+      class="max-w-full flex items-center gap-1.5 text-[1.2em] text-cover/60 song-data-hero-row"
+    >
       <IconLucideMic class="shrink-0 translate-y-px text-cover/40" />
       <span class="truncate">
         <template v-if="artists.length">

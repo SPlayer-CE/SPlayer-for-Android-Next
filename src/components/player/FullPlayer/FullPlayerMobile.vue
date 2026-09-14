@@ -77,13 +77,17 @@ const {
 
 const mobileStart = ref<HTMLElement | null>(null);
 const infoCoverRef = ref<HTMLElement | null>(null);
-const infoSongDataRef = ref<HTMLElement | null>(null);
+/** PlayerData 实例：Hero 文案层取「标题顶 → 歌手底」并集矩形用 */
+const infoPlayerDataRef = ref<InstanceType<typeof PlayerData> | null>(null);
 const lyricCoverRef = ref<HTMLElement | null>(null);
-const lyricSongDataRef = ref<HTMLElement | null>(null);
+
 const pageTransitionDisabled = ref(false);
 const savedPageType = ref<MobilePageType>(status.mobileFullPlayerPage);
 const DIRECTION_LOCK_TOLERANCE = 8;
 const HERO_TRANSITION = "all 0.5s cubic-bezier(0.25, 1, 0.5, 1)";
+/** Hero 封面专用过渡：只跑合成器属性（transform + 圆角），动画期间零布局零重绘 */
+const HERO_COVER_TRANSITION =
+  "transform 0.5s cubic-bezier(0.25, 1, 0.5, 1), border-radius 0.5s cubic-bezier(0.25, 1, 0.5, 1)";
 const HERO_TRANSITION_DURATION_MS = 560;
 
 const hasLyric = computed(() => media.parsedLyric.length > 0 || media.lyricLoading);
@@ -196,13 +200,19 @@ const isPhonePortraitLyricOpen = computed(
 );
 const heroTransitionActive = ref(false);
 const heroTransitionDirection = ref<"open" | "close">("open");
-const heroTransitionAnimating = ref(false);
+/** Hero 文案层当前状态：info = 信息页大标题居中，lyric = 歌词页小标题左对齐 */
+const heroSongState = ref<"info" | "lyric">("lyric");
 const heroCoverStyle = ref<CSSProperties>({});
-const heroSongDataStyle = ref<CSSProperties>({});
-const infoMetaVisible = ref(true);
+const heroTitleStyle = ref<CSSProperties>({});
+const heroArtistStyle = ref<CSSProperties>({});
+/** 信息页元信息行（Hero 不飞行的注释/标签/专辑/播放来源行）显隐：歌词页停留期间保持隐藏 */
+const infoMetaVisible = ref(currentPageType.value !== "lyric");
 const pendingLyricControlsReveal = ref(false);
 const heroCoverLayerRef = ref<HTMLElement | null>(null);
-const heroSongDataLayerRef = ref<HTMLElement | null>(null);
+const heroTitleRef = ref<HTMLElement | null>(null);
+const heroArtistRef = ref<HTMLElement | null>(null);
+const lyricTitleRef = ref<HTMLElement | null>(null);
+const lyricArtistRef = ref<HTMLElement | null>(null);
 let heroTransitionTimer = 0;
 let heroTransitionFrame = 0;
 
@@ -215,14 +225,39 @@ const getHeroStyle = (rect: DOMRect, transition = "none"): CSSProperties => ({
   transition,
 });
 
-const getHeroCoverStyle = (
-  rect: DOMRect,
-  transition = "none",
-  borderRadius = "32px",
-): CSSProperties => ({
-  ...getHeroStyle(rect, transition),
-  borderRadius,
-});
+
+const getHeroFlightStyles = (
+  sourceRect: DOMRect,
+  targetRect: DOMRect,
+  options: {
+    transition: string;
+    sourceRadius?: number;
+    targetRadius?: number;
+    proportional?: boolean;
+  }
+): { init: CSSProperties; flight: CSSProperties } => {
+  const { transition, sourceRadius = 0, targetRadius = 0, proportional = false } = options;
+  const layoutRect =
+    sourceRect.height >= targetRect.height
+      ? sourceRect
+      : targetRect;
+  const toStyle = (rect: DOMRect, radius: number, trans: string): CSSProperties => {
+    const scaleY = rect.height / layoutRect.height;
+    const scaleX = proportional ? scaleY : rect.width / layoutRect.width;
+    const dx = rect.left - layoutRect.left;
+    const dy = rect.top - layoutRect.top;
+    return {
+      ...getHeroStyle(layoutRect, trans),
+      borderRadius: radius ? `${radius / scaleX}px` : undefined,
+      transformOrigin: "0 0",
+      transform: `translate3d(${dx}px, ${dy}px, 0) scale(${scaleX}, ${scaleY})`,
+    };
+  };
+  return {
+    init: toStyle(sourceRect, sourceRadius, "none"),
+    flight: toStyle(targetRect, targetRadius, transition),
+  };
+};
 
 const clearHeroTransitionFrame = (): void => {
   if (!heroTransitionFrame) return;
@@ -237,6 +272,11 @@ const scheduleHeroTransitionFrame = (callback: () => void): void => {
     callback();
   });
 };
+
+onBeforeUnmount(() => {
+  window.clearTimeout(heroTransitionTimer);
+  clearHeroTransitionFrame();
+});
 
 const getVisibleCoverRect = (containerEl: HTMLElement | null): DOMRect | undefined => {
   const coverEl = containerEl?.firstElementChild as HTMLElement | null;
@@ -254,17 +294,15 @@ const getActiveHeroRect = (
   return fallbackRectResolver();
 };
 
+
 const finishHeroTransition = (): void => {
   window.clearTimeout(heroTransitionTimer);
   heroTransitionTimer = 0;
   clearHeroTransitionFrame();
   heroTransitionActive.value = false;
-  heroTransitionAnimating.value = false;
   if (heroTransitionDirection.value === "close") {
+    // 元信息行在返程开始时已开始淡入，落地即完整，无需在此补显
     pendingLyricControlsReveal.value = false;
-    requestAnimationFrame(() => {
-      infoMetaVisible.value = true;
-    });
   } else if (pendingLyricControlsReveal.value && currentPageType.value === "lyric") {
     pendingLyricControlsReveal.value = false;
     requestAnimationFrame(() => {
@@ -281,14 +319,28 @@ const openLyricPage = async (): Promise<void> => {
   ) {
     return;
   }
-  infoMetaVisible.value = true;
+  // 元信息行在整段飞行里淡出：空带随标题/歌手收拢一起消失，不会被瞬间隐藏成硬空洞
+  infoMetaVisible.value = false;
   const sourceCoverRect = getActiveHeroRect(heroCoverLayerRef.value, () =>
     getVisibleCoverRect(infoCoverRef.value),
   );
-  const sourceSongRect = getActiveHeroRect(heroSongDataLayerRef.value, () =>
-    infoSongDataRef.value?.getBoundingClientRect(),
+  // 信息页标题/歌手是居中排版，Hero 行得先落在它们的真实横向位置上
+  const sourceTitleRect = getActiveHeroRect(heroTitleRef.value, () =>
+    infoPlayerDataRef.value?.getHeroTitleRect() ?? undefined,
   );
-  if (!sourceCoverRect || !sourceSongRect) {
+  const sourceArtistRect = getActiveHeroRect(heroArtistRef.value, () =>
+    infoPlayerDataRef.value?.getHeroArtistRect() ?? undefined,
+  );
+  if (!sourceCoverRect || !sourceTitleRect || !sourceArtistRect) {
+    pageIndex.value = pageTypes.value.indexOf("lyric");
+    showLyricControls();
+    return;
+  }
+  // 歌词页常驻在 DOM（仅透明度为 0），终点矩形在切页前测量即可，无需等一次提交
+  const targetCoverRect = getVisibleCoverRect(lyricCoverRef.value);
+  const targetTitleRect = lyricTitleRef.value?.getBoundingClientRect();
+  const targetArtistRect = lyricArtistRef.value?.getBoundingClientRect();
+  if (!targetCoverRect || !targetTitleRect || !targetArtistRect) {
     pageIndex.value = pageTypes.value.indexOf("lyric");
     showLyricControls();
     return;
@@ -296,27 +348,38 @@ const openLyricPage = async (): Promise<void> => {
   pendingLyricControlsReveal.value = true;
   window.clearTimeout(heroTransitionTimer);
   heroTransitionDirection.value = "open";
+  const coverFlight = getHeroFlightStyles(sourceCoverRect, targetCoverRect, {
+    transition: HERO_COVER_TRANSITION,
+    sourceRadius: 32,
+    targetRadius: 6,
+  });
+  const titleFlight = getHeroFlightStyles(sourceTitleRect, targetTitleRect, {
+    transition: HERO_TRANSITION,
+    proportional: true,
+  });
+  const artistFlight = getHeroFlightStyles(sourceArtistRect, targetArtistRect, {
+    transition: HERO_TRANSITION,
+    proportional: true,
+  });
+
+  // Hero 首帧必须与切页落在同一次布局里：分两次提交时中间会画出信息页整块元信息
+  //（标题跑马灯还在滚动），即转场开始处看到的残留
   heroTransitionActive.value = true;
-  heroTransitionAnimating.value = false;
-  heroCoverStyle.value = getHeroCoverStyle(sourceCoverRect);
-  heroSongDataStyle.value = getHeroStyle(sourceSongRect);
+  heroCoverStyle.value = coverFlight.init;
+  heroSongState.value = "info";
+  heroTitleStyle.value = titleFlight.init;
+  heroArtistStyle.value = artistFlight.init;
   pageIndex.value = pageTypes.value.indexOf("lyric");
   showLyricControls();
   await nextTick();
-  if (!lyricCoverRef.value || !lyricSongDataRef.value) {
-    finishHeroTransition();
-    return;
-  }
-  const targetCoverRect = getVisibleCoverRect(lyricCoverRef.value);
-  const targetSongRect = lyricSongDataRef.value.getBoundingClientRect();
-  if (!targetCoverRect) {
-    finishHeroTransition();
-    return;
-  }
+  // 强制一次同步样式解析，让 init 成为过渡基线，否则 RAF 内直接写成 flight 不会触发过渡
+  heroCoverLayerRef.value?.getBoundingClientRect();
+  heroTitleRef.value?.getBoundingClientRect();
   scheduleHeroTransitionFrame(() => {
-    heroTransitionAnimating.value = true;
-    heroCoverStyle.value = getHeroCoverStyle(targetCoverRect, HERO_TRANSITION, "6px");
-    heroSongDataStyle.value = getHeroStyle(targetSongRect, HERO_TRANSITION);
+    heroSongState.value = "lyric";
+    heroCoverStyle.value = coverFlight.flight;
+    heroTitleStyle.value = titleFlight.flight;
+    heroArtistStyle.value = artistFlight.flight;
   });
   heroTransitionTimer = window.setTimeout(finishHeroTransition, HERO_TRANSITION_DURATION_MS);
 };
@@ -331,41 +394,78 @@ const closeLyricPage = async (): Promise<void> => {
   const sourceCoverRect = getActiveHeroRect(heroCoverLayerRef.value, () =>
     getVisibleCoverRect(lyricCoverRef.value),
   );
-  const sourceSongRect = getActiveHeroRect(heroSongDataLayerRef.value, () =>
-    lyricSongDataRef.value?.getBoundingClientRect(),
+  // 上一段 Hero 仍在飞行时从它当前的实时位置接续
+  const sourceTitleRect = getActiveHeroRect(heroTitleRef.value, () =>
+    lyricTitleRef.value?.getBoundingClientRect(),
   );
-  if (!sourceCoverRect || !sourceSongRect) {
+  const sourceArtistRect = getActiveHeroRect(heroArtistRef.value, () =>
+    lyricArtistRef.value?.getBoundingClientRect(),
+  );
+  if (!sourceCoverRect || !sourceTitleRect || !sourceArtistRect) {
+    infoMetaVisible.value = true;
     finishHeroTransition();
     pageIndex.value = pageTypes.value.indexOf("info");
     return;
   }
 
+  // 歌词页常驻在 DOM（仅透明度为 0），终点矩形在切页前测量即可，无需等一次提交。
+  // 但信息页此刻仍带着 .lyric-sheet-open 的 16px 上移位移，而 Hero 飞行期该位移会被归零，
+  // 直接量到的终点整体偏高：Hero 一撤、真实元素回到原位，封面 / 标题 / 歌手就会往下跳一下。
+  const infoPageEl = infoCoverRef.value?.closest<HTMLElement>(".info-page");
+  const infoPageTransform = infoPageEl ? getComputedStyle(infoPageEl).transform : "none";
+  const infoPageShiftY =
+    !infoPageTransform || infoPageTransform === "none"
+      ? 0
+      : new DOMMatrixReadOnly(infoPageTransform).m42;
+  const toRestRect = (rect: DOMRect | null | undefined): DOMRect | undefined => {
+    if (!rect || infoPageShiftY === 0) return rect ?? undefined;
+    return new DOMRect(rect.x, rect.y - infoPageShiftY, rect.width, rect.height);
+  };
+  const targetCoverRect = toRestRect(getVisibleCoverRect(infoCoverRef.value));
+  // 信息页标题/歌手居中排版，返程末帧必须回到它们各自的真实横向位置
+  const targetTitleRect = toRestRect(infoPlayerDataRef.value?.getHeroTitleRect());
+  const targetArtistRect = toRestRect(infoPlayerDataRef.value?.getHeroArtistRect());
   window.clearTimeout(heroTransitionTimer);
-  heroTransitionActive.value = true;
   heroTransitionDirection.value = "close";
-  heroTransitionAnimating.value = false;
   pendingLyricControlsReveal.value = false;
-  infoMetaVisible.value = false;
-  heroCoverStyle.value = getHeroCoverStyle(sourceCoverRect, "none", "6px");
-  heroSongDataStyle.value = getHeroStyle(sourceSongRect);
   hideLyricControls();
+  // 元信息行在整段返程里淡入：Hero 落地时信息页已完整，不再出现标题/歌手之间的空带
+  infoMetaVisible.value = true;
+  if (!targetCoverRect || !targetTitleRect || !targetArtistRect) {
+    finishHeroTransition();
+    pageIndex.value = pageTypes.value.indexOf("info");
+    return;
+  }
+  const coverFlight = getHeroFlightStyles(sourceCoverRect, targetCoverRect, {
+    transition: HERO_COVER_TRANSITION,
+    sourceRadius: 6,
+    targetRadius: 32,
+  });
+  const titleFlight = getHeroFlightStyles(sourceTitleRect, targetTitleRect, {
+    transition: HERO_TRANSITION,
+    proportional: true,
+  });
+  const artistFlight = getHeroFlightStyles(sourceArtistRect, targetArtistRect, {
+    transition: HERO_TRANSITION,
+    proportional: true,
+  });
+  
+  // Hero 首帧必须与切页落在同一次布局里，否则中间会画出信息页整块元信息（封面 + 标题 + 全部行）
+  heroTransitionActive.value = true;
+  heroCoverStyle.value = coverFlight.init;
+  heroSongState.value = "lyric";
+  heroTitleStyle.value = titleFlight.init;
+  heroArtistStyle.value = artistFlight.init;
   pageIndex.value = pageTypes.value.indexOf("info");
   await nextTick();
-  if (!infoCoverRef.value || !infoSongDataRef.value) {
-    finishHeroTransition();
-    return;
-  }
-  const targetCoverRect = getVisibleCoverRect(infoCoverRef.value);
-  const targetSongRect = infoSongDataRef.value.getBoundingClientRect();
-  if (!targetCoverRect) {
-    finishHeroTransition();
-    return;
-  }
-
+  // 强制一次同步样式解析，让 init 成为过渡基线，否则 RAF 内直接写成 flight 不会触发过渡
+  heroCoverLayerRef.value?.getBoundingClientRect();
+  heroTitleRef.value?.getBoundingClientRect();
   scheduleHeroTransitionFrame(() => {
-    heroTransitionAnimating.value = true;
-    heroCoverStyle.value = getHeroCoverStyle(targetCoverRect, HERO_TRANSITION);
-    heroSongDataStyle.value = getHeroStyle(targetSongRect, HERO_TRANSITION);
+    heroSongState.value = "info";
+    heroCoverStyle.value = coverFlight.flight;
+    heroTitleStyle.value = titleFlight.flight;
+    heroArtistStyle.value = artistFlight.flight;
   });
   heroTransitionTimer = window.setTimeout(finishHeroTransition, HERO_TRANSITION_DURATION_MS);
 };
@@ -377,8 +477,11 @@ watch(currentPageType, (value) => {
 
 watch(pageTypes, (types) => {
   const nextIndex = types.indexOf(savedPageType.value);
+  const nextPage = types[nextIndex >= 0 ? nextIndex : 0];
   pageTransitionDisabled.value = true;
   pageIndex.value = nextIndex >= 0 ? nextIndex : 0;
+  // 这条路径不走 Hero 转场：元信息行随页面归属直接切换，否则停留页会整块停在隐藏态
+  infoMetaVisible.value = nextPage !== "lyric";
   window.setTimeout(() => {
     pageTransitionDisabled.value = false;
   }, 80);
@@ -423,11 +526,7 @@ const dragHandleStyle = computed(() => {
   };
 });
 
-const contentTransform = computed(() => {
-  const pageWidthPct = 100 / totalPages.value;
-  const baseOffset = pageIndex.value * pageWidthPct;
-  return `translateX(-${baseOffset}%)`;
-});
+// contentTransform removed as we use Grid overlap now
 
 const dragHandleRef = ref<HTMLElement | null>(null);
 let dragValue = 0;
@@ -1366,9 +1465,8 @@ watch(
         'lyric-hero-open': heroTransitionActive && heroTransitionDirection === 'open',
         'lyric-hero-close': heroTransitionActive && heroTransitionDirection === 'close',
       }"
-      :style="{ width: `${totalPages * 100}%`, transform: contentTransform }"
     >
-      <div class="mobile-page info-page" :style="{ width: `${100 / totalPages}%` }">
+      <div class="mobile-page info-page">
         <div class="cover-region">
           <div ref="infoCoverRef" class="cover-shell">
             <PlayerCover />
@@ -1377,7 +1475,7 @@ watch(
 
         <div class="info-controls">
           <div ref="infoSongDataRef" class="song-data" :class="{ 'meta-hidden': !infoMetaVisible }">
-            <PlayerData align="center" />
+            <PlayerData ref="infoPlayerDataRef" align="center" />
           </div>
         </div>
       </div>
@@ -1385,7 +1483,6 @@ watch(
       <div
         v-if="hasLyric"
         class="mobile-page lyric-page"
-        :style="{ width: `${100 / totalPages}%` }"
       >
         <div class="lyric-header">
           <div class="lyric-track-info">
@@ -1393,11 +1490,11 @@ watch(
               <SImg :src="media.track?.cover" class="size-full object-cover" decoding="async" />
             </div>
             <div class="lyric-title-block min-w-0 flex-1 flex flex-col items-start">
-              <div ref="lyricSongDataRef" class="max-w-full flex flex-col items-start">
-                <div class="truncate text-lg font-bold text-cover mb-0.5 max-w-full">
+              <div class="max-w-full flex flex-col items-start">
+                <div ref="lyricTitleRef" class="truncate text-[18px] leading-tight font-semibold text-cover mb-[2px] max-w-full">
                   {{ media.track?.title }}
                 </div>
-                <div class="truncate text-[13px] text-cover/60 max-w-full">
+                <div ref="lyricArtistRef" class="truncate text-[13px] text-cover/60 max-w-full">
                   {{ media.track?.artists.map((a) => a.name).join(" / ") }}
                 </div>
               </div>
@@ -1492,19 +1589,16 @@ watch(
           <!-- Hero 转场只需要和当前界面视觉一致，使用缩略图避免切页瞬间额外解码高清封面。 -->
           <SImg :src="media.track?.cover" class="size-full object-cover" decoding="async" />
         </div>
-        <div
-          ref="heroSongDataLayerRef"
-          class="lyric-hero-song-data"
-          :class="[
-            heroTransitionDirection === 'close' && heroTransitionAnimating
-              ? 'state-info'
-              : 'state-lyric',
-          ]"
-          :style="heroSongDataStyle"
-        >
-          <div class="lyric-hero-title truncate">{{ media.track?.title }}</div>
-          <div class="lyric-hero-artist truncate">
-            {{ media.track?.artists.map((a) => a.name).join(" / ") }}
+        <div class="lyric-hero-song-data" :class="[`state-${heroSongState}`, heroSongState]">
+          <div ref="heroTitleRef" class="lyric-hero-title truncate" :style="heroTitleStyle">
+            {{ media.track?.title }}
+          </div>
+          <div ref="heroArtistRef" class="lyric-hero-artist" :style="heroArtistStyle">
+            <!-- 麦克风图标只存在于信息页那一行，飞向歌词页时渐隐，文本随之左移 -->
+            <span class="lyric-hero-artist-icon">
+              <IconLucideMic class="shrink-0 translate-y-px text-cover/40" />
+            </span>
+            <span class="lyric-hero-artist-text truncate">{{ media.track?.artists.map((a) => a.name).join(" / ") }}</span>
           </div>
         </div>
       </div>
@@ -1781,21 +1875,21 @@ watch(
 .mobile-pages {
   position: relative;
   z-index: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
   height: 100%;
-  transition: transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .mobile-pages.lyric-sheet-open {
-  transform: translateX(0) !important;
 }
 
 .mobile-page {
   position: relative;
   height: 100%;
   min-width: 0;
-  flex-shrink: 0;
   pointer-events: auto;
+  grid-area: 1 / 1;
 }
 
 .info-page {
@@ -1806,7 +1900,6 @@ watch(
   transition:
     transform 0.5s cubic-bezier(0.25, 1, 0.5, 1),
     opacity 0.32s ease;
-  will-change: transform, opacity;
 }
 
 .lyric-sheet-open .info-page {
@@ -1874,22 +1967,30 @@ watch(
   pointer-events: auto;
 }
 
-.song-data :deep(> div > :not(:first-child)) {
+/* 非 Hero 行（注释/元信息标签/专辑/播放来源）与 Hero 飞行同长淡入：
+   返回时渐变出现。但在打开歌词页时（lyric-hero-open），为了避免与飞行的标题/歌手重叠残影，瞬间消失。 */
+.song-data :deep(> div > :not(.song-data-hero-row)) {
   transition:
-    opacity 0.22s ease,
-    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    opacity 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.song-data.meta-hidden :deep(> div > :not(:first-child)) {
+.song-data.meta-hidden :deep(> div > :not(.song-data-hero-row)) {
   opacity: 0;
   transform: translate3d(0, -4px, 0);
 }
 
-.lyric-sheet-open .song-data {
+.lyric-hero-open .song-data.meta-hidden :deep(> div > :not(.song-data-hero-row)) {
+  transition: none;
+}
+
+/* Hero 期例外：标题/歌手由浮层精确接管，其余行留在文档流里随转场淡出 */
+.lyric-sheet-open:not(.lyric-hero-active) .song-data {
   opacity: 0;
 }
 
-.lyric-hero-active .song-data {
+/* 浮层飞行的两行必须瞬时让位：换成淡出会与浮层重影成双层标题/歌手 */
+.lyric-hero-active .song-data :deep(> div > .song-data-hero-row) {
   opacity: 0;
 }
 
@@ -1931,7 +2032,7 @@ watch(
   inset: 0;
   display: flex;
   flex-direction: column;
-  width: calc(100% / var(--page-count)) !important;
+  width: 100% !important;
   padding: calc(44px + var(--mobile-safe-top, var(--safe-area-top, 0px))) 20px
     calc(24px + var(--mobile-safe-bottom, var(--android-fullscreen-safe-bottom, 0px)));
   overflow: hidden;
@@ -1947,7 +2048,6 @@ watch(
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity;
   contain: paint;
 }
 
@@ -2027,60 +2127,57 @@ watch(
 }
 
 .lyric-hero-song-data {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  color: rgb(var(--s-cover));
-  overflow: hidden;
-  will-change: left, top, width, height, transform, font-size;
-  transform: translateZ(0);
+  /* PlayerData 的标题 2em / 歌手 1.2em / 行距 0.5em 均基于它的基数字号，这里镜像同一表达式 */
+  --hero-base-font: clamp(12px, calc(14 / 1080 * var(--page-zoom-100vh, 100vh)), 16px);
 }
 
+/* 两行直接采用绝对定位，由 JS 注入 `transform: scale` / `translate` 进行 FLIP 动画，避免布局抖动 */
 .lyric-hero-title,
 .lyric-hero-artist {
-  transition:
-    font-size 0.56s cubic-bezier(0.25, 1, 0.5, 1),
-    line-height 0.56s cubic-bezier(0.25, 1, 0.5, 1),
-    margin-top 0.56s cubic-bezier(0.25, 1, 0.5, 1);
-  will-change: font-size;
-}
-
-.lyric-hero-title {
-  font-weight: 700;
+  will-change: transform;
 }
 
 .lyric-hero-artist {
-  color: rgb(var(--s-cover) / 0.6);
-}
-
-.lyric-hero-song-data.state-info .lyric-hero-title {
-  font-size: 24px;
-  line-height: 1.2;
-}
-
-.lyric-hero-song-data.state-info {
+  display: flex;
   align-items: center;
-  text-align: center;
+  color: rgb(var(--s-cover) / 0.6);
+  position: relative;
 }
 
-.lyric-hero-song-data.state-info .lyric-hero-artist {
-  margin-top: 6px;
-  font-size: 14px;
+/* 避免布局抖动：麦克风图标渐隐，文字向左平移，不改变真实容器布局 */
+.lyric-hero-artist-icon {
+  display: inline-flex;
+  align-items: center;
+  width: calc(var(--hero-base-font) * 1.2 + 6px);
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity var(--hero-transition-duration, 0.5s) cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.lyric-hero-song-data.state-lyric {
-  align-items: flex-start;
-  text-align: left;
+.lyric-hero-artist-text {
+  display: inline-block;
+  transition: transform var(--hero-transition-duration, 0.5s) cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.lyric-hero-song-data.state-lyric .lyric-hero-title {
-  font-size: 18px;
+.lyric-hero-song-data.state-lyric .lyric-hero-artist-icon,
+.lyric-hero-song-data.lyric .lyric-hero-artist-icon {
+  opacity: 0;
+}
+
+.lyric-hero-song-data.state-lyric .lyric-hero-artist-text,
+.lyric-hero-song-data.lyric .lyric-hero-artist-text {
+  transform: translateX(calc(-1 * (var(--hero-base-font) * 1.2 + 6px)));
+}
+
+/* 字体样式统一固定为信息页的较大字号，靠父级 transform 缩放即可 */
+.lyric-hero-title {
+  font-size: calc(var(--hero-base-font) * 2);
   line-height: 1.25;
+  font-weight: 600;
 }
 
-.lyric-hero-song-data.state-lyric .lyric-hero-artist {
-  margin-top: 4px;
-  font-size: 13px;
+.lyric-hero-artist {
+  font-size: calc(var(--hero-base-font) * 1.2);
 }
 
 .lyric-body {
