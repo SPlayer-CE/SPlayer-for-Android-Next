@@ -46,7 +46,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
 import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -176,6 +175,7 @@ class PlaybackManager private constructor(
   private val urlResolver = PlaybackUrlResolver(appContext)
   private val songCacheExecutor: ExecutorService = Executors.newSingleThreadExecutor()
   private val fmFetcher = FmFetcher()
+
   @Volatile
   private var currentMetadata = TrackMetadata()
 
@@ -253,6 +253,7 @@ class PlaybackManager private constructor(
   private var bufferedCoverBitmap: Bitmap? = null
   private var bufferedTimeMs: Long = 0L
   private var bufferedPlaying: Boolean = false
+
   @Volatile
   private var mainLyricClockListener: (() -> Unit)? = null
 
@@ -496,8 +497,7 @@ class PlaybackManager private constructor(
     }
   }
 
-  fun attachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) =
-    onPlaybackThread { attachPluginInternal(playbackPlugin) }
+  fun attachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) = onPlaybackThread { attachPluginInternal(playbackPlugin) }
 
   @Synchronized
   private fun attachPluginInternal(playbackPlugin: AndroidNativePlaybackPlugin) {
@@ -505,8 +505,7 @@ class PlaybackManager private constructor(
     emitPlaybackState(true)
   }
 
-  fun detachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) =
-    onPlaybackThread { detachPluginInternal(playbackPlugin) }
+  fun detachPlugin(playbackPlugin: AndroidNativePlaybackPlugin) = onPlaybackThread { detachPluginInternal(playbackPlugin) }
 
   @Synchronized
   private fun detachPluginInternal(playbackPlugin: AndroidNativePlaybackPlugin) {
@@ -867,8 +866,7 @@ class PlaybackManager private constructor(
     )
   }
 
-  fun setPauseOnDeviceSwitch(enabled: Boolean) =
-    onPlaybackThread { setPauseOnDeviceSwitchInternal(enabled) }
+  fun setPauseOnDeviceSwitch(enabled: Boolean) = onPlaybackThread { setPauseOnDeviceSwitchInternal(enabled) }
 
   @Synchronized
   private fun setPauseOnDeviceSwitchInternal(enabled: Boolean) {
@@ -1243,7 +1241,7 @@ class PlaybackManager private constructor(
               .build(),
             !allowMixWithOthers,
           ).setHandleAudioBecomingNoisy(false)
-          .setWakeMode(C.WAKE_MODE_NETWORK)
+          .setWakeMode(C.WAKE_MODE_NETWORK),
       )
 
     newPlayer.addListener(

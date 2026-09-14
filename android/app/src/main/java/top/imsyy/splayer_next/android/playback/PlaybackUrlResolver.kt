@@ -494,8 +494,7 @@ class PlaybackUrlResolver(
             { fetchPluginUrl(origin, pluginId, pluginSource, musicInfo) },
             pluginRaceExecutor,
           )
-        }
-        .toMutableList()
+        }.toMutableList()
     try {
       while (pending.isNotEmpty()) {
         CompletableFuture.anyOf(*pending.toTypedArray()).get()

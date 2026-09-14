@@ -149,8 +149,7 @@ const getHeroTitleRect = (): DOMRect | null =>
   titleRowRef.value?.$el?.getBoundingClientRect() ?? null;
 
 /** 歌手行矩形：含行首麦克风图标，Hero 浮层行（同样渲染图标）按它横向对齐 */
-const getHeroArtistRect = (): DOMRect | null =>
-  artistRowRef.value?.getBoundingClientRect() ?? null;
+const getHeroArtistRect = (): DOMRect | null => artistRowRef.value?.getBoundingClientRect() ?? null;
 
 defineExpose({ getHeroTitleRect, getHeroArtistRect });
 </script>

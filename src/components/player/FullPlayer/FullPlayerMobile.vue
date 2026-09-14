@@ -225,7 +225,6 @@ const getHeroStyle = (rect: DOMRect, transition = "none"): CSSProperties => ({
   transition,
 });
 
-
 const getHeroFlightStyles = (
   sourceRect: DOMRect,
   targetRect: DOMRect,
@@ -234,13 +233,10 @@ const getHeroFlightStyles = (
     sourceRadius?: number;
     targetRadius?: number;
     proportional?: boolean;
-  }
+  },
 ): { init: CSSProperties; flight: CSSProperties } => {
   const { transition, sourceRadius = 0, targetRadius = 0, proportional = false } = options;
-  const layoutRect =
-    sourceRect.height >= targetRect.height
-      ? sourceRect
-      : targetRect;
+  const layoutRect = sourceRect.height >= targetRect.height ? sourceRect : targetRect;
   const toStyle = (rect: DOMRect, radius: number, trans: string): CSSProperties => {
     const scaleY = rect.height / layoutRect.height;
     const scaleX = proportional ? scaleY : rect.width / layoutRect.width;
@@ -294,7 +290,6 @@ const getActiveHeroRect = (
   return fallbackRectResolver();
 };
 
-
 const finishHeroTransition = (): void => {
   window.clearTimeout(heroTransitionTimer);
   heroTransitionTimer = 0;
@@ -325,11 +320,13 @@ const openLyricPage = async (): Promise<void> => {
     getVisibleCoverRect(infoCoverRef.value),
   );
   // 信息页标题/歌手是居中排版，Hero 行得先落在它们的真实横向位置上
-  const sourceTitleRect = getActiveHeroRect(heroTitleRef.value, () =>
-    infoPlayerDataRef.value?.getHeroTitleRect() ?? undefined,
+  const sourceTitleRect = getActiveHeroRect(
+    heroTitleRef.value,
+    () => infoPlayerDataRef.value?.getHeroTitleRect() ?? undefined,
   );
-  const sourceArtistRect = getActiveHeroRect(heroArtistRef.value, () =>
-    infoPlayerDataRef.value?.getHeroArtistRect() ?? undefined,
+  const sourceArtistRect = getActiveHeroRect(
+    heroArtistRef.value,
+    () => infoPlayerDataRef.value?.getHeroArtistRect() ?? undefined,
   );
   if (!sourceCoverRect || !sourceTitleRect || !sourceArtistRect) {
     pageIndex.value = pageTypes.value.indexOf("lyric");
@@ -449,7 +446,7 @@ const closeLyricPage = async (): Promise<void> => {
     transition: HERO_TRANSITION,
     proportional: true,
   });
-  
+
   // Hero 首帧必须与切页落在同一次布局里，否则中间会画出信息页整块元信息（封面 + 标题 + 全部行）
   heroTransitionActive.value = true;
   heroCoverStyle.value = coverFlight.init;
@@ -1480,10 +1477,7 @@ watch(
         </div>
       </div>
 
-      <div
-        v-if="hasLyric"
-        class="mobile-page lyric-page"
-      >
+      <div v-if="hasLyric" class="mobile-page lyric-page">
         <div class="lyric-header">
           <div class="lyric-track-info">
             <div ref="lyricCoverRef" class="lyric-cover">
@@ -1491,7 +1485,10 @@ watch(
             </div>
             <div class="lyric-title-block min-w-0 flex-1 flex flex-col items-start">
               <div class="max-w-full flex flex-col items-start">
-                <div ref="lyricTitleRef" class="truncate text-[18px] leading-tight font-semibold text-cover mb-[2px] max-w-full">
+                <div
+                  ref="lyricTitleRef"
+                  class="truncate text-[18px] leading-tight font-semibold text-cover mb-[2px] max-w-full"
+                >
                   {{ media.track?.title }}
                 </div>
                 <div ref="lyricArtistRef" class="truncate text-[13px] text-cover/60 max-w-full">
@@ -1598,7 +1595,9 @@ watch(
             <span class="lyric-hero-artist-icon">
               <IconLucideMic class="shrink-0 translate-y-px text-cover/40" />
             </span>
-            <span class="lyric-hero-artist-text truncate">{{ media.track?.artists.map((a) => a.name).join(" / ") }}</span>
+            <span class="lyric-hero-artist-text truncate">
+              {{ media.track?.artists.map((a) => a.name).join(" / ") }}
+            </span>
           </div>
         </div>
       </div>

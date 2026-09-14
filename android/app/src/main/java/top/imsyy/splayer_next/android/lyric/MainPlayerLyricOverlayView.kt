@@ -140,6 +140,7 @@ class MainPlayerLyricOverlayView
 
     // 每行主文本字体：按行 language（ja/ko/zh-CN/und-Latn）匹配分语种字体，对齐 Web 端 :lang 选择
     private var lineMainTypefaces: Array<Typeface> = emptyArray()
+
     private class LineWordLayout(
       val chunkMergedStartMs: LongArray,
       val chunkMergedEndMs: LongArray,
@@ -194,8 +195,6 @@ class MainPlayerLyricOverlayView
     )
 
     // QW-2: 热路径零分配复用缓冲(容量只增不减,主线程逐帧 clear 复用)
-
-
 
     // H-1: 词文本宽度缓存，按字体分桶（rebuildLayoutCache 时随布局一并失效）——
     // 分语种字体下同一文本在不同行宽度不同，不能共用单一映射
@@ -1499,7 +1498,7 @@ class MainPlayerLyricOverlayView
       val chunkCharCounts = IntArray(maxChunkId + 1)
       val tempCursor = IntArray(maxChunkId + 1)
       val chunkCharCursorBase = IntArray(positionedWords.size)
-      
+
       for (i in positionedWords.indices) {
         val positioned = positionedWords[i]
         val cid = positioned.chunkId
@@ -1546,7 +1545,7 @@ class MainPlayerLyricOverlayView
     private fun buildLineWordLayout(
       line: NativeLyricLine,
       startX: Float,
-      contentWidth: Float
+      contentWidth: Float,
     ): LineWordLayout {
       val displayWords = line.displayWords
       val textWidths = FloatArray(displayWords.size)
@@ -1564,9 +1563,15 @@ class MainPlayerLyricOverlayView
       for (i in displayWords.indices) {
         val word = displayWords[i].word
         textWidths[i] = widthCache[word.word] ?: mainPaint.measureText(word.word).also { widthCache[word.word] = it }
-        val romanWidth = if (hasWordRoman) {
-          romanWordWidthCache[word] ?: subPaint.measureText(word.romanWord.takeIf { it.isNotBlank() } ?: "\u00A0").also { width -> romanWordWidthCache[word] = width }
-        } else 0f
+        val romanWidth =
+          if (hasWordRoman) {
+            romanWordWidthCache[word]
+              ?: subPaint.measureText(word.romanWord.takeIf { it.isNotBlank() } ?: "\u00A0").also { width ->
+                romanWordWidthCache[word] = width
+              }
+          } else {
+            0f
+          }
         var width = max(textWidths[i], romanWidth + romanPadding)
         if (hasWordRuby && word.ruby.isNotEmpty()) {
           width = max(width, measureRubyTextWidth(word, mainPaint.textSize))
@@ -1591,7 +1596,7 @@ class MainPlayerLyricOverlayView
       val chunkCharCounts = IntArray(maxChunkId + 1)
       val tempCursor = IntArray(maxChunkId + 1)
       val chunkCharCursorBase = IntArray(displayWords.size)
-      
+
       for (i in displayWords.indices) {
         val displayWord = displayWords[i]
         val cid = displayWord.chunkId
@@ -1609,7 +1614,15 @@ class MainPlayerLyricOverlayView
       val segmentCapacity = displayWords.sumOf { if (it.word.ruby.isEmpty()) 1 else it.word.rubyCharCount.coerceAtLeast(1) }
       beginMaskSweep(displayWords.size, segmentCapacity)
       for (i in displayWords.indices) {
-        recordMaskSweepWord(i, displayWords[i].word, wordXPositions[i], widths[i], displayWords[i].word.startTime, displayWords[i].word.endTime, displayWords[i].word.ruby)
+        recordMaskSweepWord(
+          i,
+          displayWords[i].word,
+          wordXPositions[i],
+          widths[i],
+          displayWords[i].word.startTime,
+          displayWords[i].word.endTime,
+          displayWords[i].word.ruby,
+        )
       }
 
       return LineWordLayout(
@@ -1625,7 +1638,7 @@ class MainPlayerLyricOverlayView
         sweepSegEnds = sweepSegEnds.copyOf(sweepSegCount),
         textWidths = textWidths,
         widths = widths,
-        wordXPositions = wordXPositions
+        wordXPositions = wordXPositions,
       )
     }
 
@@ -1653,7 +1666,7 @@ class MainPlayerLyricOverlayView
       // du/amount/blur 按 chunk merged 时长，charDelay 按 chunk 内全局字符序
       val layout = lineWordLayouts[index] ?: buildPositionedLineWordLayout(positionedWords, startX).also { lineWordLayouts[index] = it }
       val lastChunkId = positionedWords.lastOrNull()?.chunkId
-      
+
       val chunkMergedStartMs = layout.chunkMergedStartMs
       val chunkMergedEndMs = layout.chunkMergedEndMs
       val chunkCharCounts = layout.chunkCharCounts
@@ -1920,7 +1933,6 @@ class MainPlayerLyricOverlayView
       }
       mainPaint.shader = null
     }
-
 
     /** H-1: 帧级缓存的 mainPaint.fontMetrics,textSize/typeface 变化时重取 */
     private fun mainFontMetrics(): Paint.FontMetrics {
