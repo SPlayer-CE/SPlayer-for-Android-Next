@@ -182,7 +182,7 @@ class AndroidDownloadPlugin : Plugin() {
         }
 
         // 创建临时目标文件
-        val mimeType = guessMimeType(extension)
+        val mimeType = guessMimeTypeFromExtension(extension)
         // 现将原文件（如果有损坏的）删除
         existingFile?.delete()
         findChild(targetDir, "$fileName.downloading")?.delete()
@@ -380,7 +380,7 @@ class AndroidDownloadPlugin : Plugin() {
         }
 
         val extension = getFileExtension(fileName)
-        val mimeType = guessMimeType(extension)
+        val mimeType = guessMimeTypeFromExtension(extension)
 
         // 删除已存在的文件
         val existingFile = findChild(targetDir, fileName)
@@ -452,7 +452,7 @@ class AndroidDownloadPlugin : Plugin() {
         val values =
           ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-            put(MediaStore.MediaColumns.MIME_TYPE, guessImageMimeType(safeName))
+            put(MediaStore.MediaColumns.MIME_TYPE, guessMimeTypeFromExtension(getFileExtension(safeName)))
             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
           }
@@ -498,15 +498,6 @@ class AndroidDownloadPlugin : Plugin() {
       }
     }
   }
-
-  private fun guessImageMimeType(fileName: String): String =
-    when (getFileExtension(fileName)) {
-      "png" -> "image/png"
-      "jpg", "jpeg" -> "image/jpeg"
-      "webp" -> "image/webp"
-      "gif" -> "image/gif"
-      else -> "application/octet-stream"
-    }
 
   @PluginMethod
   fun getDownloadDirectoryInfo(call: PluginCall) {
@@ -928,15 +919,19 @@ class AndroidDownloadPlugin : Plugin() {
     return if (dot > 0) fileName.substring(dot + 1).lowercase() else ""
   }
 
-  private fun guessMimeType(extension: String): String =
-    when (extension) {
+  private fun guessMimeTypeFromExtension(extension: String): String =
+    when (extension.lowercase()) {
       "mp3" -> "audio/mpeg"
       "flac" -> "audio/flac"
       "wav" -> "audio/wav"
       "ogg" -> "audio/ogg"
       "m4a" -> "audio/mp4"
       "aac" -> "audio/aac"
-      "lrc", "yrc", "ass" -> "text/plain"
+      "png" -> "image/png"
+      "jpg", "jpeg" -> "image/jpeg"
+      "webp" -> "image/webp"
+      "gif" -> "image/gif"
+      "lrc", "yrc", "ass", "txt" -> "text/plain"
       "ttml" -> "application/xml"
       "json" -> "application/json"
       else -> "application/octet-stream"

@@ -131,7 +131,6 @@ const generalCategory: SettingCategory = {
     },
     {
       id: "backupReset",
-      platform: "desktop",
       items: [
         {
           key: "storageManager",

@@ -329,19 +329,6 @@ function subscribeAndroidScanProgress(callback: (progress: ScanProgress) => void
   };
 }
 
-// ─── Capacitor App 插件（用于 relaunch 退出） ───────────────────────────────
-
-interface CapacitorAppPlugin {
-  exit: () => void;
-}
-
-let _appPlugin: CapacitorAppPlugin | null = null;
-
-function getAppPlugin(): CapacitorAppPlugin {
-  if (_appPlugin) return _appPlugin;
-  _appPlugin = registerPlugin<CapacitorAppPlugin>("App");
-  return _appPlugin!;
-}
 
 // ─── Capacitor ExternalApi 插件（外部 API 服务控制） ──────────────────────
 
@@ -1678,6 +1665,106 @@ const withBridgeTimeout = <T>(promise: Promise<T>, ms: number, label: string): P
     );
   });
 
+/** 生成设置备份文件名，时间戳与 PC 端保持一致 */
+const buildConfigBackupFileName = (): string => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `splayer-settings-${stamp}.json`;
+};
+
+/** Android 端配置导出为文件（原生走 saveFile，预览走浏览器下载） */
+const exportConfigToFileAndroid = async (
+  payload: unknown,
+): Promise<{ ok: boolean; reason?: "canceled" | "writeFailed" }> => {
+  const fileName = buildConfigBackupFileName();
+  const json = JSON.stringify(payload, null, 2);
+  if (isAndroidPreview) {
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return { ok: true };
+    } catch (e) {
+      console.warn("[bridge:config] preview exportToFile failed", e);
+      return { ok: false, reason: "writeFailed" };
+    }
+  }
+  try {
+    const raw = new TextEncoder().encode(json);
+    const data = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+    const res = await withBridgeTimeout(
+      getAndroidDownload().saveFile({ data: bytesToBase64(data), fileName }),
+      SAVE_FILE_CALL_TIMEOUT_MS,
+      "saveFile",
+    );
+    if (res && res.status === "success") return { ok: true };
+    return { ok: false, reason: "writeFailed" };
+  } catch (e) {
+    console.warn("[bridge:config] android exportToFile failed", e);
+    return { ok: false, reason: "writeFailed" };
+  }
+};
+
+/** Android 端从本地文件选取并解析设置备份 */
+const importConfigFromFileAndroid = async (): Promise<
+  { ok: true; data: unknown } | { ok: false; reason: "canceled" | "readFailed" | "parseFailed" }
+> => {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json,text/plain,*/*";
+    input.style.display = "none";
+    let settled = false;
+    const done = (
+      result:
+        | { ok: true; data: unknown }
+        | { ok: false; reason: "canceled" | "readFailed" | "parseFailed" },
+    ): void => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(result);
+    };
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) {
+        done({ ok: false, reason: "canceled" });
+        return;
+      }
+      try {
+        const text = await file.text();
+        try {
+          const data = JSON.parse(text);
+          done({ ok: true, data });
+        } catch {
+          done({ ok: false, reason: "parseFailed" });
+        }
+      } catch {
+        done({ ok: false, reason: "readFailed" });
+      }
+    });
+    input.addEventListener("cancel", () => done({ ok: false, reason: "canceled" }), { once: true });
+    window.addEventListener(
+      "focus",
+      () => {
+        setTimeout(() => {
+          if (!settled && (!input.files || input.files.length === 0)) {
+            done({ ok: false, reason: "canceled" });
+          }
+        }, 1500);
+      },
+      { once: true },
+    );
+    document.body.appendChild(input);
+    input.click();
+  });
+};
+
 // ─── Bridge 实现 ─────────────────────────────────────────────────────────────
 
 const bridge = {
@@ -1715,13 +1802,13 @@ const bridge = {
       payload: unknown,
     ): Promise<{ ok: boolean; reason?: "canceled" | "writeFailed" }> =>
       isAndroid
-        ? apiPost("/api/config/exportToFile", payload)
+        ? exportConfigToFileAndroid(payload)
         : electronApi().config.exportToFile(payload),
     importFromFile: (): Promise<
       { ok: true; data: unknown } | { ok: false; reason: "canceled" | "readFailed" | "parseFailed" }
     > =>
       isAndroid
-        ? apiFetch("/api/config/importFromFile", { method: "POST" })
+        ? importConfigFromFileAndroid()
         : electronApi().config.importFromFile(),
   } satisfies ConfigApi,
 
@@ -2253,12 +2340,13 @@ const bridge = {
             "readClipboardText",
           ).then((res) => res.text)
         : navigator.clipboard.readText(),
-    relaunch: () =>
-      isAndroidNative
-        ? (getAppPlugin().exit(), Promise.resolve())
-        : isAndroid
-          ? Promise.resolve()
-          : electronApi().system.relaunch(),
+    relaunch: () => {
+      if (isAndroid) {
+        window.location.reload();
+        return Promise.resolve();
+      }
+      return electronApi().system.relaunch();
+    },
     // Android 无桌面式文件关联与协议唤起，冷启动分发时恒为空
     consumePendingAudioFiles: (): Promise<string[]> =>
       isAndroid ? Promise.resolve([]) : electronApi().system.consumePendingAudioFiles(),
