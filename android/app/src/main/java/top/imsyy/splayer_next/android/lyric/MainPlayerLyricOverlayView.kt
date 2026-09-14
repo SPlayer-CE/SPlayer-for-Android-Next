@@ -129,10 +129,6 @@ class MainPlayerLyricOverlayView
     private var contentHeight = 0f
     private var lineBrightAlphas = FloatArray(0)
     private var linePassAlphas = FloatArray(0)
-    private var lineBlurValues = FloatArray(0)
-
-    // 模糊值是否已稳定（abs(target - current) < 阈值），用于帧调度：渐变期需要连续帧驱动
-    private var lineBlurSettled = BooleanArray(0)
 
     // lineFloatFadeProgress：逐词浮动退场进度，1 = 保持当前浮动量，0 = 完全落回
     private var lineFloatFadeProgress = FloatArray(0)
@@ -144,6 +140,23 @@ class MainPlayerLyricOverlayView
 
     // 每行主文本字体：按行 language（ja/ko/zh-CN/und-Latn）匹配分语种字体，对齐 Web 端 :lang 选择
     private var lineMainTypefaces: Array<Typeface> = emptyArray()
+    private class LineWordLayout(
+      val chunkMergedStartMs: LongArray,
+      val chunkMergedEndMs: LongArray,
+      val chunkCharCounts: IntArray,
+      val chunkCharCursorBase: IntArray,
+      val sweepWordSegIndex: IntArray,
+      val sweepWordSegLast: IntArray,
+      val sweepSegFirstX: FloatArray,
+      val sweepSegWidths: FloatArray,
+      val sweepSegStarts: LongArray,
+      val sweepSegEnds: LongArray,
+      val textWidths: FloatArray? = null,
+      val widths: FloatArray? = null,
+      val wordXPositions: FloatArray? = null,
+    )
+
+    private var lineWordLayouts: Array<LineWordLayout?> = emptyArray()
     private var lineSubLinesCache: Array<List<String>> = emptyArray()
     private var lineInsetsCache: Array<LineInsets> = emptyArray()
     private var lineMetricsCache: Array<ContentBlockMetrics> = emptyArray()
@@ -152,14 +165,6 @@ class MainPlayerLyricOverlayView
     private var lineWordEffectEndCache: LongArray = LongArray(0)
     private var lineBgAboveCache: BooleanArray = BooleanArray(0)
     private var layoutCacheDirty = true
-
-    // 非激活行位图缓存：把整行内容（含模糊）栅格化到 Bitmap，每帧只做 drawBitmap + translate/scale，
-    // 让弹簧亚像素位移由 Skia 双线性采样平滑处理，避免 Canvas 重新栅格化文字带来的 AA 帧间漂移
-    private data class LineBitmap(
-      val bitmap: Bitmap,
-      val pad: Int,
-      val blurKey: Int,
-    )
 
     // ALPHA_8 字形位图：只存 alpha 掩码。drawBitmap + paint.shader 时 Skia 对 alpha-only 位图做
     // DST_IN 组合（渐变 × 字形alpha），单次 GPU pass 无离屏，且字形栅格化一次、每帧只做矩阵变换，
@@ -189,13 +194,8 @@ class MainPlayerLyricOverlayView
     )
 
     // QW-2: 热路径零分配复用缓冲(容量只增不减,主线程逐帧 clear 复用)
-    private val tmpChunkMergedStartMs = HashMap<Int, Long>()
-    private val tmpChunkMergedEndMs = HashMap<Int, Long>()
-    private val tmpChunkCharCounts = HashMap<Int, Int>()
-    private val tmpChunkCharCursor = HashMap<Int, Int>()
-    private var tmpTextWidths = FloatArray(0)
-    private var tmpWidths = FloatArray(0)
-    private var tmpWordXPositions = FloatArray(0)
+
+
 
     // H-1: 词文本宽度缓存，按字体分桶（rebuildLayoutCache 时随布局一并失效）——
     // 分语种字体下同一文本在不同行宽度不同，不能共用单一映射
@@ -214,27 +214,6 @@ class MainPlayerLyricOverlayView
     private var cachedRubyFmTypeface: Typeface? = null
     private var rubyFontMetricsCache = Paint.FontMetrics()
 
-    // H-3: 配额从 maxMemory/6(上限 96MB)收紧到 maxMemory/8(上限 48MB),行位图超限走直绘,视效不变
-    private val lineBitmapCacheMaxKb =
-      ((Runtime.getRuntime().maxMemory() / 8L) / 1024L)
-        .coerceIn(16L * 1024L, 48L * 1024L)
-        .toInt()
-    private val lineBitmapCache =
-      object : LruCache<Int, LineBitmap>(lineBitmapCacheMaxKb) {
-        override fun sizeOf(
-          key: Int,
-          value: LineBitmap,
-        ): Int = (value.bitmap.byteCount / 1024).coerceAtLeast(1)
-
-        override fun entryRemoved(
-          evicted: Boolean,
-          key: Int,
-          oldValue: LineBitmap,
-          newValue: LineBitmap?,
-        ) {
-          if (oldValue !== newValue && !oldValue.bitmap.isRecycled) oldValue.bitmap.recycle()
-        }
-      }
     private val emphasisWordMetricsCache =
       object : LruCache<Any, EmphasisWordMetrics>(8 * 1024) {
         // sizeOf 须同时计入主字形位图和辉光位图：glowBitmap 外扩 glowPad 后字节远大于主位图，
@@ -325,7 +304,6 @@ class MainPlayerLyricOverlayView
 
     // H-3: 注音扫掠时间窗缓存(词不可变数据的纯函数结果,随词宽缓存一并失效)
     private val rubySweepWindowsCache = IdentityHashMap<NativeLyricWord, LongArray>()
-    private val blurMaskFilterCache = object : LruCache<Int, BlurMaskFilter>(64) {}
     private val solidWordShaderCache = object : LruCache<Int, LinearGradient>(32) {}
 
     // 复用逐词扫光渐变：固定宽度的 played→unplayed 渐变 + localMatrix 平移到任意 gradientStartX，
@@ -340,7 +318,6 @@ class MainPlayerLyricOverlayView
     // 复用 shader 在 char-emphasis 路径需叠加 canvas 逆矩阵：用 scratch 合成 base 平移 × 逆矩阵，
     // 避免 setLocalMatrix(inverseMatrix) 整体覆盖导致扫光平移丢失
     private val reusableShaderLocalScratch = Matrix()
-    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
     // ALPHA_8 字形位图直绘专用 paint：FILTER_BITMAP 让双线性采样平滑亚像素变换；
     // shader 由调用方设置（alpha-only 位图与 paint shader 做 DST_IN 组合，单次 GPU pass 无离屏）
@@ -366,7 +343,9 @@ class MainPlayerLyricOverlayView
     private var alignPosition = 0.35f
     private var wordFadeWidth = 0.5f
     private var hidePassedLines = false
-    private var enableBlur = false
+
+    // 逐行模糊策略：状态、位图缓存、GPU 模糊层全部收拢在 controller 内
+    private val blurController = LyricBlurController(density)
     private var enableWordHighlight = true
     private var enableFloatAnimation = false
     private var enableEmphasizeEffect = false
@@ -528,8 +507,7 @@ class MainPlayerLyricOverlayView
       contentHeight = 0f
       lineBrightAlphas = FloatArray(0)
       linePassAlphas = FloatArray(0)
-      lineBlurValues = FloatArray(0)
-      lineBlurSettled = BooleanArray(0)
+      blurController.reset(0)
       interludeState = InterludeState()
       lineSprings = emptyArray()
       activeLineSpringIndices.clear()
@@ -545,7 +523,7 @@ class MainPlayerLyricOverlayView
       inertialVelocity = 0f
       scrollResetNano = 0L
       resetTimelineState()
-      invalidateAllLineBitmaps()
+      blurController.invalidateAll()
       // 重置视口，避免退出后重新进入时残留旧视口导致歌词位置错误或触摸拦截
       viewportLeft = 0
       viewportTop = 0
@@ -593,7 +571,7 @@ class MainPlayerLyricOverlayView
       this.alignPosition = alignPosition.coerceIn(0.05f, 0.95f)
       this.wordFadeWidth = wordFadeWidth.coerceIn(0.05f, 1f)
       this.hidePassedLines = hidePassedLines
-      this.enableBlur = enableBlur
+      blurController.enableBlur = enableBlur
       // 模糊通过位图缓存的 Canvas(bitmap)（软件画布）隔离实现，不依赖 View 的 layerType。
       // 强制软件层会让激活行的 LinearGradient 渐变高光也走软件光栅化，造成不必要的性能损耗。
       setLayerType(LAYER_TYPE_NONE, null)
@@ -762,7 +740,7 @@ class MainPlayerLyricOverlayView
       touchExclusionRects.clear()
       scrollResetNano = 0L
       lastDrawNano = 0L
-      invalidateAllLineBitmaps()
+      blurController.invalidateAll()
       emphasisWordMetricsCache.evictAll()
       baseGlyphCache.evictAll()
       glowGlyphCache.evictAll()
@@ -1005,6 +983,8 @@ class MainPlayerLyricOverlayView
       lineHitTops.fill(Float.NaN)
       lineHitBottoms.fill(Float.NaN)
 
+      val currentViewportCssPx = viewportCssWidth.takeIf { it > 0f } ?: (viewportWidth / density)
+
       // 对齐 AMLL 分组绘制顺序：BG 和声行（bgWrapper z-index -1 语义）先于其主行绘制，
       // 滑入/滑出期间从主行文字背后穿过；其余行保持索引序
       fun processLyricLine(index: Int) {
@@ -1027,7 +1007,7 @@ class MainPlayerLyricOverlayView
         val transformedBottom = scaleOriginY + (drawTop + layout.height - scaleOriginY) * drawScale
         lineHitTops[index] = min(transformedTop, transformedBottom)
         lineHitBottoms[index] = max(transformedTop, transformedBottom)
-        val blurPadding = (lineBlurValues.getOrNull(index) ?: 0f) * 1.5f * density
+        val blurPadding = blurController.currentRadiusPx(index)
         val effectPadding = max(maxVerticalEffectPadding, blurPadding)
         val inViewport =
           max(transformedTop, transformedBottom) + effectPadding >= 0f &&
@@ -1044,13 +1024,16 @@ class MainPlayerLyricOverlayView
         // 对齐 AMLL 组级模糊：主行与 BG 行共享同组档位
         val blurDistanceIndex = if (line.isBG && index > 0) index - 1 else index
         val blurRadius =
-          updateLineBlurRadius(
+          blurController.updateLine(
             index = index,
             distanceIndex = blurDistanceIndex,
-            activeState = activeState,
+            lineCount = lyricLines.size,
+            anchorIndex = activeState.anchorIndex,
+            latestHighlightIndex = activeState.latestHighlightIndex,
             active = presented,
             isUserScrolling = isUserScrolling,
             inViewport = inViewport,
+            viewportCssPx = currentViewportCssPx,
             deltaMs = deltaMs,
           )
         if (!inViewport) {
@@ -1115,7 +1098,7 @@ class MainPlayerLyricOverlayView
         hasActiveFrameAnimation(activeState, currentTimeMs) || interludeState.isActive
       if ((playing && !frozen && frameAnimationActive) ||
         lineSpringsActive() ||
-        lineBlurAnimating() ||
+        blurController.isAnimating() ||
         kotlin.math.abs(userScrollOffset) > 0.5f ||
         kotlin.math.abs(inertialVelocity) > 0.015f
       ) {
@@ -1152,56 +1135,153 @@ class MainPlayerLyricOverlayView
       // 非激活行走位图缓存：把整行栅格化到 Bitmap，亚像素的 translate/scale 由 Skia 平滑采样，
       // 避免每帧重栅格化文字产生 AA 漂移。激活行因为有逐词渐变/浮动/字符强调等逐帧状态，仍走直绘。
       // 模糊必须走位图缓存：硬件加速 Canvas 对 drawText 的 BlurMaskFilter 不生效，只有
-      // Canvas(bitmap) 软件画布能栅格化出模糊。渐变期同样进缓存，blurKey 按 2px 档量化，
-      // 一次 0→目标 的渐变仅触发数次重建，分摊到多帧，主线程开销可控。
+      // Canvas(bitmap) 软件画布能栅格化出模糊。渐变期由起点档与目标档两张位图叠化过渡
+      // （近端不用清晰图，避免已模糊行升档时清晰分量闪入），一次渐变最多构建两张图。
       // 对齐 AMLL 退场动画：逐词浮动衰减期间（lineFloatFadeProgress > 0）也不进入位图缓存，
       // 让浮动通过直绘平滑落回，衰减完成后才缓存
       val floatFade = lineFloatFadeProgress.getOrNull(index) ?: 0f
       val isFloatFading =
         !active && floatFade > 0.001f && (enableFloatAnimation || enableEmphasizeEffect)
-      if (!active && !isFloatFading) {
-        val cache =
-          getOrBuildLineBitmap(index, line, mainSize, subLines, contentMetrics, blurRadius)
-        if (cache != null) {
-          canvas.save()
-          if (scale != 1f) {
-            val originX = if (line.isDuet) viewportWidth.toFloat() else 0f
-            // 对齐 AMLL bgWrapper transform-origin：下方 BG left top，置顶 BG left bottom
-            val originY =
-              if (line.isBG) {
-                if (isBgAbove(index)) top + layout.height else top
-              } else {
-                top + layout.height * 0.5f
-              }
-            canvas.scale(scale, scale, originX, originY)
-          }
-          bitmapPaint.alpha = (lineAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
-          // 位图顶部留了 cache.pad 像素吸收模糊溢出，绘制时把 Y 上推同等距离让正文落在 top
-          canvas.drawBitmap(cache.bitmap, 0f, top - cache.pad, bitmapPaint)
-          canvas.restore()
-          return
+      // 行缩放原点：对齐 Web 引擎 transform-origin
+      // 主行 left center，对唱行 right center，BG 行 left/right top（置顶 BG 为 bottom）
+      val scaleOriginX = if (line.isDuet) viewportWidth.toFloat() else 0f
+      val scaleOriginY =
+        if (line.isBG) {
+          // 对齐 AMLL bgWrapper transform-origin：下方 BG left top，置顶 BG left bottom
+          if (isBgAbove(index)) top + layout.height else top
+        } else {
+          top + layout.height * 0.5f
         }
+      if (!active && !isFloatFading) {
+        val drawn =
+          blurController.drawStaticLine(
+            canvas = canvas,
+            index = index,
+            top = top,
+            lineAlpha = lineAlpha,
+            lineScale = scale,
+            scaleOriginX = scaleOriginX,
+            scaleOriginY = scaleOriginY,
+            contentHeight = lineHeightsCache.getOrNull(index) ?: 0f,
+            viewportWidth = viewportWidth,
+          ) { targetCanvas, contentTop, contentBlurRadius ->
+            val mainBottom =
+              drawMainText(
+                canvas = targetCanvas,
+                line = line,
+                top = contentTop,
+                mainSize = mainSize,
+                lineAlpha = 1f,
+                currentTimeMs = 0L,
+                active = false,
+                blurRadius = contentBlurRadius,
+                contentMetrics = contentMetrics,
+                // 按行语言字体必须与 GPU 模糊层录制一致，否则行切入缓存时整行字体突变
+                index = index,
+              )
+            drawSubTexts(
+              canvas = targetCanvas,
+              line = line,
+              subLines = subLines,
+              mainBottom = mainBottom,
+              lineAlpha = 1f,
+              blurRadius = contentBlurRadius,
+              contentMetrics = contentMetrics,
+              scale = 1f,
+              scaleOriginY = 0f,
+            )
+          }
+        if (drawn) return
         // 缓存构建失败（如尺寸非法/超限），回退直绘保持显示不丢失
       } else {
         // 激活行会一直在变（逐词高亮 + 浮动），其缓存对相邻帧无意义；行变激活的瞬间立即释放
-        if (lineBitmapCache.get(index) != null) invalidateLineBitmap(index)
+        blurController.invalidateLine(index)
       }
 
       canvas.save()
       // 行缩放：对齐 Web 引擎 transform-origin
-      // 主行 left center，对唱行 right center，BG 行 left/right top（置顶 BG 为 bottom）
       if (scale != 1f) {
-        val originX = if (line.isDuet) viewportWidth.toFloat() else 0f
-        val originY =
-          if (line.isBG) {
-            if (isBgAbove(index)) top + layout.height else top
-          } else {
-            top + layout.height * 0.5f
-          }
-        canvas.scale(scale, scale, originX, originY)
+        canvas.scale(scale, scale, scaleOriginX, scaleOriginY)
       }
-      val scaleOriginY = if (line.isBG) top else top + layout.height * 0.5f
+      val contentScaleOriginY = if (line.isBG) top else top + layout.height * 0.5f
 
+      // 模糊：API 31+ 硬件加速时把整行录进半分辨率 RenderNode，由 RenderEffect 在 GPU 上模糊整行
+      // （对齐 Web 引擎 filter: blur 的整行语义）；不支持时回退原直绘（maskFilter 仅在软件画布生效）
+      val blurLayerDrawn =
+        blurController.drawGpuLayer(
+          canvas = canvas,
+          index = index,
+          top = top,
+          layoutHeight = layout.height,
+          blurRadiusPx = blurRadius,
+          viewportWidth = viewportWidth,
+          hardwareAccelerated = canvas.isHardwareAccelerated,
+        ) { targetCanvas, contentTop, contentBlurRadius ->
+          drawLineContent(
+            canvas = targetCanvas,
+            index = index,
+            line = line,
+            top = contentTop,
+            mainSize = mainSize,
+            lineAlpha = lineAlpha,
+            currentTimeMs = currentTimeMs,
+            active = active,
+            isFloatFading = isFloatFading,
+            blurRadius = contentBlurRadius,
+            contentMetrics = contentMetrics,
+            subLines = subLines,
+            scale = scale,
+            scaleOriginY = contentScaleOriginY,
+          )
+        }
+      if (!blurLayerDrawn) {
+        drawLineContent(
+          canvas = canvas,
+          index = index,
+          line = line,
+          top = top,
+          mainSize = mainSize,
+          lineAlpha = lineAlpha,
+          currentTimeMs = currentTimeMs,
+          active = active,
+          isFloatFading = isFloatFading,
+          blurRadius = blurRadius,
+          contentMetrics = contentMetrics,
+          subLines = subLines,
+          scale = scale,
+          scaleOriginY = contentScaleOriginY,
+        )
+      }
+
+      canvas.restore()
+    }
+
+    /**
+     * 绘制一行的直绘内容（主行 + 副行）。
+     *
+     * 独立成方法，让同一份绘制命令既能落到主画布（原直绘路径），也能落到 RenderNode 的录制画布
+     * （GPU 模糊层），避免两处重复维护绘制细节。
+     *
+     * @param active - 词效果活跃行（hot 行或词效果保留期），与浮动衰减态区分
+     * @param isFloatFading - 逐词浮动退场衰减中，需要逐词直绘渲染落回过程
+     * @param blurRadius - 内容自身模糊半径；由模糊层承担时传 0，避免双重模糊
+     */
+    private fun drawLineContent(
+      canvas: Canvas,
+      index: Int,
+      line: NativeLyricLine,
+      top: Float,
+      mainSize: Float,
+      lineAlpha: Float,
+      currentTimeMs: Long,
+      active: Boolean,
+      isFloatFading: Boolean,
+      blurRadius: Float,
+      contentMetrics: ContentBlockMetrics,
+      subLines: List<String>,
+      scale: Float,
+      scaleOriginY: Float,
+    ) {
       val mainBottom =
         drawMainText(
           canvas = canvas,
@@ -1230,8 +1310,6 @@ class MainPlayerLyricOverlayView
         scale = scale,
         scaleOriginY = scaleOriginY,
       )
-
-      canvas.restore()
     }
 
     private fun drawMainText(
@@ -1258,7 +1336,7 @@ class MainPlayerLyricOverlayView
       // 激活行 blurRadius 从非零值衰减到 0，残留值在硬件加速 Canvas 上 BlurMaskFilter 不生效；
       // 阈值 0.5px 以下直接按 0 处理，避免设置无效的 maskFilter
       if (blurRadius > 0.5f) {
-        mainPaint.maskFilter = getBlurMaskFilter(blurRadius)
+        mainPaint.maskFilter = blurController.blurMaskFilter(blurRadius)
       } else {
         mainPaint.maskFilter = null
       }
@@ -1305,7 +1383,8 @@ class MainPlayerLyricOverlayView
               top + verticalPadding + positioned.baselineOffset,
               mainPaint,
             )
-            // 逐词罗马音（非激活行统一使用 lineAlpha，无 played/unplayed 区分）
+            // 逐词罗马音（非激活行统一使用 lineAlpha，无 played/unplayed 区分）；
+            // 模糊半径透传：位图烘焙时罗马音与主行同 σ，GPU 层录制时为 0 由层统一模糊
             drawRomanBelow(
               canvas,
               positioned.word.romanWord,
@@ -1317,6 +1396,7 @@ class MainPlayerLyricOverlayView
               applyAlpha(textColor, lineAlpha),
               1f,
               wordKey = positioned.word,
+              blurRadius = blurRadius,
             )
           }
         }
@@ -1409,6 +1489,146 @@ class MainPlayerLyricOverlayView
       canvas.restoreToCount(saveCount)
     }
 
+    private fun buildPositionedLineWordLayout(
+      positionedWords: List<PositionedWord>,
+      startX: Float,
+    ): LineWordLayout {
+      val maxChunkId = positionedWords.maxOfOrNull { it.chunkId } ?: 0
+      val chunkMergedStartMs = LongArray(maxChunkId + 1) { -1L }
+      val chunkMergedEndMs = LongArray(maxChunkId + 1) { -1L }
+      val chunkCharCounts = IntArray(maxChunkId + 1)
+      val tempCursor = IntArray(maxChunkId + 1)
+      val chunkCharCursorBase = IntArray(positionedWords.size)
+      
+      for (i in positionedWords.indices) {
+        val positioned = positionedWords[i]
+        val cid = positioned.chunkId
+        if (chunkMergedStartMs[cid] == -1L || positioned.word.startTime < chunkMergedStartMs[cid]) {
+          chunkMergedStartMs[cid] = positioned.word.startTime
+        }
+        if (chunkMergedEndMs[cid] == -1L || positioned.word.endTime > chunkMergedEndMs[cid]) {
+          chunkMergedEndMs[cid] = positioned.word.endTime
+        }
+        chunkCharCounts[cid] += positioned.word.emphasizeCharCount
+        chunkCharCursorBase[i] = tempCursor[cid]
+        tempCursor[cid] += positioned.word.emphasizeCharCount
+      }
+
+      val segmentCapacity =
+        positionedWords.sumOf { if (it.word.ruby.isEmpty()) 1 else it.word.rubyCharCount.coerceAtLeast(1) }
+      beginMaskSweep(positionedWords.size, segmentCapacity)
+      for (wordIndex in positionedWords.indices) {
+        val positioned = positionedWords[wordIndex]
+        recordMaskSweepWord(
+          wordIndex = wordIndex,
+          word = positioned.word,
+          wordX = startX + positioned.x,
+          width = positioned.width,
+          startMs = positioned.word.startTime,
+          endMs = positioned.word.endTime,
+          rubySpans = positioned.word.ruby,
+        )
+      }
+      return LineWordLayout(
+        chunkMergedStartMs = chunkMergedStartMs,
+        chunkMergedEndMs = chunkMergedEndMs,
+        chunkCharCounts = chunkCharCounts,
+        chunkCharCursorBase = chunkCharCursorBase,
+        sweepWordSegIndex = sweepWordSegIndex.copyOf(positionedWords.size),
+        sweepWordSegLast = sweepWordSegLast.copyOf(positionedWords.size),
+        sweepSegFirstX = sweepSegFirstX.copyOf(sweepSegCount),
+        sweepSegWidths = sweepSegWidths.copyOf(sweepSegCount),
+        sweepSegStarts = sweepSegStarts.copyOf(sweepSegCount),
+        sweepSegEnds = sweepSegEnds.copyOf(sweepSegCount),
+      )
+    }
+
+    private fun buildLineWordLayout(
+      line: NativeLyricLine,
+      startX: Float,
+      contentWidth: Float
+    ): LineWordLayout {
+      val displayWords = line.displayWords
+      val textWidths = FloatArray(displayWords.size)
+      val widths = FloatArray(displayWords.size)
+      val spaceWidth = mainPaint.measureText(" ")
+      val hasWordRoman = displayWords.any { it.word.romanWord.isNotBlank() }
+      val romanPadding = if (hasWordRoman) mainPaint.textSize * 0.15f else 0f
+      if (hasWordRoman) {
+        subPaint.textSize = mainPaint.textSize * 0.5f
+        subPaint.typeface = mainPaint.typeface
+      }
+      val hasWordRuby = displayWords.any { it.word.ruby.isNotEmpty() }
+      var totalWidth = 0f
+      val widthCache = wordTextWidthByFont.getOrPut(mainPaint.typeface) { HashMap() }
+      for (i in displayWords.indices) {
+        val word = displayWords[i].word
+        textWidths[i] = widthCache[word.word] ?: mainPaint.measureText(word.word).also { widthCache[word.word] = it }
+        val romanWidth = if (hasWordRoman) {
+          romanWordWidthCache[word] ?: subPaint.measureText(word.romanWord.takeIf { it.isNotBlank() } ?: "\u00A0").also { width -> romanWordWidthCache[word] = width }
+        } else 0f
+        var width = max(textWidths[i], romanWidth + romanPadding)
+        if (hasWordRuby && word.ruby.isNotEmpty()) {
+          width = max(width, measureRubyTextWidth(word, mainPaint.textSize))
+        }
+        widths[i] = width
+        totalWidth += width
+        if (displayWords[i].leadingSpace && i > 0) totalWidth += spaceWidth
+      }
+
+      var x = if (line.isDuet) (startX + contentWidth - totalWidth).coerceAtLeast(0f) else startX
+      val wordXPositions = FloatArray(displayWords.size)
+      var pos = x
+      for (i in displayWords.indices) {
+        if (displayWords[i].leadingSpace && i > 0) pos += spaceWidth
+        wordXPositions[i] = pos
+        pos += widths[i]
+      }
+
+      val maxChunkId = displayWords.maxOfOrNull { it.chunkId } ?: 0
+      val chunkMergedStartMs = LongArray(maxChunkId + 1) { -1L }
+      val chunkMergedEndMs = LongArray(maxChunkId + 1) { -1L }
+      val chunkCharCounts = IntArray(maxChunkId + 1)
+      val tempCursor = IntArray(maxChunkId + 1)
+      val chunkCharCursorBase = IntArray(displayWords.size)
+      
+      for (i in displayWords.indices) {
+        val displayWord = displayWords[i]
+        val cid = displayWord.chunkId
+        if (chunkMergedStartMs[cid] == -1L || displayWord.word.startTime < chunkMergedStartMs[cid]) {
+          chunkMergedStartMs[cid] = displayWord.word.startTime
+        }
+        if (chunkMergedEndMs[cid] == -1L || displayWord.word.endTime > chunkMergedEndMs[cid]) {
+          chunkMergedEndMs[cid] = displayWord.word.endTime
+        }
+        chunkCharCounts[cid] += displayWord.word.emphasizeCharCount
+        chunkCharCursorBase[i] = tempCursor[cid]
+        tempCursor[cid] += displayWord.word.emphasizeCharCount
+      }
+
+      val segmentCapacity = displayWords.sumOf { if (it.word.ruby.isEmpty()) 1 else it.word.rubyCharCount.coerceAtLeast(1) }
+      beginMaskSweep(displayWords.size, segmentCapacity)
+      for (i in displayWords.indices) {
+        recordMaskSweepWord(i, displayWords[i].word, wordXPositions[i], widths[i], displayWords[i].word.startTime, displayWords[i].word.endTime, displayWords[i].word.ruby)
+      }
+
+      return LineWordLayout(
+        chunkMergedStartMs = chunkMergedStartMs,
+        chunkMergedEndMs = chunkMergedEndMs,
+        chunkCharCounts = chunkCharCounts,
+        chunkCharCursorBase = chunkCharCursorBase,
+        sweepWordSegIndex = sweepWordSegIndex.copyOf(displayWords.size),
+        sweepWordSegLast = sweepWordSegLast.copyOf(displayWords.size),
+        sweepSegFirstX = sweepSegFirstX.copyOf(sweepSegCount),
+        sweepSegWidths = sweepSegWidths.copyOf(sweepSegCount),
+        sweepSegStarts = sweepSegStarts.copyOf(sweepSegCount),
+        sweepSegEnds = sweepSegEnds.copyOf(sweepSegCount),
+        textWidths = textWidths,
+        widths = widths,
+        wordXPositions = wordXPositions
+      )
+    }
+
     private fun drawPositionedWordHighlightLine(
       canvas: Canvas,
       positionedWords: List<PositionedWord>,
@@ -1431,50 +1651,24 @@ class MainPlayerLyricOverlayView
 
       // char 强调动画的 chunk 级时序数据（对齐 AMLL initEmphasizeAnimation）：
       // du/amount/blur 按 chunk merged 时长，charDelay 按 chunk 内全局字符序
+      val layout = lineWordLayouts[index] ?: buildPositionedLineWordLayout(positionedWords, startX).also { lineWordLayouts[index] = it }
       val lastChunkId = positionedWords.lastOrNull()?.chunkId
-      // QW-2: 复用成员 HashMap 避免逐帧分配
-      val chunkMergedStartMs = tmpChunkMergedStartMs
-      val chunkMergedEndMs = tmpChunkMergedEndMs
-      val chunkCharCounts = tmpChunkCharCounts
-      chunkMergedStartMs.clear()
-      chunkMergedEndMs.clear()
-      chunkCharCounts.clear()
-      for (positioned in positionedWords) {
-        val startMs = chunkMergedStartMs[positioned.chunkId]
-        if (startMs == null || positioned.word.startTime < startMs) {
-          chunkMergedStartMs[positioned.chunkId] = positioned.word.startTime
-        }
-        val endMs = chunkMergedEndMs[positioned.chunkId]
-        if (endMs == null || positioned.word.endTime > endMs) {
-          chunkMergedEndMs[positioned.chunkId] = positioned.word.endTime
-        }
-        chunkCharCounts[positioned.chunkId] =
-          (chunkCharCounts[positioned.chunkId] ?: 0) + positioned.word.emphasizeCharCount
-      }
-      val chunkCharCursor = tmpChunkCharCursor
-      chunkCharCursor.clear()
+      
+      val chunkMergedStartMs = layout.chunkMergedStartMs
+      val chunkMergedEndMs = layout.chunkMergedEndMs
+      val chunkCharCounts = layout.chunkCharCounts
+      val sweepWordSegIndex = layout.sweepWordSegIndex
+      val sweepWordSegLast = layout.sweepWordSegLast
+      val sweepSegFirstX = layout.sweepSegFirstX
+      val sweepSegWidths = layout.sweepSegWidths
+      val sweepSegStarts = layout.sweepSegStarts
+      val sweepSegEnds = layout.sweepSegEnds
+      val chunkCharCursorBase = layout.chunkCharCursorBase
 
       // 对齐 AMLL 遮罩关键帧：扫光段逐词独立时间窗推进（computeSegmentTravel），
       // 行内时窗乱序、重叠的词互不干扰；长音/拖腔不做整行或整 chunk 合并，
       // 每个词元各在自己的时窗内匀速扫过自身宽度，词间隙自然停顿
       val lineStartMs = lyricLines.getOrNull(index)?.startTime ?: 0L
-      val segmentCapacity =
-        positionedWords.sumOf { positioned ->
-          if (positioned.word.ruby.isEmpty()) 1 else positioned.word.rubyCharCount.coerceAtLeast(1)
-        }
-      beginMaskSweep(positionedWords.size, segmentCapacity)
-      for (wordIndex in positionedWords.indices) {
-        val positioned = positionedWords[wordIndex]
-        recordMaskSweepWord(
-          wordIndex = wordIndex,
-          word = positioned.word,
-          wordX = startX + positioned.x,
-          width = positioned.width,
-          startMs = positioned.word.startTime,
-          endMs = positioned.word.endTime,
-          rubySpans = positioned.word.ruby,
-        )
-      }
 
       for ((wordIndex, positioned) in positionedWords.withIndex()) {
         val word = positioned.word
@@ -1491,7 +1685,7 @@ class MainPlayerLyricOverlayView
         val drawBaseline = baseline + positioned.baselineOffset
         // 对齐 Web：渐变带位置由该段自身独立行程推导（computeSegmentTravel），
         // 段行程只依赖自身时间窗，行内时窗乱序、重叠的词互不干扰
-        val segIndex = resolveSweepSegIndex(wordIndex, currentTimeMs)
+        val segIndex = resolveSweepSegIndex(wordIndex, currentTimeMs, sweepWordSegIndex, sweepWordSegLast, sweepSegStarts)
         val segmentTravel =
           AndroidLyricTimeline.computeSegmentTravel(
             startMs = sweepSegStarts[segIndex],
@@ -1517,7 +1711,8 @@ class MainPlayerLyricOverlayView
           )
         mainPaint.shader = null
         if (enableFloatAnimation || enableEmphasizeEffect) {
-          val chunkStartMs = chunkMergedStartMs[positioned.chunkId] ?: word.startTime
+          val cid = positioned.chunkId
+          val chunkStartMs = if (chunkMergedStartMs[cid] == -1L) word.startTime else chunkMergedStartMs[cid]
           drawEmphasizeWord(
             canvas = canvas,
             word = word,
@@ -1532,13 +1727,10 @@ class MainPlayerLyricOverlayView
             elapsed = elapsed,
             chunkElapsedMs = currentTimeMs - chunkStartMs,
             chunkDurationMs =
-              (
-                chunkMergedEndMs[positioned.chunkId]
-                  ?: word.endTime
-              ) - chunkStartMs,
-            chunkCharIndexBase = chunkCharCursor[positioned.chunkId] ?: 0,
-            chunkCharCount = (chunkCharCounts[positioned.chunkId] ?: 1).coerceAtLeast(1),
-            isLastChunk = positioned.chunkId == lastChunkId,
+              (if (chunkMergedEndMs[cid] == -1L) word.endTime else chunkMergedEndMs[cid]) - chunkStartMs,
+            chunkCharIndexBase = chunkCharCursorBase[wordIndex],
+            chunkCharCount = chunkCharCounts[cid].coerceAtLeast(1),
+            isLastChunk = cid == lastChunkId,
             isBG = false,
             lineActive = lineActive,
             forceCharEmphasis = positioned.chunkShouldEmphasize,
@@ -1576,8 +1768,6 @@ class MainPlayerLyricOverlayView
             shader,
           )
         }
-        chunkCharCursor[positioned.chunkId] =
-          (chunkCharCursor[positioned.chunkId] ?: 0) + word.emphasizeCharCount
       }
       mainPaint.shader = null
     }
@@ -1598,47 +1788,23 @@ class MainPlayerLyricOverlayView
         canvas.drawText(line.mainText, startX, baseline, mainPaint)
         return
       }
-      // QW-2: 复用成员 FloatArray 避免逐帧分配
-      ensureReusableFloats(displayWords.size)
-      val textWidths = tmpTextWidths
-      val widths = tmpWidths
-      val spaceWidth = mainPaint.measureText(" ")
-      val hasWordRoman = displayWords.any { it.word.romanWord.isNotBlank() }
-      val romanPadding = if (hasWordRoman) mainPaint.textSize * 0.15f else 0f
-      if (hasWordRoman) {
-        subPaint.textSize = mainPaint.textSize * 0.5f
-        // 词级罗马音在 Web 端位于主行 DOM 内，继承行字体而非全局副歌词字体
-        subPaint.typeface = mainPaint.typeface
-      }
-      val hasWordRuby = displayWords.any { it.word.ruby.isNotEmpty() }
-      var totalWidth = 0f
-      val widthCache = wordTextWidthByFont.getOrPut(mainPaint.typeface) { HashMap() }
-      for (i in displayWords.indices) {
-        val word = displayWords[i].word
-        textWidths[i] =
-          widthCache[word.word]
-            ?: mainPaint.measureText(word.word).also { widthCache[word.word] = it }
-        val romanWidth =
-          if (hasWordRoman) {
-            romanWordWidthCache[word]
-              ?: subPaint
-                .measureText(
-                  word.romanWord.takeIf { it.isNotBlank() } ?: "\u00A0",
-                ).also { width -> romanWordWidthCache[word] = width }
-          } else {
-            0f
-          }
-        var width = max(textWidths[i], romanWidth + romanPadding)
-        if (hasWordRuby && word.ruby.isNotEmpty()) {
-          width = max(width, measureRubyTextWidth(word, mainPaint.textSize))
-        }
-        widths[i] = width
-        totalWidth += width
-        if (displayWords[i].leadingSpace && i > 0) totalWidth += spaceWidth
-      }
+      val layout = lineWordLayouts[lineIndex] ?: buildLineWordLayout(line, startX, contentWidth).also { lineWordLayouts[lineIndex] = it }
+      val textWidths = layout.textWidths!!
+      val widths = layout.widths!!
+      val wordXPositions = layout.wordXPositions!!
+      val chunkMergedStartMs = layout.chunkMergedStartMs
+      val chunkMergedEndMs = layout.chunkMergedEndMs
+      val chunkCharCounts = layout.chunkCharCounts
+      val sweepWordSegIndex = layout.sweepWordSegIndex
+      val sweepWordSegLast = layout.sweepWordSegLast
+      val sweepSegFirstX = layout.sweepSegFirstX
+      val sweepSegWidths = layout.sweepSegWidths
+      val sweepSegStarts = layout.sweepSegStarts
+      val sweepSegEnds = layout.sweepSegEnds
+      val chunkCharCursorBase = layout.chunkCharCursorBase
 
-      // 修复：确保右对唱行的起始位置不会为负，避免文本超出屏幕左侧
-      var x = if (line.isDuet) (startX + contentWidth - totalWidth).coerceAtLeast(0f) else startX
+      val lastChunkId = displayWords.lastOrNull()?.chunkId
+
       // 对齐 engine/index.ts：最终可见透明度 = 行亮度 × 单词 mask alpha
       // 亮部使用 lineAlpha，暗部固定使用 inactiveAlpha，避免已播区域被额外压暗成灰
       val playedColor = applyAlpha(textColor, lineAlpha)
@@ -1648,62 +1814,7 @@ class MainPlayerLyricOverlayView
       val fm = mainFontMetrics()
       val textHeight = fm.descent - fm.ascent
       val fadeMinPx = max(1f * density, textHeight * wordFadeWidth)
-
-      val wordXPositions = tmpWordXPositions
-      var pos = x
-      for (i in displayWords.indices) {
-        if (displayWords[i].leadingSpace && i > 0) pos += spaceWidth
-        wordXPositions[i] = pos
-        pos += widths[i]
-      }
-
-      // char 强调动画的 chunk 级时序数据（对齐 AMLL initEmphasizeAnimation）：
-      // du/amount/blur 按 chunk merged 时长，charDelay 按 chunk 内全局字符序
-      val lastChunkId = displayWords.lastOrNull()?.chunkId
-      // QW-2: 复用成员 HashMap 避免逐帧分配
-      val chunkMergedStartMs = tmpChunkMergedStartMs
-      val chunkMergedEndMs = tmpChunkMergedEndMs
-      val chunkCharCounts = tmpChunkCharCounts
-      chunkMergedStartMs.clear()
-      chunkMergedEndMs.clear()
-      chunkCharCounts.clear()
-      for (i in displayWords.indices) {
-        val displayWord = displayWords[i]
-        val startMs = chunkMergedStartMs[displayWord.chunkId]
-        if (startMs == null || displayWord.word.startTime < startMs) {
-          chunkMergedStartMs[displayWord.chunkId] = displayWord.word.startTime
-        }
-        val endMs = chunkMergedEndMs[displayWord.chunkId]
-        if (endMs == null || displayWord.word.endTime > endMs) {
-          chunkMergedEndMs[displayWord.chunkId] = displayWord.word.endTime
-        }
-        chunkCharCounts[displayWord.chunkId] =
-          (chunkCharCounts[displayWord.chunkId] ?: 0) + displayWord.word.emphasizeCharCount
-      }
-      val chunkCharCursor = tmpChunkCharCursor
-      chunkCharCursor.clear()
-
-      // 对齐 AMLL 遮罩关键帧：扫光段逐词独立时间窗推进（computeSegmentTravel），
-      // 行内时窗乱序、重叠的词互不干扰；长音/拖腔不做整行或整 chunk 合并，
-      // 每个词元各在自己的时窗内匀速扫过自身宽度，词间隙自然停顿
       val lineStartMs = line.startTime
-      val segmentCapacity =
-        displayWords.sumOf { displayWord ->
-          if (displayWord.word.ruby.isEmpty()) 1 else displayWord.word.rubyCharCount.coerceAtLeast(1)
-        }
-      beginMaskSweep(displayWords.size, segmentCapacity)
-      for (wordIndex in displayWords.indices) {
-        val displayWord = displayWords[wordIndex]
-        recordMaskSweepWord(
-          wordIndex = wordIndex,
-          word = displayWord.word,
-          wordX = wordXPositions[wordIndex],
-          width = widths[wordIndex],
-          startMs = displayWord.word.startTime,
-          endMs = displayWord.word.endTime,
-          rubySpans = displayWord.word.ruby,
-        )
-      }
 
       for (i in displayWords.indices) {
         val displayWord = displayWords[i]
@@ -1723,7 +1834,7 @@ class MainPlayerLyricOverlayView
         val elapsed = currentTimeMs - word.startTime
         // 对齐 Web：渐变带位置由该段自身独立行程推导（computeSegmentTravel），
         // 段行程只依赖自身时间窗，行内时窗乱序、重叠的词互不干扰
-        val segIndex = resolveSweepSegIndex(i, currentTimeMs)
+        val segIndex = resolveSweepSegIndex(i, currentTimeMs, sweepWordSegIndex, sweepWordSegLast, sweepSegStarts)
         val segmentTravel =
           AndroidLyricTimeline.computeSegmentTravel(
             startMs = sweepSegStarts[segIndex],
@@ -1749,7 +1860,8 @@ class MainPlayerLyricOverlayView
           )
 
         if (enableFloatAnimation || enableEmphasizeEffect) {
-          val chunkStartMs = chunkMergedStartMs[displayWord.chunkId] ?: word.startTime
+          val cid = displayWord.chunkId
+          val chunkStartMs = if (chunkMergedStartMs[cid] == -1L) word.startTime else chunkMergedStartMs[cid]
           drawEmphasizeWord(
             canvas = canvas,
             word = word,
@@ -1764,13 +1876,10 @@ class MainPlayerLyricOverlayView
             elapsed = elapsed,
             chunkElapsedMs = currentTimeMs - chunkStartMs,
             chunkDurationMs =
-              (
-                chunkMergedEndMs[displayWord.chunkId]
-                  ?: word.endTime
-              ) - chunkStartMs,
-            chunkCharIndexBase = chunkCharCursor[displayWord.chunkId] ?: 0,
-            chunkCharCount = (chunkCharCounts[displayWord.chunkId] ?: 1).coerceAtLeast(1),
-            isLastChunk = displayWord.chunkId == lastChunkId,
+              (if (chunkMergedEndMs[cid] == -1L) word.endTime else chunkMergedEndMs[cid]) - chunkStartMs,
+            chunkCharIndexBase = chunkCharCursorBase[i],
+            chunkCharCount = chunkCharCounts[cid].coerceAtLeast(1),
+            isLastChunk = cid == lastChunkId,
             isBG = line.isBG,
             lineActive = lineActive,
             forceCharEmphasis = displayWord.chunkShouldEmphasize,
@@ -1808,18 +1917,10 @@ class MainPlayerLyricOverlayView
             shader,
           )
         }
-        chunkCharCursor[displayWord.chunkId] =
-          (chunkCharCursor[displayWord.chunkId] ?: 0) + word.emphasizeCharCount
       }
       mainPaint.shader = null
     }
 
-    /** QW-2: 确保复用 FloatArray 容量足够,只增不减避免逐帧重分配 */
-    private fun ensureReusableFloats(size: Int) {
-      if (tmpTextWidths.size < size) tmpTextWidths = FloatArray(size)
-      if (tmpWidths.size < size) tmpWidths = FloatArray(size)
-      if (tmpWordXPositions.size < size) tmpWordXPositions = FloatArray(size)
-    }
 
     /** H-1: 帧级缓存的 mainPaint.fontMetrics,textSize/typeface 变化时重取 */
     private fun mainFontMetrics(): Paint.FontMetrics {
@@ -1967,6 +2068,9 @@ class MainPlayerLyricOverlayView
     private fun resolveSweepSegIndex(
       wordIndex: Int,
       currentTimeMs: Long,
+      sweepWordSegIndex: IntArray,
+      sweepWordSegLast: IntArray,
+      sweepSegStarts: LongArray,
     ): Int {
       val first = sweepWordSegIndex[wordIndex]
       val last = sweepWordSegLast[wordIndex]
@@ -2095,6 +2199,8 @@ class MainPlayerLyricOverlayView
      * - 与主歌词共享的渐变 Shader
      * @param wordKey
      * - 当前歌词词对象，用于复用罗马音宽度
+     * @param blurRadius
+     * - 内容自身模糊半径；位图栅格化路径传入 σ 让罗马音与整行同步模糊（GPU 模糊层录制时恒 0，由层统一模糊）
      */
     private fun drawRomanBelow(
       canvas: Canvas,
@@ -2109,6 +2215,7 @@ class MainPlayerLyricOverlayView
       fadeMinPx: Float = 0f,
       highlightShader: LinearGradient? = null,
       wordKey: NativeLyricWord? = null,
+      blurRadius: Float = 0f,
     ) {
       if (romanWord.isBlank()) return
       val romanSize = mainTextSize * 0.5f
@@ -2116,7 +2223,11 @@ class MainPlayerLyricOverlayView
       // 词级罗马音位于主行内，继承行字体（对齐 Web mainDiv 的 :lang 字体），mainPaint.typeface 由 drawMainText 按行设置
       subPaint.typeface = mainPaint.typeface
       subPaint.shader = null
-      subPaint.maskFilter = null
+      if (blurRadius > 0.5f) {
+        subPaint.maskFilter = blurController.blurMaskFilter(blurRadius)
+      } else {
+        subPaint.maskFilter = null
+      }
       subPaint.clearShadowLayer()
       val romanWidth =
         if (wordKey == null) {
@@ -2154,7 +2265,9 @@ class MainPlayerLyricOverlayView
           }
       // 复用 shader 的 base 平移已带扫光位置，不能 setLocalMatrix(null)；仅独立/缓存 shader 才清矩阵
       if (shader !== reusableWordShader) shader.setLocalMatrix(null)
-      if (wordKey != null) {
+      // 模糊时跳过 ALPHA_8 位图快路径：drawAlphaBitmap 的专用 paint 无法携带 maskFilter，
+      // 位图烘焙又是一次性绘制、无逐帧 AA 抖动问题，走 drawText + BlurMaskFilter 直绘
+      if (wordKey != null && blurRadius <= 0.5f) {
         // 音译随 float 逐帧亚像素位移：live drawText 每帧重栅格化 + hinting 取整会轻微抖动，
         // 与主歌词一致走 ALPHA_8 位图 + 双线性采样（对齐 AMLL 合成层语义，栅格化一次）
         val romanBitmap = getOrBuildAlphaRomanBitmap(wordKey, romanWord)
@@ -2174,6 +2287,7 @@ class MainPlayerLyricOverlayView
       subPaint.color = Color.WHITE
       canvas.drawText(romanWord, romanX, romanY, subPaint)
       subPaint.shader = null
+      subPaint.maskFilter = null
     }
 
     private fun measureWordRomanLineHeight(
@@ -2622,9 +2736,11 @@ class MainPlayerLyricOverlayView
       // 对齐 Web 引擎 .lp-sub: opacity = pass × 0.3，随 passAlpha 淡出
       subPaint.color = applyAlpha(textColor, lineAlpha * 0.3f)
       subPaint.shader = null
-      // 同 drawMainText：阈值 0.5px 以下不设置 BlurMaskFilter
+      // 同 drawMainText：阈值 0.5px 以下不设置 BlurMaskFilter；
+      // σ 与主行一致：GPU 模糊层对整行统一模糊（对齐 Web filter: blur 的整行语义），
+      // 此前的 0.6 折会让行从退场直绘切入位图缓存时副行突然变清晰
       if (blurRadius > 0.5f) {
-        subPaint.maskFilter = getBlurMaskFilter(blurRadius * 0.6f)
+        subPaint.maskFilter = blurController.blurMaskFilter(blurRadius)
       } else {
         subPaint.maskFilter = null
       }
@@ -3123,7 +3239,7 @@ class MainPlayerLyricOverlayView
         return isLayoutStateChanged(activeState, interlude) ||
           hasActiveFloatFade() ||
           lineSpringsActive() ||
-          lineBlurAnimating() ||
+          blurController.isAnimating() ||
           kotlin.math.abs(userScrollOffset) > 0.5f ||
           kotlin.math.abs(inertialVelocity) > 0.015f
       }
@@ -3131,7 +3247,7 @@ class MainPlayerLyricOverlayView
         hasActiveFrameAnimation(activeState, currentTimeMs) ||
         interlude != null ||
         lineSpringsActive() ||
-        lineBlurAnimating() ||
+        blurController.isAnimating() ||
         kotlin.math.abs(userScrollOffset) > 0.5f ||
         kotlin.math.abs(inertialVelocity) > 0.015f
     }
@@ -3211,7 +3327,8 @@ class MainPlayerLyricOverlayView
         val line = lyricLines[i]
         // 对齐 Web 引擎 activeLineSet：仅当前时间窗行（含 BG 配对）视为激活
         val isActive = activeState.activeLineIndices.contains(i)
-        // 对齐 AMLL resolveIsActive：呈现中（高亮未熄灭 + 范围内中间行）保持 0.85 档
+        // 对齐 AMLL resolveIsActive：呈现中（高亮未熄灭 + 范围内中间行）保持 0.85 档；
+        // BG 行同 updateLineBrightAlpha：仅激活可见，归零分支排在 bufferedTier 之前（避免被其拦截）
         val bufferedTier = !isActive && activeState.isPresented(i)
         val passed =
           hidePassedLines &&
@@ -3225,9 +3342,8 @@ class MainPlayerLyricOverlayView
             passed -> 0.0001f
             line.isBG && isActive -> 0.4f
             isActive -> 1f
-            line.isBG && bufferedTier -> 0.4f * 0.85f
-            bufferedTier -> 0.85f
             line.isBG -> 0.0001f
+            bufferedTier -> 0.85f
             else -> inactiveAlpha
           }
         lineBrightAlphas[i] = targetBright
@@ -3271,15 +3387,17 @@ class MainPlayerLyricOverlayView
     ): Float {
       ensureLineVisualStateCapacity()
       // 对齐 AMLL resolveIsActive/resolveOpacity：激活行全亮、呈现中（唱完未熄灭与
-      // 范围内中间行）保持 0.85 档，其余非激活行回落 inactiveAlpha
+      // 范围内中间行）保持 0.85 档，其余非激活行回落 inactiveAlpha。
+      // BG 行例外：仅激活时可见（0.4）；其归零分支必须排在 buffered 之前，否则 buffered
+      // 档会先命中让 BG 行保持可见——BG 行退出激活即滑向 ±80% 隐藏位，折叠后不占布局、
+      // 恰压在主行翻译/下一行上，保持可见会留半透明残影；对齐 AMLL bgWrapper 滑出即淡出
       val target =
         when {
           passed -> 0.0001f
           line.isBG && active -> 0.4f
           active -> 1f
-          line.isBG && buffered -> 0.4f * 0.85f
-          buffered -> 0.85f
           line.isBG -> 0.0001f
+          buffered -> 0.85f
           else -> inactiveAlpha
         }
       val current = lineBrightAlphas[index]
@@ -3321,58 +3439,9 @@ class MainPlayerLyricOverlayView
       return next
     }
 
-    /**
-     * 更新并返回一行的模糊半径（物理像素）
-     *
-     * 目标档位对齐 AMLL resolveBlurLevel；渐变采用指数逼近（factor 12），
-     * 对应 AMLL 中 CSS filter 的 0.4s ease 过渡
-     *
-     * @param index - 行索引（模糊值的存储槽位）
-     * @param distanceIndex - 距离计算所用索引；BG 行传其主行索引（AMLL 模糊为组级，主行与 BG 共享档位）
-     * @param activeState - 当前激活状态（提供焦点行与最新高亮行索引）
-     * @param active - 行是否为焦点行（对齐 AMLL resolveIsActive 判定）
-     * @param isUserScrolling - 用户是否正在触摸滚动
-     * @param inViewport - 行是否在视口内（视口外目标直接为最大档位，滚入时从模糊渐入）
-     * @param deltaMs - 帧间隔（毫秒）
-     * @returns 当前帧模糊半径（物理像素）
-     */
-    private fun updateLineBlurRadius(
-      index: Int,
-      distanceIndex: Int,
-      activeState: ActiveState,
-      active: Boolean,
-      isUserScrolling: Boolean,
-      inViewport: Boolean,
-      deltaMs: Float,
-    ): Float {
-      ensureLineVisualStateCapacity()
-      val viewportCssPx = viewportCssWidth.takeIf { it > 0f } ?: (viewportWidth / density)
-      val target =
-        AndroidLyricTimeline.resolveBlurTarget(
-          enableBlur = enableBlur,
-          inViewport = inViewport,
-          isUserScrolling = isUserScrolling,
-          isFocused = active,
-          index = distanceIndex,
-          scrollToIndex = activeState.anchorIndex,
-          latestIndex = activeState.latestHighlightIndex,
-          isNarrowViewport = viewportCssPx <= 1024f,
-        )
-      val current = lineBlurValues[index]
-      val factor = 1f - Math.exp((-12f * (deltaMs.coerceAtMost(100f) / 1000f)).toDouble()).toFloat()
-      val next = if (abs(target - current) < 0.01f) target else current + (target - current) * factor
-      lineBlurValues[index] = next
-      // 模糊是否已逼近目标：仅用于帧调度（渐变期间需要连续帧驱动），稳定后即可停帧；
-      // 位图缓存不再等待该标记，渐变期随 blurKey 档位重建
-      lineBlurSettled[index] = abs(target - next) < 0.3f
-      return next * 1.5f * density
-    }
-
     private fun ensureLineVisualStateCapacity() {
       if (lineBrightAlphas.size == lyricLines.size &&
         linePassAlphas.size == lyricLines.size &&
-        lineBlurValues.size == lyricLines.size &&
-        lineBlurSettled.size == lyricLines.size &&
         lineFloatFadeProgress.size == lyricLines.size
       ) {
         return
@@ -3386,8 +3455,7 @@ class MainPlayerLyricOverlayView
           if (lyricLines.getOrNull(index)?.isBG == true) 0.0001f else inactiveAlpha
         }
       linePassAlphas = FloatArray(lyricLines.size) { 1f }
-      lineBlurValues = FloatArray(lyricLines.size)
-      lineBlurSettled = BooleanArray(lyricLines.size) { true }
+      blurController.reset(lyricLines.size)
       lineFloatFadeProgress = FloatArray(lyricLines.size)
     }
 
@@ -3721,19 +3789,10 @@ class MainPlayerLyricOverlayView
       if (layoutCacheDirty) rebuildLayoutCache()
     }
 
-    private fun invalidateAllLineBitmaps() {
-      if (lineBitmapCache.size() == 0) return
-      lineBitmapCache.evictAll()
-    }
-
-    private fun invalidateLineBitmap(index: Int) {
-      lineBitmapCache.remove(index)
-    }
-
     private fun rebuildLayoutCache() {
       layoutCacheDirty = false
       // 内容/字号/视口/字体变化都会让位图缓存对应不上新的几何，统一在此清空
-      invalidateAllLineBitmaps()
+      blurController.invalidateAll()
       emphasisWordMetricsCache.evictAll()
       baseGlyphCache.evictAll()
       glowGlyphCache.evictAll()
@@ -3748,6 +3807,7 @@ class MainPlayerLyricOverlayView
       // 修复：翻译和罗马音也应该使用用户设置的字重，而不是固定 500
       subTypeface = createTypeface(fontFamily, fontWeight)
       if (lyricLines.isEmpty() || viewportWidth <= 0) {
+        lineWordLayouts = emptyArray()
         lineSubLinesCache = emptyArray()
         lineInsetsCache = emptyArray()
         lineMetricsCache = emptyArray()
@@ -3759,6 +3819,7 @@ class MainPlayerLyricOverlayView
         return
       }
       val count = lyricLines.size
+      lineWordLayouts = arrayOfNulls(count)
       lineMainTypefaces =
         Array(count) { i -> createTypeface(resolveLineFontFamily(lyricLines[i].language), fontWeight) }
       lineSubLinesCache = Array(count) { i -> buildSubLines(lyricLines[i]) }
@@ -3838,68 +3899,6 @@ class MainPlayerLyricOverlayView
             }
           }
         }
-    }
-
-    /**
-     * 取/建非激活行的位图缓存。blurRadius 量化到整像素作为 key，亚像素差异不触发重建。 位图顶部/底部各预留 pad = ceil(blurRadius)+2
-     * 像素吸收模糊光晕，调用方需把绘制 Y 上推同等距离
-     */
-    private fun getOrBuildLineBitmap(
-      index: Int,
-      line: NativeLyricLine,
-      mainSize: Float,
-      subLines: List<String>,
-      contentMetrics: ContentBlockMetrics,
-      blurRadius: Float,
-    ): LineBitmap? {
-      // 量化到 2px 档位而非每 1px 一档，减少模糊渐变收敛后因微小漂移触发的重建
-      val blurKey = (blurRadius / 2f).roundToInt()
-      val existing = lineBitmapCache.get(index)
-      if (existing != null && existing.blurKey == blurKey) return existing
-
-      val contentHeight = lineHeightsCache.getOrNull(index)?.coerceAtLeast(1f) ?: return null
-      val width = viewportWidth
-      if (width <= 0 || contentHeight <= 0f) return null
-      val pad = (kotlin.math.ceil(blurRadius).toInt() + 2).coerceAtLeast(0)
-      val bmpHeight = (contentHeight.roundToInt() + pad * 2).coerceAtLeast(1)
-      val bitmapKb = ((width.toLong() * bmpHeight.toLong() * 4L) / 1024L).coerceAtLeast(1L)
-      if (bitmapKb > lineBitmapCacheMaxKb / 3L) return null
-      val bitmap =
-        try {
-          Bitmap.createBitmap(width, bmpHeight, Bitmap.Config.ARGB_8888)
-        } catch (e: OutOfMemoryError) {
-          return null
-        }
-      val bmpCanvas = Canvas(bitmap)
-
-      val mainBottom =
-        drawMainText(
-          canvas = bmpCanvas,
-          line = line,
-          top = pad.toFloat(),
-          mainSize = mainSize,
-          lineAlpha = 1f,
-          currentTimeMs = 0L,
-          active = false,
-          blurRadius = blurRadius,
-          contentMetrics = contentMetrics,
-        )
-      drawSubTexts(
-        canvas = bmpCanvas,
-        line = line,
-        subLines = subLines,
-        mainBottom = mainBottom,
-        lineAlpha = 1f,
-        blurRadius = blurRadius,
-        contentMetrics = contentMetrics,
-        scale = 1f,
-        scaleOriginY = 0f,
-      )
-
-      val cache = LineBitmap(bitmap = bitmap, pad = pad, blurKey = blurKey)
-      lineBitmapCache.put(index, cache)
-      if (lineBitmapCache.get(index) !== cache) return null
-      return cache
     }
 
     private fun recalculateLayouts() {
@@ -4150,16 +4149,6 @@ class MainPlayerLyricOverlayView
       alphaGlyphPaint.shader = null
     }
 
-    private fun getBlurMaskFilter(radius: Float): BlurMaskFilter {
-      val key = (radius.coerceAtLeast(0.1f) * 10f).roundToInt().coerceAtLeast(1)
-      blurMaskFilterCache.get(key)?.let {
-        return it
-      }
-      val filter = BlurMaskFilter(key / 10f, BlurMaskFilter.Blur.NORMAL)
-      blurMaskFilterCache.put(key, filter)
-      return filter
-    }
-
     /** 屏幕外初始位置，用于 positionSpring 初始化与入场动画 */
     private fun offScreenPosition(): Float = max(viewportHeight * 2f, 2000f * density)
 
@@ -4320,20 +4309,6 @@ class MainPlayerLyricOverlayView
 
     /** 是否有逐行弹簧仍在运动 */
     private fun lineSpringsActive(): Boolean = activeLineSpringIndices.isNotEmpty()
-
-    /**
-     * 是否有行的模糊仍在渐变中，需要连续帧驱动
-     *
-     * 暂停或静态行场景下没有其他动画源续帧，缺少该检查会导致模糊渐变冻结
-     * （例如暂停时打开模糊开关，模糊永远爬不到目标值而失效）
-     */
-    private fun lineBlurAnimating(): Boolean {
-      // 关闭模糊时残余值同样会回落到 0，期间 settled=false，由数组判定自然覆盖
-      for (settled in lineBlurSettled) {
-        if (!settled) return true
-      }
-      return false
-    }
 
     /** 逐词浮动衰减是否仍在进行,由真实时间驱动,暂停态同样需要连续帧 */
     private fun hasActiveFloatFade(): Boolean {
