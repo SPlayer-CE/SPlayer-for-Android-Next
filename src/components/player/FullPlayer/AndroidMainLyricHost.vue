@@ -1,3 +1,10 @@
+<script lang="ts">
+// 原生歌词 overlay 是全局单例。横竖屏切换时新旧两个 host 实例在同一轮 patch 中先卸载后挂载，
+// 旧实例 teardown 的 clear() 若晚于新实例的 setLyrics 到达原生层，会把刚就绪的歌词清空，
+// 且此后不再有 setLyrics 重发，歌词从此空白。用模块级所有权令牌让旧实例识别"后继已接管"并跳过清理。
+let activeKotlinHostToken = 0;
+</script>
+
 <script setup lang="ts">
 import type { PluginListenerHandle } from "@capacitor/core";
 import type { LyricLine } from "@shared/types/lyrics";
@@ -107,6 +114,8 @@ let lastTouchEnabled: boolean | null = null;
 let lastTouchExclusionKey = "";
 /** 浮层触摸排除区的逐帧跟踪句柄 */
 let exclusionSyncRaf = 0;
+/** 本实例在 kotlin 渲染激活时取得的原生层所有权令牌；从未激活过 kotlin 渲染时为 null */
+let ownedKotlinHostToken: number | null = null;
 // 播放器入场动画期间 getBoundingClientRect 返回过渡位置，导致视口被设为错误值。
 // ResizeObserver 只监听尺寸变化不监听位置变化，无法自动修正。
 // 在初始同步后延迟重新同步视口，确保动画结束后位置正确。
@@ -456,6 +465,11 @@ const teardownKotlinRenderer = async (): Promise<void> => {
   lastTouchExclusionKey = "";
   // 非 native 环境（LAN 网页客户端/预览）无原生歌词层，跳过 clear 避免插件 web 端未实现报错
   if (!isAndroidNative) return;
+  // 延迟一个宏任务再清理：同一轮 patch 中后继 host 的 setup 已同步完成并接管令牌，
+  // 所有权已移交时跳过 clear，避免把后继刚推送的歌词清掉（横竖屏切换后歌词空白）。
+  // 无后继（正常收起播放器）时令牌未变，照常清理。
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  if (ownedKotlinHostToken !== null && ownedKotlinHostToken !== activeKotlinHostToken) return;
   // 清空排除区：渲染器拆除后视图可能被复用，残留矩形会让对应区域的歌词触摸失效
   await AndroidMainLyric.setTouchExclusionRects({ rects: [] });
   await AndroidMainLyric.clear();
@@ -510,6 +524,9 @@ watch(
   activeRenderer,
   async (mode) => {
     if (mode === "kotlin") {
+      // 接管原生层所有权：后继实例在 setup（同一微任务）内同步认领，
+      // 使前一个实例延迟执行的 teardown 能识别移交并跳过 clear
+      ownedKotlinHostToken = ++activeKotlinHostToken;
       await nextTick();
       if (kotlinHostRef.value) resizeObserver?.observe(kotlinHostRef.value);
       if (fontSentinelRef.value) resizeObserver?.observe(fontSentinelRef.value);
