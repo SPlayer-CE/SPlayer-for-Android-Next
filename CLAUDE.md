@@ -1,8 +1,8 @@
-﻿# CLAUDE.md
+# CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文档为在本项目中工作的 Claude Code (claude.ai/code) 提供代码规范、架构指引与开发实践。
 
-## Karpathy-Inspired Coding Principles
+## Karpathy 编程原则
 
 **Tradeoff:** 这些原则偏向谨慎而非速度。对于简单任务，自行判断。
 
@@ -73,350 +73,243 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
-## Project Overview
+## 项目概览
 
-SPlayer-Next — music player on **Electron + Vue 3 + TypeScript** for desktop and **Capacitor + Android Kotlin** for Android. Desktop uses Rust native modules (NAPI-RS) for audio decoding, system media integration, and Windows taskbar lyric; Android uses Media3/ExoPlayer, Capacitor plugins, and an embedded Node.js Mobile API service.
+SPlayer-Next 是一款现代跨平台音乐播放器：
 
-## Commands
+- **桌面端**：基于 **Electron + Vue 3 + TypeScript**，通过 Rust 原生模块（NAPI-RS）实现底层音频解码、系统媒体集成与 Windows 任务栏歌词。
+- **Android 端**：基于 **Capacitor + Android Kotlin**，使用 Media3/ExoPlayer 负责音频播放、Capacitor 原生插件打通底层接口，并运行内嵌 Node.js Mobile 提供在线 API、歌词解析与插件运行时。
+
+## 常用命令
 
 ```bash
-pnpm install              # Install deps
-pnpm dev                  # Build native (debug) + start Electron dev
-pnpm build                # Full build (rimraf → native → typecheck → electron-vite)
-pnpm build:{win,mac,linux}# Platform packages
-pnpm typecheck            # tsc + vue-tsc (node + web targets)
-pnpm lint / format        # ESLint / Prettier
-pnpm build:native         # Rust only; add `--dev` for debug
-pnpm build:web            # Android WebView bundle to dist/capacitor
-pnpm cap:sync             # Sync dist/capacitor into android/ via Capacitor
-pnpm build:android:node   # Bundle API/mobile-entry.ts for nodejs-mobile-cordova
-pnpm prepare:android:embedded # Copy embedded Node assets/libs into android/app assets
-pnpm build:android        # build:web -> cap sync -> build:android:node -> prepare embedded
+pnpm install              # 安装依赖
+pnpm dev                  # 编译原生模块(Debug)并启动 Electron 开发环境
+pnpm build                # 完整构建 (rimraf → native → typecheck → electron-vite)
+pnpm build:{win,mac,linux}# 打包对应桌面平台安装包
+pnpm typecheck            # 类型检查 (tsc + vue-tsc，涵盖 Node 与 Web 目标)
+pnpm lint / format        # ESLint 代码检查 / Prettier 自动格式化
+pnpm test:node / test:web # 单元测试 (node:test / vitest)
+pnpm test:native          # Rust 原生模块测试 (cargo test --workspace)
+pnpm build:native         # 仅构建 Rust 原生模块 (加 `--dev` 为 Debug 构建)
+pnpm build:web            # 构建 Android WebView 资源包至 dist/capacitor
+pnpm cap:sync             # 同步 dist/capacitor 资源至 android/ 目录
+pnpm build:android:node   # 打包嵌入式 API (API/mobile-entry.ts) 供 nodejs-mobile 使用
+pnpm prepare:android:embedded # 复制嵌入式 Node 资源至 android/ 资源目录
+pnpm build:android        # 完整安卓构建流水线 (build:web -> cap:sync -> build:android:node -> prepare)
+pnpm android:check        # Kotlin 静态检查与编译 (ktlintCheck + compileKotlin + detekt，需 JDK 21)
+pnpm android:format       # Kotlin 代码格式化 (ktlintFormat)
+pnpm android:check:log    # 运行 Kotlin 检查并将输出写入 android-check.log
 ```
 
-`SKIP_NATIVE_BUILD=true` skips Rust during dev.
+- **开发说明**：开发时可设置环境变量 `SKIP_NATIVE_BUILD=true` 跳过 Rust 编译。桌面端 `audio-engine` 通过 `ffmpeg_audio` crate 静态链接 FFmpeg，无需系统安装 FFmpeg。
+- **Android 本地开发流程**：
+  - **Web 预览**：`pnpm exec vite --config vite.config.android.ts --host 0.0.0.0` 启动 Android UI 及开发版嵌入式 API（`SP_API_PORT` 默认 13962）。浏览器预览非原生容器，原生插件将降级为无操作或 HTML 音频播放。
+  - **原生构建**：执行 `pnpm build:android`，然后在 `android/` 目录下执行 `gradlew assembleDebug` 或 `gradlew assembleRelease`。
+  - **Kotlin 校验**：使用 `pnpm android:check`，环境必须为 JDK 21（JDK 17 会报 `invalid source release: 21`）。
+  - **真机安装脚本**：运行 `SPlayer-for-Android-build-and-install-android-release.cmd`，自动检测 ADB 连接设备、构建打包、用调试证书签名（若未签名）并安装启动。
+  - **注意**：除非需要桌面端 Electron 生产包，否则开发 Android 时切勿运行 `pnpm build`。
 
-Android local flow:
+## 终端与环境
 
-- Web preview: `pnpm exec vite --config vite.config.android.ts --host 0.0.0.0` starts Android UI and a dev embedded API (`API/mobile-entry.ts`) on `SP_API_PORT` (default 13962 for Vite dev). Browser preview is not a native Capacitor container, so native plugins fall back to no-op or HTML audio behavior.
-- Native sync/build: run `pnpm build:android`, then build an APK from `android/` with `gradlew assembleDebug` or `gradlew assembleRelease`.
-- Kotlin-only changes: verify with `cd android && ./gradlew :app:compileDebugKotlin` (needs JDK 21 — a JDK 17 `JAVA_HOME` fails on `:capacitor-android:compileDebugJavaWithJavac` with `invalid source release: 21`). Style/static checks: `./gradlew :app:ktlintMainSourceSetCheck` and `./gradlew detekt` (both report-only).
-- Release install helper: `SPlayer-for-Android-build-and-install-android-release.cmd` selects connected ADB devices, runs `pnpm build:android`, runs `gradlew assembleRelease`, signs an unsigned arm64-v8a APK with the debug keystore if needed, installs it, and launches `top.imsyy.splayer_next`.
-- Do not run `pnpm build` for Android unless you explicitly need the desktop Electron production build; Android does not depend on desktop Rust native output.
+开发终端统一使用 Windows 下的 **Git Bash**。所有终端指令必须符合 Bash 语法（支持 `&&`、`cd` 等），禁止使用 PowerShell 特有语法；文件路径仍采用 Windows 格式（反斜杠或斜杠）。
 
-`audio-engine` static-links FFmpeg via the `ffmpeg_audio` crate (vendor zip + cc-built at compile time). Zero environment dependency — no `FFMPEG_DIR` / `PKG_CONFIG_PATH`, no system FFmpeg required.
+## 架构体系
 
-## Shell
+### 进程模型
 
-The development shell is Git Bash on Windows. Write all terminal commands in bash syntax (`&&`, `cd`, etc.) — no PowerShell-only constructs. File paths remain in Windows format (backslashes).
+- **主进程（Main）**（`electron/main/`）：管理窗口、IPC 通信、原生模块。
+- **预加载脚本（Preload）**（`electron/preload/`）：通过 `contextBridge` 向渲染进程暴露 `window.api`（player/config/system/library/streaming/lyrics 等）。
+- **渲染进程（Renderer）**（`src/`）：Vue 3 单页应用。
+- **独立歌词窗口**（`windows/desktop-lyric`, `dynamic-island`, `taskbar-lyric`）：独立的 Vue 入口，共享 `windows/shared/`。
+- **Android WebView**（`dist/capacitor`）：由 `vite.config.android.ts` 构建的相同 Vue SPA，内置 `__SPLAYER_TARGET__ = "android"`。
+- **Android 原生层**（`android/app/src/main/java/top/imsyy/splayer_next/android/`）：Capacitor 插件、Media3 播放管理、本地数据库/缓存/歌词、局域网服务与媒体通知。
+- **嵌入式移动端 API**（`API/`）：Node.js Mobile 运行环境，负责在线 API、歌词获取、插件系统以及 Kotlin 代理的接口。
 
-## Architecture
+### 原生模块 (Rust + NAPI-RS)
 
-### Process Model
+共 6 个 `.node` 模块位于 `native/`，通过 `scripts/build-native.ts` 构建，由主进程懒加载。通过路径别名 `@splayer/*` 导入：
 
-- **Main** (`electron/main/`) — windows, IPC, native modules
-- **Preload** (`electron/preload/`) — `contextBridge` exposing `window.api` (player/config/system/library/streaming/lyrics)
-- **Renderer** (`src/`) — Vue 3 SPA
-- **Lyric windows** (`windows/desktop-lyric`, `dynamic-island`, `taskbar-lyric`) — independent Vue entries sharing `windows/shared/`
-- **Android WebView** (`dist/capacitor` generated from `vite.config.android.ts`) — same Vue SPA with `__SPLAYER_TARGET__ = "android"`
-- **Android native layer** (`android/app/src/main/java/top/imsyy/splayer_next/android/`) — Capacitor plugins, Media3 playback, local cache/library/lyrics, LAN server, notification/media session
-- **Embedded mobile API** (`API/`) — Node.js Mobile service for online APIs, lyrics, plugin runtime, config/stats compatibility, and routes proxied by Kotlin
+- `audio-engine`：基于 `ffmpeg_audio`（静态 FFmpeg）+ `rodio` 实现解码播放与封面提取；URL 通过 `reqwest + rustls` 实现流式读取并支持随时取消；通过 ThreadsafeFunction 推送播放状态。
+- `audio-capture`：系统音频回放与麦克风采集（用于听歌识曲），Windows 下基于 WASAPI Loopback，Linux 下基于 PulseAudio。
+- `media-ctrl`：跨平台系统媒体控制（Windows SMTC / Linux MPRIS / macOS MPNowPlaying）与 Discord RPC。
+- `taskbar-lyric`：Windows 任务栏歌词文本渲染（基于 Registry / Uia / Tray 监听器）。
+- `taskbar-thumbnail`：Windows 缩略图工具栏。
+- `opencc`：简繁中文转换。
 
-### Native Modules (Rust + NAPI-RS)
+_(注：Rust 原生模块不打包进 Android 端，Android 的播放与系统集成由 Kotlin 原生实现。)_
 
-Six `.node` modules in `native/`, built via `scripts/build-native.ts`, lazy-loaded by `electron/main/utils/nativeLoader.ts`. NAPI-RS auto-generates `index.d.ts`, imported via path aliases `@splayer/audio-engine`, `@splayer/audio-capture`, `@splayer/media-ctrl`, `@splayer/taskbar-lyric`, `@splayer/taskbar-thumbnail`, `@splayer/opencc`.
+### Android 运行时
 
-- `audio-engine` — `ffmpeg_audio` decode (static FFmpeg) + rodio playback + FFT + cover extraction. URLs wrapped as `Read + Seek` via `ffmpeg_audio::HttpAudioSource` (using `HttpCancelHandle` for cancellation/reset) — TLS handled in Rust (`reqwest` + `rustls`), cross-platform with no system deps. Pushes events (state/position/ended/outputStalled) via ThreadsafeFunction. Has load_token race protection and an `HttpCancelHandle` handle injected into `HttpAudioSource` for instant stop and reset.
-- `audio-capture` — System sound / microphone capture for song recognition. Windows via WASAPI Loopback; Linux via PulseAudio (`libpulse-binding`, needs `libpulse-dev` at build time — CI `dev.yml`/`release.yml` install it). Collects 8 kHz mono f32 PCM.
-- `media-ctrl` — Cross-platform system media controls (Windows SMTC / Linux MPRIS / macOS MPNowPlaying) + Discord RPC.
-- `taskbar-lyric` — Windows taskbar lyric text rendering with RegistryWatcher / UiaWatcher / TrayWatcher.
-
-Desktop Rust native modules are not packaged into Android. Android playback and system integration are implemented in Kotlin under `android/app/src/main/java/.../playback`.
-
-### Android Runtime
-
-Android is a Capacitor target that reuses the renderer where possible and swaps platform services through `src/services/bridge.ts`:
+Android 是基于 Capacitor 的构建目标，通过 `src/services/bridge.ts` 抽象抹平平台差异：
 
 ```
-Vue app -> bridge.ts -> Capacitor plugin / KotlinApiServer
+Vue App -> bridge.ts -> Capacitor 插件 / KotlinApiServer (:13962)
   -> AndroidNativePlaybackPlugin -> PlaybackManager -> Media3 ExoPlayer
-  -> KotlinApiServer :13962 -> Node.js Mobile API :13233 for online APIs
+  -> KotlinApiServer (:13962) -> Node.js Mobile API (:13233) 处理在线请求
 ```
 
-- `capacitor.config.ts` sets `webDir = dist/capacitor`, transparent background, mixed content, status bar overlay, and Android WebView debugging.
-- `vite.config.android.ts` builds a single-page WebView bundle with `base: "./"`, injects `cordova.js` for production builds, defines `__SPLAYER_TARGET__ = "android"`, and starts the embedded API dev server during Vite serve unless `SPLAYER_SKIP_EMBEDDED_API_DEV=true`.
-- **`main.ts` installs `bridge` as `window.api` on Android** (`(window as ...).api = bridge`). Existing code calling `window.api.*` therefore routes through the bridge at runtime — but typecheck validates against the preload `index.d.ts` shape, not the bridge. Adding/upstreaming a new `window.api` method requires a matching `bridge.ts` entry (no-op/fallback on Android) or it crashes on device with `is not a function` while typecheck stays green.
-- `MainActivity.kt` registers Android plugins: `AndroidNativePlayback`, `AndroidLocalLyric`, `AndroidMainLyric`, `AndroidDownload`, `AndroidCache`, `AndroidSongCache`, `AndroidLanShare`, `AndroidLibrary`, `ApiServer`, and `ExternalApi`.
-- `KotlinApiServer` listens on port 13962 in the native app. It serves health checks/static Web assets/LAN sync/cache DB/external API routes and proxies most `/api/*` routes to Node.js Mobile on 127.0.0.1:13233.
-- `API/mobile-entry.ts` is the Node.js Mobile entry. In packaged Android it defaults to `SP_API_HOST=127.0.0.1`, `SP_API_PORT=13233`, and `SP_EMBEDDED=1`; Vite dev overrides host/port for LAN preview.
-- `API/mobile-server.ts` hosts the compatibility API surface: online music/lyrics, config, streaming placeholders, stats, plugin management, lyric matching, and Kotlin cache DB access.
+- `capacitor.config.ts`：配置 `webDir = dist/capacitor`、透明背景、允许混合内容、状态栏全屏沉浸（`SystemBars.insetsHandling: "disable"`，安全区由 CSS 变量控制）。
+- **API 桥接原则**：`main.ts` 在 Android 端会将 `bridge` 挂载为 `window.api`（`(window as any).api = bridge`）。任何向 `window.api` 新增的方法，必须在 `bridge.ts` 中同步提供 Android 端的对应实现或降级空实现（no-op），否则在设备运行时会因找不到方法而崩溃。
+- `MainActivity.kt` 注册插件：`AndroidNativePlaybackPlugin`、`AndroidClipboardPlugin`、`AndroidAppIconPlugin`、`AndroidLocalLyricPlugin`、`AndroidMainLyricPlugin`、`AndroidDownloadPlugin`、`AndroidCachePlugin`、`AndroidSongCachePlugin`、`AndroidLanSharePlugin`、`AndroidLibraryPlugin`、`ApiServerPlugin` 与 `ExternalApiPlugin`。
+  - 在 `attachBaseContext` 中强制锁定 `config.fontScale = 1.0f`，防止系统辅助字体放大破坏 WebView 排版。
+  - 在版本升级时（`versionCode` 变动）通过 `clearWebViewCacheOnUpgrade` 清除 WebView 资源缓存。
+  - 横屏沉浸模式下同时隐藏状态栏与手势导航条（`PREF_IMMERSIVE_LANDSCAPE`）。
+- `KotlinApiServer`：原生 NanoHTTPD 服务（端口 13962），处理健康检查、静态资源、局域网同步及缓存查询，并代理 `/api/*` 到 Node 移动服务（端口 13233）。
 
-### Android Feature Areas
+### Android 功能模块划分
 
-- Playback: `AndroidNativePlaybackPlugin.kt` exposes load/play/pause/seek/volume/speed/status, notification permission, MediaSession metadata, FFT/spectrum, equalizer, dynamic-island floating lyric controls, and app shutdown/background behavior.
-- Audio engine: `PlaybackManager.kt` owns a singleton Media3 `ExoPlayer`, `MediaSession`, foreground `PlaybackService`, notification actions, queue context, URL resolution, prefetch promotion, FFT (`FftAudioProcessor`) and EQ (`EqualizerAudioProcessor`).
-- Local library: `AndroidLibraryPlugin.kt`, `LibraryScanner.kt`, and `LibraryDatabase.kt` use SAF directory permissions and a native SQLite database to scan/query/delete local tracks.
-- Cache: `AndroidCachePlugin.kt`, `AndroidSongCachePlugin.kt`, `AudioCacheProvider.kt`, `DbCacheHelper.kt`, and `CacheStorage.kt` manage file caches, ExoPlayer audio cache, lyric/TTML/match DB caches, and bounded cleanup.
-- Lyrics: `AndroidLocalLyricPlugin.kt` handles SAF lyric directories, sidecar matching, font import, and lyric indexing; `AndroidMainLyricPlugin.kt` renders the native main-player lyric overlay; dynamic-island lyric lives under `playback/DynamicIslandService.kt`.
-- Downloads: `AndroidDownloadPlugin.kt` writes audio/lyric files through SAF and reports progress through Capacitor events.
-- LAN/external API: `AndroidLanSharePlugin.kt`, `KotlinApiServer.kt`, and `ExternalApi*` implement LAN playback sync, browser client access, restricted external API routes, WebSocket heartbeat, and token checks.
+- **播放与音频引擎**：
+  - `AndroidNativePlaybackPlugin.kt`：向前端暴露起播、暂停、跳转、音量、均衡器、动态岛悬浮歌词及前台服务控制。
+  - `PlaybackManager.kt`：拥有专用的 `HandlerThread("SPlayerPlayback", Process.THREAD_PRIORITY_AUDIO)`，统一驱动 ExoPlayer、MediaSession 与 Media3 `DefaultPreloadManager`（预载下一曲开头 10s）。跨线程交互严格通过 `runOnPlaybackThread`（异步）与 `onPlaybackThread`（同步）收口，状态读取使用 volatile 线程安全快照。
+  - `PlaybackService.kt`：在 `onCreate` 中立即于主线程通过轻量占位通知升级为前台服务，彻底解耦播放线程拥塞，规避 Android 14+ 前台服务启动超时（FGS Timeout）崩溃。
+  - `PlaybackUrlResolver.kt` + `android-router.ts`：插件解析音源候选并行竞速，极速缩短切歌延迟。
+  - `webViewVisible` 机制：当 App 切到后台时，静默高频频谱/进度推送以节省功耗。
+- **本地音乐库**：`AndroidLibraryPlugin.kt`、`LibraryScanner.kt`、`LibraryDatabase.kt` 结合 SAF 目录权限与 `jaudiotagger`，使用原生 SQLite 扫描和管理本地音频。
+- **缓存体系**：`AndroidCachePlugin.kt`、`AndroidSongCachePlugin.kt`、`AudioCacheProvider.kt`、`AudioPrefetchTtlIndex.kt`，管理音频流缓存、封面、歌词 DB 缓存与启动清理。
+- **歌词渲染系统**：
+  - `AndroidLocalLyricPlugin.kt` 管理 SAF 歌词目录、字体导入与外挂歌词检索。
+  - `AndroidMainLyricPlugin.kt` + `MainPlayerLyricOverlayView.kt`：全屏歌词 Canvas 原生渲染层。
+  - `LyricBlurController.kt`：逐行模糊控制器，使用 0.5x 降采样位图 LRU 缓存（上限为最大堆内存的 1/8，介于 16MB~48MB 之间）、模糊档位双位图叠化切换；API 31+ 上对退场直绘行启用 `RenderNode` + `RenderEffect` GPU 硬件模糊。
+  - `AndroidMainLyricHost.vue`：宿主适配层，使用模块级所有权令牌（`activeKotlinHostToken`）解决横竖屏旋转重建时的竞态清空问题，并逐帧上报弹出层触摸避让矩形（`touchExclusionSelector`）。
+- **移动端全屏播放器 (FullPlayerMobile)**：
+  - `FullPlayerMobile.vue` + `PlayerData.vue`：通过单层 CSS Grid 重叠布局消除位移回流，运用 FLIP 原则实现封面与文字的 60fps 平滑过渡。
+  - 缩放计算基于较大矩形高度以避免文字模糊；麦克风等子图标通过透明度与位移过渡而非改变宽度（避免 Layout Reflow）；组件销毁时在 `onBeforeUnmount` 中严格清理动画定时器与 RAF；非 Hero 的副信息元素在起飞前淡出、返回时淡入。
+- **局域网与外部 API**：`AndroidLanSharePlugin.kt`、`KotlinApiServer.kt` 负责跨端同步、网页端播放控制与受限外部 API 访问。
 
-### Android Folders
+### 播放数据流
 
-- `android/` — Gradle Android project generated by Capacitor and customized for Kotlin plugins, Media3 playback, nodejs-mobile-cordova assets, ABI splits, signing, and Android resources.
-- `android/app/src/main/java/top/imsyy/splayer_next/android/` — native Android source grouped by `playback/`, `cache/`, `library/`, `lyric/`, `download/`, and `server/`.
-- `android/app/src/test/java/.../lyric/` — JVM tests for Android lyric parsing, timeline, word segmentation, and local lyric path mapping.
-- `API/` — embedded Node.js API source; `mobile-entry.ts` boots the service, `mobile-server.ts` owns HTTP routes, `plugins/` contains Android plugin runtime/registry/router/storage/network compatibility.
-- `src/plugins/android*.ts` — typed Capacitor plugin wrappers for renderer code.
-- `src/services/bridge.ts` — cross-platform boundary that chooses Electron APIs, Android native plugins, Android Web preview fallbacks, or embedded HTTP API calls.
-- `dist/capacitor/` — generated Android WebView output; contains `nodejs-project/` after `pnpm build:android:node` and is synchronized into Android assets by `cap sync` / `prepare:android:embedded`.
-
-### Playback Data Flow
-
-```
-User action → status store → IPC (player:load/play/pause/seek)
-  → main process player.ts → audio-engine
-  → Rust events (stateChanged/position/ended/outputStalled)
-  → main broadcasts to renderer + syncs to media-ctrl
-  → status store updates reactive state
-  → playback.ts updates non-reactive time source
-```
-
-Android playback data flow:
+**桌面端：**
 
 ```
-User action -> status/media store -> bridge.ts
-  -> AndroidNativePlayback Capacitor plugin
-  -> PlaybackManager / ExoPlayer / MediaSession / PlaybackService
-  -> Capacitor events (status/progress/ended/fft) back to renderer
-  -> playback.ts keeps the non-reactive millisecond time source in sync
+用户操作 → status store → IPC (player:load/play/pause/seek)
+  → 主进程 player.ts → audio-engine (Rust)
+  → Rust 事件广播 (stateChanged/position/ended)
+  → 主进程同步 media-ctrl 并广播渲染进程
+  → status store 更新响应式状态
+  → playback.ts 更新高频非响应式时间源
 ```
 
-Android audio sources must be WebView/ExoPlayer-safe URLs. Do not feed cached absolute paths or raw `file://` URLs to preview/native playback; cached songs are exposed through embedded/Kotlin HTTP routes such as `/api/cache/song/play`, and LAN follower devices should use the host `/api/lanShare/audio` route instead of resolving the track locally.
-
-### State Management
-
-Two-tier position tracking — high-frequency animation vs. low-frequency UI:
-
-- `src/stores/status.ts` — Pinia reactive. `position / duration / state / volume`, pushed ~5Hz from main. Drives progress bar, time display, play button.
-- `src/services/playback.ts` — Non-reactive plain vars. `getCurrentTime()` interpolates between pushes; `usePlaybackTime()` reads in RAF loop for 60fps lyrics/spectrum without Vue reactivity.
-- `src/stores/media.ts` — Pinia + shallowRef. Current `Track` (lightweight) + `TrackDetail` (lyrics, quality). Only `track + activeLyric` persisted to sessionStorage; never persist `TrackDetail` (large lyric strings cause memory issues).
-
-### Streaming Subsystem
-
-Server protocol clients live in the main process (`electron/main/services/streaming/`): Subsonic / Jellyfin / Emby adapters, safeStorage-backed config, Jellyfin/Emby session management, SQLite synchronization, and the authenticated cover protocol. Subsonic family (Navidrome / OpenSubsonic / Airsonic / Gonic / LMS) shares one adapter; types differ only as UI labels.
-
-- `electron/main/services/streaming/config.ts` — encrypted config and secret-free renderer views.
-- `electron/main/services/streaming/connection.ts` — connection tests, connect, and authenticated adapter requests.
-- `electron/main/services/streaming/coverProtocol.ts` — `streaming-cover://` proxy registered for the default and `persist:main` sessions.
-- `electron/main/services/streaming/adapters/` — Server response → unified `Track / Album / Artist / Playlist`. Trusts server's artist field; no client-side splitting.
-- `services/streaming/session.ts` — Jellyfin/Emby `/Sessions/Playing` heartbeat + PlaySessionId state machine; called from `core/player.ts`.
-- `stores/streaming.ts` — Server list, active state, and complete shallowRef arrays; main-process update events trigger SQLite snapshot reloads, with no polling or direct media-server access.
-- Credentials — `electron/main/services/streaming/config.ts` encrypts via Electron `safeStorage` to `{userData}/app-data/config/streaming.json`. `accessToken / userId` remain in the bounded main-process session cache and are re-acquired on connect.
-
-### Lyric System
-
-Renderer pipeline (`src/services/lyric/`, shared by desktop and the Android WebView):
-
-- `loader.ts` — the orchestration core. `loadForTrack` / `beginLoad` token guards races. Load order: preloaded lyric → local TTML repo → online by preference → plugin fallback → embedded. Platform loads wrap every online path in `withPluginPrefer` (upstream: when `preferPluginLyric` is on, the plugin result wins). The online resolver is loader-local `tryOnlineByPreference`, NOT the `resolve.ts` one — it adds: renderer `CacheManager "lyrics"` read/write cache (keyed `${platform}_${track.id}.json`), `platformCanUpgrade` prescreening (skip network when the platform's best format can't outrank the local format), smart mode parallel racing with progressive commit (first result commits, a later higher-ranked one replaces), `isLanWebClient()` guards (LAN followers receive lyrics pushed by the host — `beginLoad` skips local lyric-state reset to avoid flashing empty on track switch). `applyOnline` commits, then fires the TTML overlay attempt.
-- `resolve.ts` — `resolveOnlineByPreference` here is still consumed by `src/services/download/lyric.ts` (download-side lyric resolution). Also hosts `resolveTTMLOverlay` (TTML only when `ttml` outranks the online format and `system.lyric.enableOnlineTTMLLyric` is on) and `resolvePluginLyric`.
-- `request.ts` — thin bridge calls. `preload.ts` + `nextTrackPreloader.ts` warm the next track (desktop only; Android prefetch is native `prefetchUpcomingUrls`, so `initPlayer` skips installing the JS preload watchers when `isAndroidNative`).
-
-Backends: desktop main (`electron/main/apis/common/lyric/{netease,qqmusic,kugou}.ts` byId/byQuery + `ttml.ts` → AMLL TTML DB); Android (`KotlinApiServer :13962` → Node `API/mobile-server.ts :13233`, same route shapes).
-
-Formats parse in `src/utils/lyric/parse*.ts` (`ttml/qrc/krc/yrc/lrc/lys/ass/srt`); `DEFAULT_LYRIC_FORMAT_ORDER` ranks `ttml` first. Parsed shape is `LyricData` (`LyricLine/LyricWord/LyricSpan` in `shared/types/lyrics.ts`).
-
-Caches: `lyricMatchCache` (fingerprint = title + artists + 5s duration bucket, 30d TTL) maps fuzzy hits to platform ids — TTML overlay for cross-source tracks depends on it; `lyricTtmlCache` (positive forever, negative 72h); renderer `CacheManager "lyrics"` namespace; local TTML repo (`matchLocalTTML`, desktop only) and sidecar files (desktop `player.readLyricFile`, Android SAF via `AndroidLocalLyricPlugin`).
-
-Render surfaces — pick by target, never mix. The main-player lyric has a three-way component chain (same chain in `FullPlayer/index.vue` and `FullPlayerMobile.vue`, which mounts it twice for portrait/landscape layouts):
-
-| Condition (first match wins)       | Component                             | Renderer                                                                                                                              |
-| ---------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `settings.lyric.engine === "amll"` | `Lyrics/AMLLLyrics.vue`               | `@applemusic-like-lyrics/core` `LyricPlayer` (upstream library)                                                                       |
-| `isAndroid`                        | `FullPlayer/AndroidMainLyricHost.vue` | dual-mode adapter — see below                                                                                                         |
-| everything else (desktop default)  | `Lyrics/index.vue`                    | self-built engine: `Lyrics/engine/` (line/word builders, springs, interlude, `renderer.css`), translation/romaji, `bg.ts`/`poster.ts` |
-
-`AndroidMainLyricHost` resolves its own `renderMode` prop (`settings.lyric.engine === "kotlin" ? "kotlin" : "legacy"`):
-
-- **kotlin** (`isAndroidNative` only) — pushes parsed `LyricLine[]` (JSON) + time/config through the `AndroidMainLyric` plugin to native `MainPlayerLyricOverlayView.kt` Canvas rendering (models in `LyricModels.kt`; JVM-tested timeline/segmentation in `android/app/src/test/.../lyric/`). JS stops its RAF tick (`usesNativeKotlinLyricClock`) — the native layer owns the clock; the host handles seek events, viewport sync, font-size sentinel (`ResizeObserver`), font-weight ×2 scaling (cap 1000), and pauses the overlay while dialogs/queue sheets cover it.
-- **legacy** — renders `Lyrics/index.vue` inside the host (same engine as desktop, Android-tuned props like `applyScrollPreroll`).
-
-Engine-setting semantics (`settings.lyric.engine`: `physics` | `amll` | `kotlin`): desktop `kotlin` migrates back to `physics` on load (`stores/settings.ts`); Android `physics` + `system.androidLyric.renderMode === "kotlin"` auto-upgrades to `kotlin`. The FullPlayer bottom bar shows plain text (`bottomBarLyricText`) in kotlin mode (native Canvas can't embed into the WebView DOM), otherwise the normal lyric component.
-
-Other surfaces:
-
-- Desktop lyric window (`windows/desktop-lyric`) — transparent always-on-top Electron window, full lines + word highlight, `pickPrimaryIndex` (overlap-aware, stays on the still-sounding line).
-- Dynamic island (`windows/dynamic-island`; Android `playback/DynamicIslandService.kt`) — compact pill, `pickLatestStartedIndex` (switch the instant the next line starts), transport controls; Android adds floating-lyric controls through the playback plugin.
-- Taskbar lyric (`windows/taskbar-lyric` + Rust `native/taskbar-lyric`, Windows only) — text embedded into the taskbar via Registry/Uia/Tray watchers.
-
-Shared rules: `windows/*` must use `useNowPlayingSync` / `getNowPlayingCurrentMs()` from `windows/shared/composables/` — never reimplement sync, index, or interpolation. Time is ms everywhere. The global TTML switch is `system.lyric.enableOnlineTTMLLyric` (per-song toggle in `QuickActionsMenu.vue`).
-
-### Android Port Traps (learned the hard way)
-
-- `apiFetch` **rejects** with `[bridge] embedded API is not ready` during Node cold start — it never resolves `{ok:false}`. Every `await` behind a loading spinner needs try/finally (see `PluginMarket.refresh`).
-- Fuzzy lyric IDs on Android persist only behind `shouldPersistLyricMatch`; same-playback TTML relies on `stashMatchedLyricId` (L1-only, 5min). Do not remove the stash, and do not "simplify" to unconditional persist (wrong songs would stick for 30 days).
-- `NativeLogConsoleBridge` forwards logcat `*:E` into `console.error("[native:error] ...")`; `FATAL_LOG` bypasses all filters — keep it first, and keep the Kotlin list in sync with `src/utils/bridgeLogFilter.ts`.
-- Ports: Kotlin `13962`, Node `13233`, Vite dev overrides host for LAN. SAF `content://` URIs are not file paths. Feed ExoPlayer only WebView-safe URLs (`/api/cache/song/play`, `/api/lanShare/audio`).
-- `scripts/build-android-node.ts` (embedded API bundle): alias resolution must verify candidates with `stat().isFile()` — `access()` succeeds on directories (Windows) and esbuild then fails with `Incorrect function`. Electron main-process imports pulled into `API/` (e.g. kugou `config.ts` → `@main/store`) need an `embedded-*-stub` plugin registered BEFORE the generic `@main/` alias plugin — the store can't run under Node.js Mobile (top-level `electron` import).
-- `postinstall` is a three-step chain: `node node_modules/electron/install.js && electron-rebuild -f -w better-sqlite3 && tsx scripts/patch-nodejs-mobile-cordova.ts`. The patch step is mandatory for Android builds — losing it breaks `build:android`. Run `pnpm install` in a regular terminal (not sandboxed), or the patch fails with EPERM.
-- Native main-player lyric clock: `MainPlayerLyricOverlayView.kt` reads `PlaybackManager.getLyricPositionMs()` every frame on the UI thread, and per-word sweep gradients (`AndroidLyricTimeline.computeSegmentTravel`) advance as a continuous function of that time — so this provider must stay smooth for off-looper callers too. Returning the 250ms `lastKnownPositionMs` tick snapshot there (an earlier cross-thread safety change) quantized the sweep into a 4Hz stop-motion animation. Off-looper reads go through `interpolatePositionSnapshot()` (snapshot + `lastKnownPositionAnchorNano` monotonic-clock interpolation at `cachedPlaybackRate`), and every snapshot write must go through `updateLastKnownPosition()` so the anchor stays in sync. Seeks must NOT freeze the interpolation: `beginPendingSeek()` moves the snapshot to the target so the sweep continues from the tapped line, and the pending state clears the moment the position catches up (`getPositionMs()` / `rememberReportedPosition()`) — adding a `pendingSeekPositionMs` freeze check once stalled the sweep for the whole 4s grace window. `onPlaybackParametersChanged` must keep `cachedPlaybackRate` fresh — MediaSession controllers can call `setPlaybackSpeed` on the forwarding player, bypassing `setRate()`.
-
-- The native main-player lyric overlay (`MainPlayerLyricOverlayView`) is a `View` added to `android.R.id.content` above the whole WebView, so it receives touches first and only yields when `ACTION_DOWN` is outside the viewport, inside the bottom exclusion band, or inside a **touch exclusion rect** (`AndroidMainLyric.setTouchExclusionRects`). Do not rely on the Web-side `resolveKotlinTouchEnabled()` 5-point sampling to protect partial overlays: it returns true when *any* sample point is unobstructed, so a portrait popover (quick-actions panel over the lyrics) left the layer touchable — panel taps were swallowed and re-fired as lyric tap→seek. Instead pass `touchExclusionSelector` to `AndroidMainLyricHost` (portrait lyric page passes `.quick-actions-popover` while the panel is open); the host tracks the element rect every frame and pushes physical-pixel rects in the same coordinate space as `setViewport`, and both close and teardown push an empty list. Keep the layer touch state itself enabled — lyrics outside the panel must stay tappable/draggable.
-
-### Type System
-
-- `shared/types/player.ts` — `Track`, `TrackDetail`, `Artist`, `Album`, `AudioQuality`, `PlayerState`, `PlayerStatus`, `PlayerEvent`, `LoadOptions`, `LoadResult`, `IpcResponse`
-- `shared/types/lyrics.ts` — `LyricFormat`, `LyricSource (external | embedded | online)`, `LyricData`, `LyricLine`, `LyricWord`, `LyricSpan`
-- `shared/types/platform.ts` — `Platform (netease | qqmusic | kugou)`
-- `shared/types/streaming.ts` — `StreamingServerType`, `StreamingServerConfig`, `StreamingPingResult`, `StreamingAuthResult`, etc.
-
-`Track` is for queue storage (no heavy data); `TrackDetail` loads on demand.
-
-### Settings Schema
-
-Declarative — defined in `src/settings/schema.ts`, types in `src/types/settings-schema.ts` (`SettingCategory → SettingSection → SettingItem`). Items bind via `{ store: "settings"|"theme", path: "nested.path" }`; `system.*` paths route through IPC to main config. Tag support on section/item via `SettingTag = { text; type? }` for Beta/experimental badges. i18n keys: `settings.section.{id}` / `settings.{itemKey}.{label,description}`.
-
-### Data Storage
+**Android 端：**
 
 ```
-{userData}/app-data/        # Unified data directory, separate from Chromium cache data
-├── config/
-│   ├── settings.json       # Main config (electron/main/store/)
-│   ├── streaming.json      # Streaming credentials (safeStorage encrypted)
-│   └── lastfm.json         # Last.fm credentials (safeStorage encrypted)
-├── database/library.db     # Music library (better-sqlite3, WAL)
-├── cache/                  # covers/ (cache:// protocol) + artists/ backgrounds/ songs/
-├── logs/                   # App logs + native/
-└── plugins/                # scripts/ data/ logs/
-
-# All paths are defined centrally in electron/main/utils/paths.ts
+用户操作 → status/media store → bridge.ts
+  → AndroidNativePlayback Capacitor 插件 (派发至 SPlayerPlayback 线程)
+  → PlaybackManager (runOnPlaybackThread / onPlaybackThread)
+  → ExoPlayer / MediaSession / DefaultPreloadManager
+  → Capacitor 原生事件 (status/progress/ended/fft) 回传渲染进程
+  → playback.ts 维持非响应式时间源同步
 ```
 
-Renderer IndexedDB (localforage): `splayer/library`, `splayer/queue`. Local playlists are stored in
-SQLite through the main-process playlist service; the old `splayer/playlists` store is migration-only.
+_注意：Android 端音频源必须是 WebView 或 ExoPlayer 安全的有效 URL（如 `/api/cache/song/play`、`/api/lanShare/audio`），禁止传入裸文件绝对路径或 `file://` 协议。_
 
-Android storage:
+### 状态管理
 
-- Web assets live under Android app assets after Capacitor sync; embedded Node project is copied to `android/app/src/main/assets/www/nodejs-project`.
-- Kotlin cache/library/lyric DB data lives in app-private storage and is accessed through Android plugins or `KotlinApiServer` routes; SAF-selected music/lyric/download directories are represented by persisted `content://` URI permissions.
-- Node.js Mobile config/stats compatibility defaults under the embedded API config directory; Android routes proxy sensitive config/session operations only for local requests.
+采用高低频分离的双层架构：
 
-### Cover Image
+- `src/stores/status.ts`：Pinia 响应式状态（`position / duration / state / volume`），约 5Hz 低频更新，驱动进度条、播放按钮与基础 UI。
+- `src/services/playback.ts`：非响应式普通变量。`getCurrentTime()` 在推送间隙进行线性插值；`usePlaybackTime()` 在 RAF 循环中读取，为歌词滚动与频谱提供 60fps 无额外 Vue 响应式开销的高性能驱动。
+- `src/stores/media.ts`：Pinia + `shallowRef`，维护当前轻量 `Track` 及按需加载的 `TrackDetail`（只将当前曲目基本信息持久化到 sessionStorage，切勿持久化庞大的 TrackDetail 歌词对象）。
 
-Rust extracts 300x300 JPEG thumbnail to `{userData}/app-data/cache/covers/` during decode; renderer reads via `cover://{filename}` protocol. Original via `getCoverRaw()` for SMTC, never cached. Authenticated streaming covers use the main-process `streaming-cover://` proxy.
+### 流媒体子系统 (Streaming)
 
-### Config Store (Main)
+客户端适配层位于主进程（`electron/main/services/streaming/`）：
 
-`electron/main/store/` is custom (not electron-store). Reads/writes `{userData}/app-data/config/settings.json` (path via `electron/main/utils/paths.ts`), merges with defaults from `shared/defaults/settings.ts`. Supports dot-path access (`store.get("system.taskbarProgress")`), atomic writes, schema migrations.
+- 支持 Subsonic 协议族（Navidrome、OpenSubsonic、Airsonic、LMS 等统一适配器）以及 Jellyfin / Emby。
+- 凭证加密保存在 `{userData}/app-data/config/streaming.json`（基于 Electron safeStorage）。
+- 封面代理：注册 `streaming-cover://` 协议处理带鉴权的流媒体封面。
+- `stores/streaming.ts`：仅保存服务器列表与浅响应式数据，主进程数据变更触发 SQLite 增量快照，不直连流媒体服务器。
 
-### i18n
+### 歌词系统
 
-Renderer uses `vue-i18n` with `src/i18n/locales/{zh-CN,en-US}.json`. Main process has a lightweight translation table (`electron/main/utils/i18n.ts`) for tray/thumbar; locale synced via `system:setLocale` IPC.
+渲染管线（`src/services/lyric/`，桌面与 Android WebView 共享）：
 
-### Path Aliases
+- `loader.ts`：加载核心。按优先级调度：预载歌词 → 本地 TTML 库 → 在线首选平台 → 插件兜底 → 内嵌歌词。通过 `currentToken` 守卫并发竞态；已渲染有效歌词时若后续尝试失败绝不清空现有歌词。
+- **TTML 自动升级机制**：仅在 `lyricSourcePreference === "auto"` 且网络 TTML 优于普通格式时触发尝试。用户显式指定的音源不会被静默篡改。单个平台失败仅丢弃该候选，不中断跨平台兜底。
+- **解析与格式**：`ttml / qrc / krc / yrc / lrc / lys / ass / srt`，TTML 优先级最高。统一定义为 `LyricData`（`LyricLine/LyricWord/LyricSpan`）。
+- **歌词渲染表面选择**：
 
-```
-@/                     → src/                   (renderer, tsconfig.web.json)
-@shared/               → shared/                (both processes)
-@main/                 → electron/main/         (main, tsconfig.node.json)
-@windows/              → windows/               (lyric windows)
-@splayer/audio-engine  → native/audio-engine    (main)
-@splayer/audio-capture → native/audio-capture   (main)
-@splayer/media-ctrl    → native/media-ctrl      (main)
-@splayer/taskbar-lyric → native/taskbar-lyric   (main)
-@splayer/taskbar-thumbnail → native/taskbar-thumbnail (main, thumbnail toolbar)
-@splayer/opencc        → native/opencc          (CJK conversion)
-```
+| 条件（自上而下匹配）               | 渲染组件                              | 渲染机制                                                |
+| ---------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| `settings.lyric.engine === "amll"` | `Lyrics/AMLLLyrics.vue`               | `@applemusic-like-lyrics/core` LyricPlayer              |
+| `isAndroid` (安卓环境)             | `FullPlayer/AndroidMainLyricHost.vue` | 双模适配器（Kotlin 原生 / Legacy Web）                  |
+| 其它情况（桌面默认）               | `Lyrics/index.vue`                    | 自研物理动效引擎（逐词/逐行构建器、弹簧系统、间奏动画） |
 
-Android Vite also defines `@root` -> repository root for Android-only Web builds.
+`AndroidMainLyricHost` 细节：
 
-### Android Audio Dependencies
+- **kotlin 模式**：将解析好的歌词推送至原生 `MainPlayerLyricOverlayView.kt` 进行 Canvas 绘制。前端停止自身 RAF 歌词时钟（由原生主导），宿主负责视口同步、字体测量、弹窗触摸避让及所有权令牌保护。
+- **legacy 模式**：在 WebView 内部渲染 Web 版 `Lyrics/index.vue`。
 
-- Desktop audio decoding: Rust `audio-engine` uses `ffmpeg_audio` + statically built FFmpeg + `rodio`; this is desktop-only.
-- Android native playback: Kotlin uses `androidx.media3:media3-exoplayer:1.8.0`, `androidx.media3:media3-session:1.8.0`, `androidx.media:media:1.7.0`, custom `AudioProcessor`s for FFT/EQ, and a foreground `PlaybackService`.
-- Embedded API runtime: `nodejs-mobile-cordova` provides Node.js in the Android app; `@neteasecloudmusicapienhanced/api` is copied and patched into the packaged vendor tree by `scripts/build-android-node.ts`.
-- Local HTTP/WebSocket: `org.nanohttpd:nanohttpd` and `nanohttpd-websocket` power `KotlinApiServer`, LAN sync, cache DB proxy, and external API access.
+---
 
-## Conventions
+## Android 关键踩坑经验与核心禁忌
 
-### Comments — Chinese, with JSDoc
+1. **接口冷启动超时拒绝**：`apiFetch` 在 Node.js Mobile 未就绪时会**直接 reject** 抛出 `[bridge] embedded API is not ready`，绝不会 resolve `{ok: false}`。所有带 loading 的异步调用必须包裹在 `try ... finally` 中结束 loading 态。
+2. **前台服务启动超时崩溃（Android 14+ FGS Timeout）**：Android 14+ 要求调用 `startForegroundService()` 后约 10 秒内必须调用 `Service.startForeground()`。若将该调用排队到专属音频线程，慢速设备在初始化 ExoPlayer/PreloadManager 时会直接触发 `ForegroundServiceDidNotStartInTimeException` 导致 App 闪退。**解决方案**：`PlaybackService.onCreate` 必须在主线程立即使用轻量级占位通知提升为前台服务，之后再异步连接音频线程并在就绪后更新为 MediaStyle 完整通知。
+3. **Media3 播放线程安全铁律**：ExoPlayer、MediaSession 与 `DefaultPreloadManager` 必须且只能在专属 `SPlayerPlayback` HandlerThread 上操作，绝对禁止从 Android 主线程或 Capacitor 桥接线程直接触碰！所有公开 API 必须通过 `runOnPlaybackThread`（异步）或 `onPlaybackThread`（同步锁）派发；跨线程状态读取走 volatile 缓存快照。
+4. **屏幕旋转导致原生歌词空白（所有权令牌机制）**：在移动端横竖屏切换时，竖屏与横屏两个 `AndroidMainLyricHost.vue` 实例会在同一次 Vue Patch 中相继卸载与挂载。如果旧实例卸载时的 `clear()` 比新实例的 `setLyrics()` 晚一步到达原生层，刚装载的歌词就会被清空且不再恢复。**解决方案**：使用模块作用域所有权令牌 `activeKotlinHostToken`，旧实例在 `onBeforeUnmount` 发现令牌已被新实例接管时，主动跳过清理。
+5. **原生歌词 Canvas 模糊与功耗控制**：在 Canvas 上逐帧生成大半径模糊位图会引发剧烈的 GC 抖动和掉帧。`LyricBlurController.kt` 规范：
+   - 位图 LRU 缓存预算上限严格限制为堆内存的 1/8（16MB~48MB）。
+   - 采用 0.5x 降采样渲染模糊位图（计算开销降至 1/8，视觉近无损）。
+   - 档位变化过渡期采用「起点档 + 目标档」双位图叠化，禁止逐帧新建位图。
+   - 处于退场浮动衰减态的动态行，在 API 31+ 上录入 `RenderNode` 并通过 GPU `RenderEffect` 进行硬件模糊（限制最多 3 个实例），低版本则直绘无模糊。
+6. **移动端 Hero FLIP 动效防抖与无泄漏**：
+   - 严禁对 `width`、`font-size` 等引发 Layout Reflow（重排）的属性做动画，一律使用 CSS `transform: translate3d(...) scale(...)` 与 `opacity`。
+   - 文本缩放的基准矩形（layoutRect）必须选择字号较大的那一侧，从大到小 scale 保持清晰，从小放大必定失真。
+   - 麦克风等伴随图标通过透明度渐隐并让相邻文字平移覆盖其空间，不要压缩宽度。
+   - 组件卸载时（`onBeforeUnmount`）必须清理 `heroTransitionTimer` 和 `cancelAnimationFrame`。
+   - 不参与飞行的副信息（标签、专辑、来源等）在动画起飞前先行淡出，返回时淡入。
+7. **原生歌词层全局置顶误触避让**：原生歌词 View 叠加在 WebView 之上，默认优先吞噬所有触摸事件。当展示竖屏快捷操作弹窗时，必须由前端通过 `touchExclusionSelector` 获取 DOM 物理像素矩形，逐帧推送给原生层注册避让区，避免弹窗点击被穿透识别为歌词点击定位。
+8. **内嵌 Node API 禁止劫持全局 DNS**：切勿在 `API/mobile-entry.ts` 中猴子补丁篡改全局 `dns.lookup`，否则会导致 `listen(13233, "127.0.0.1")` 被 Fake-IP 代理篡改造成端口绑定失败。DNS 覆盖已收敛于 `API/public-dns.ts` 中的 Agent 级控制。内嵌环境为 **Node 12.19.0**，不支持全局 fetch、`node:` 协议前缀（靠 esbuild 插件剥离）和现代 API。
+9. **依赖安装后补丁链条**：`postinstall` 必须执行 `tsx scripts/patch-nodejs-mobile-cordova.ts`，否则 Android 构建必定失败。安装依赖须在常规终端进行，避免沙盒环境报 EPERM 错误。
+10. **WebView 字体与缓存规范**：`MainActivity` 必须锁定 `config.fontScale = 1.0f`，版本升级时必须清理 WebView 缓存。
 
-All comments in Chinese. Methods use standard JSDoc with `@param name - description` and
-`@returns` when meaningful:
+---
 
-```ts
-/**
- * <Chinese method description>
- * @param trackId - <Chinese parameter description>
- * @returns <Chinese return description>
- */
-```
+## 编码规范与最佳实践
 
-Forbidden: `// ───` separator lines (including ones with section titles), prose-style multi-paragraph comments, restating-the-obvious comments, numbered enumerations (`1. 2. 3.`) inside comments. Write comments only when the **why** is non-obvious.
+### 注释规范
 
-### Code Organization
+- 项目内所有业务代码注释**统一使用中文**。
+- 导出方法使用规范 JSDoc 标注参数与返回值说明。
+- 严禁出现无意义的分隔线（如 `// ────`）、冗长叙述性废话、显而易见的废话注释。仅在**设计原因不直观**时撰写注释。
 
-Split logic into files rather than separator comments. Don't extract a helper for one-place callers (3+ uses justify it). No "just in case" defensive code or fallbacks for impossible scenarios. No configurable knobs (timeouts / retries / buffer sizes) unless required — write constants. Don't break errors into per-case enums; `anyhow` or plain `Error` is usually enough.
+### 代码组织与精简
 
-### Memory Discipline
+- 提倡通过合理拆分文件组织代码，禁止使用大块注释分隔单个巨型文件。
+- 拒绝为仅有 1~2 处调用的场景过度封装通用 Helper 函数。
+- 严禁添加“以防万一”的臆想防御性代码，不预设不可达分支的兜底。
+- 无需配置化的数值直接写死为具名常量，不要增加配置复杂度。
 
-Memory is a hard requirement. The main process logs memory usage through `app.getAppMetrics()`
-60 seconds after launch and then every 10 minutes. When a change touches rendering, caching, or
-IPC, verify before and after with these samples.
+### 内存与性能纪律
 
-- **Images by display size** — anything blurred, sampled, or rendered small uses the 300px `cover` thumbnail (player blur background, color extraction, lists). `coverOriginal` only for the visible large cover and poster export. Large `<img>`: add `decoding="async"`; preload with `img.decode()` before fading in.
-- **Compositing layers are budgeted** — never put `will-change` in CSS on unbounded element collections; promote dynamically and only near the viewport (lyric engine `lineWillChange` pattern). New full-screen `filter: blur` / `backdrop-filter` layers need justification.
-- **Hidden = silent** — high-frequency pushes (`position` / `fftData` / `position-sync`) must not reach hidden windows: `broadcast(channel, data, true)` or an `isVisible()` gate; consumers recover from the next push (≤200ms), no resync needed. Low-frequency state events (`stateChanged` / `ended` / track-change) always go through. RAF loops and canvases must stop when their surface is hidden (engine `freeze()` / `visibilitychange` pattern).
-- **In-memory caches must be bounded** — every module-level Map/array cache needs an eviction rule (subsonic `viewAuthCache` evicts per-server). Never retain `TrackDetail`-sized data beyond the current track.
+- **图片按显示尺寸取用**：高斯模糊、取色及列表场景一律使用 300px 的 `cover` 缩略图；原图仅用于全屏大封面与海报导出。大图增加 `decoding="async"`。
+- **严控合成层**：严禁在未定长列表中滥用 CSS `will-change`；全屏 `filter: blur` 和 `backdrop-filter` 必须克制使用。
+- **后台与隐藏静默**：高频数据推送（`position` / `fftData`）在窗口隐藏或 App 切后台时必须静默停止；Canvas 渲染与 RAF 循环在不可见时必须暂停。
+- **内存缓存必须有界**：所有模块级 Map/Array 缓存必须配备淘汰机制（LRU / 计数驱逐），严禁常驻保存单曲以外的庞大对象。
 
-### Units
+### 数据类型与存储规范
 
-Frontend time is **milliseconds** everywhere. Rust engine uses seconds internally; `toMs()` in `electron/main/ipc/player.ts` converts.
+- 统一使用 **毫秒（ms）** 作为前端时间基准；Rust 底层使用的秒在进入 IPC 边界时统一通过 `toMs()` 转换。
+- 禁止手动为原生模块手写 TS 类型，一律自 `@splayer/*` 导入。
+- 存储轻量曲目集合使用 `shallowRef`，避免 Deep Proxy 深度劫持引发的卡顿。
+- 保存至 IndexedDB 前必须使用 `toRaw` 脱除 Vue 响应式代理，规避 `DataCloneError`。
 
-### Types & Persistence
+### 弹窗体系 (Popup Layers)
 
-Never hand-write native module types — import from `@splayer/*`. Use `shallowRef` for `Track` arrays/collections (avoid deep proxy). Vue proxied objects can't be cloned by IDB (`DataCloneError`); use `toRaw` before persisting.
+- `SDialog`、`SDrawer`、`SPopover` 内部同时承载着上游的统一层级管理（`usePopupZIndex`）与 Android 平台特化（返回键关闭 `useBackClosable`、防自动聚焦 `preventOpenAutoFocus`、悬停转点击降级等），修改弹窗组件时切勿漏掉任意一方的逻辑。
 
-### Auto-imports
+### 验证流程 (Verification Loop)
 
-In Vue components, `vue / pinia / vue-router / @vueuse/core / vue-i18n` are auto-imported, and UI components in `src/components/` are auto-registered.
-Icon components used only in Vue templates are auto-imported. Do not manually import them in
-`<script setup>`; import an icon explicitly only when it is referenced by script code.
+在完成代码修改后，必须按需运行对应检查：
 
-### Logging (Main Process)
+- 涉及 TS/Vue 改动：`pnpm typecheck`。
+- 涉及代码风格改动：`pnpm lint`。
+- 涉及测试覆盖模块：`pnpm test:node` / `pnpm test:web`。
+- 涉及 Rust 模块：`pnpm test:native`。
+- 涉及 Android Kotlin：`pnpm android:check`（需要 JDK 21）。
+- 提交前确保 Prettier 格式化（双引号、分号、100 字符宽、尾随逗号）。
 
-Use scoped loggers from `@main/utils/logger` (`coreLog / playerLog / mediaLog / trayLog / taskbarLog / nativeLog`, etc.). Don't import `electron-log` directly.
+### Git 提交规范
 
-### IPC Listeners
-
-In preload's `onEvent`, always `ipcRenderer.removeAllListeners()` before adding a new listener (HMR accumulates otherwise). Renderer composables call the returned `unsubscribe` in `onBeforeUnmount`.
-
-### Popup Layers (SDialog / SDrawer / SPopover)
-
-Every popup combines two systems that must stay co-present: upstream's unified stacking via `usePopupZIndex` (from `@/composables/useZIndex`; components pass `zIndex`/report `onOpenChange`, fixing #227) and the Android adaptations — `useBackClosable` (back button closes the popup, `@/composables/useAndroidBack`), `preventOpenAutoFocus` (SDialog), and hover→click trigger downgrade on Android (`effectiveTrigger`, SPopover). When editing these components, keep both sides; don't "simplify" either away.
-
-### Android Boundaries
-
-- Keep Android-specific native APIs behind Capacitor plugins or `src/services/bridge.ts`; do not import Android plugin wrappers directly into unrelated shared modules.
-- Keep desktop Electron IPC and Android HTTP/Capacitor behavior aligned at the `Window["api"]` shape where practical, but document unsupported Android methods with explicit no-op/fallback behavior.
-- Preserve the port split: Kotlin app server `13962`, packaged Node.js Mobile `13233`, Vite dev embedded API host `0.0.0.0` with `SP_API_PORT` defaulting to `13962`.
-- Browser Android preview (`isAndroidPreview`) is not a native container: native plugin calls must degrade to HTML audio/no-op behavior and must not assume SAF, MediaSession, ExoPlayer, or app-private storage.
-- LAN requests must stay gated: sensitive Node routes (`/api/apis/call`, cookie/session/login routes) remain local-only unless a dedicated external API route performs its own token/allowLan checks.
-
-### Prettier
-
-Double quotes, semicolons, 100-char width, trailing commas.
-
-Before committing, run Prettier on every file included in the commit and verify the formatted
-working tree before creating the commit. Do not leave formatting-only changes from the current task
-outside the commit.
-
-### Shared Types
-
-Put cross-process types (`LocaleCode / SystemConfig / StreamingServerType`, etc.) in `shared/types/`.
-
-### Commit Messages
-
-Use Conventional Commits with a Chinese summary: `<type>: <summary>`. Keep the title on one line;
-do not add a body or bullets unless explicitly requested. Use the type that matches the change,
-such as `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `style`, or `chore`.
+遵循 Conventional Commits 规范，使用**中文单行摘要**：`<type>: <summary>`（例如：`feat: ...`、`fix: ...`、`perf: ...`、`refactor: ...`）。
