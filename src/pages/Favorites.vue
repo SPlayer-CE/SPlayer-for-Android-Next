@@ -251,20 +251,28 @@ const handleClick = (item: CoverItem): void => {
   }
 };
 
-// 直进 /favorites?tab=liked 时本地库可能未初始化，需手动触发；同时拉取在线喜欢歌单
+// 直进 /favorites?tab=liked 时本地库可能未初始化，需手动触发
 onMounted(() => {
   if (!library.initialized)
     library.load().catch((err) => console.warn("[Favorites] library load failed:", err));
-  if (user.isLoggedIn) {
-    user
-      .ensureLikedPlaylist()
-      .catch((err) => console.warn("[Favorites] ensureLikedPlaylist failed:", err));
-    if (user.playlists.length === 0)
-      user
-        .loadContent(user.profile!.userId)
-        .catch((err) => console.warn("[Favorites] loadContent failed:", err));
-  }
 });
+
+watch(
+  () => [activeTab.value, user.isLoggedIn] as const,
+  ([tab, loggedIn]) => {
+    if (tab === "liked" && loggedIn) {
+      user
+        .ensureLikedPlaylist()
+        .catch((err) => console.warn("[Favorites] ensureLikedPlaylist failed:", err));
+      if (user.playlists.length === 0 && user.profile?.userId) {
+        user
+          .loadContent(user.profile.userId)
+          .catch((err) => console.warn("[Favorites] loadContent failed:", err));
+      }
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -375,6 +383,15 @@ onMounted(() => {
             :search-query="searchQuery"
             enable-sort
           />
+        </div>
+        <div
+          v-else-if="user.isLoggedIn && (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))"
+          class="flex-1 flex items-center justify-center h-full"
+        >
+          <div class="text-center text-on-surface-variant/60">
+            <SLoading class="text-4xl text-primary/70 mb-4 mx-auto block" />
+            <div class="text-sm">{{ t("common.loading") }}</div>
+          </div>
         </div>
         <div v-else class="flex-1 flex items-center justify-center h-full">
           <div class="text-center text-on-surface-variant/50">

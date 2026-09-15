@@ -47,8 +47,11 @@ const localTracks = computed<Track[]>(() => {
 watch(
   () => [tab.value, user.isLoggedIn, user.likedPlaylistId, user.likedSongIds.size] as const,
   ([nextTab, loggedIn, plId]) => {
-    if (nextTab !== "online" || !loggedIn || !plId) return;
+    if (nextTab !== "online" || !loggedIn) return;
     user.ensureLikedPlaylist();
+    if (!plId && user.playlists.length === 0 && user.profile?.userId) {
+      user.loadContent(user.profile.userId);
+    }
   },
   { immediate: true },
 );
@@ -237,7 +240,7 @@ const handleMoreMenu = (key: string): void => {
         />
       </div>
       <div
-        v-else-if="tab === 'online' && user.likedPlaylistLoading"
+        v-else-if="tab === 'online' && (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))"
         key="online-loading"
         class="flex-1 flex items-center justify-center"
       >
