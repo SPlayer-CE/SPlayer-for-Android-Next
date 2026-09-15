@@ -21,15 +21,16 @@ import type { AiModelState, AiModelSaveInput } from "@shared/types/ai";
 import type { CloudUploadResult, PickedSong } from "@shared/types/cloudUpload";
 import type { CjkTransformMode } from "@shared/types/opencc";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
-import type { AndroidLibraryPlugin } from "@/plugins/androidLibrary";
-import type { AndroidDownloadPlugin } from "@/plugins/androidDownload";
-import type { AndroidLocalLyricPlugin } from "@/plugins/androidLocalLyric";
-import type {
-  AndroidCachePlugin,
-  AndroidCacheType,
-  AndroidDbCacheCategory,
+import { AndroidLibrary, type AndroidLibraryPlugin } from "@/plugins/androidLibrary";
+import { AndroidDownload, type AndroidDownloadPlugin } from "@/plugins/androidDownload";
+import { AndroidLocalLyric, type AndroidLocalLyricPlugin } from "@/plugins/androidLocalLyric";
+import {
+  AndroidCache,
+  type AndroidCachePlugin,
+  type AndroidCacheType,
+  type AndroidDbCacheCategory,
 } from "@/plugins/androidCache";
-import type { AndroidAppIconPlugin, AndroidAppIconVariant } from "@/plugins/androidAppIcon";
+import { AndroidAppIcon, type AndroidAppIconPlugin, type AndroidAppIconVariant } from "@/plugins/androidAppIcon";
 import { AndroidSongCache } from "@/plugins/androidSongCache";
 import { AndroidLanShare, type LanDevice } from "@/plugins/androidLanShare";
 import type {
@@ -251,31 +252,19 @@ function getPlaybackPlugin(): AndroidNativePlaybackPlugin {
 
 // ─── Android Library / Download / LocalLyric 插件懒加载 ──────────────────
 
-let _androidLibraryPlugin: AndroidLibraryPlugin | null = null;
-
 /** 获取 AndroidLibrary 插件（本地音乐库管理） */
 function getAndroidLibrary(): AndroidLibraryPlugin {
-  if (_androidLibraryPlugin) return _androidLibraryPlugin;
-  _androidLibraryPlugin = registerPlugin<AndroidLibraryPlugin>("AndroidLibrary");
-  return _androidLibraryPlugin!;
+  return AndroidLibrary;
 }
-
-let _androidDownloadPlugin: AndroidDownloadPlugin | null = null;
 
 /** 获取 AndroidDownload 插件（SAF 下载目录 + 文件操作） */
 function getAndroidDownload(): AndroidDownloadPlugin {
-  if (_androidDownloadPlugin) return _androidDownloadPlugin;
-  _androidDownloadPlugin = registerPlugin<AndroidDownloadPlugin>("AndroidDownload");
-  return _androidDownloadPlugin!;
+  return AndroidDownload;
 }
-
-let _androidAppIconPlugin: AndroidAppIconPlugin | null = null;
 
 /** 获取 AndroidAppIcon 插件（桌面图标颜色变体切换） */
 function getAndroidAppIcon(): AndroidAppIconPlugin {
-  if (_androidAppIconPlugin) return _androidAppIconPlugin;
-  _androidAppIconPlugin = registerPlugin<AndroidAppIconPlugin>("AndroidAppIcon");
-  return _androidAppIconPlugin!;
+  return AndroidAppIcon;
 }
 
 interface AndroidClipboardPlugin {
@@ -292,22 +281,14 @@ function getAndroidClipboard(): AndroidClipboardPlugin {
   return _androidClipboardPlugin!;
 }
 
-let _androidLocalLyricPlugin: AndroidLocalLyricPlugin | null = null;
-
 /** 获取 AndroidLocalLyric 插件（SAF 歌词目录 + 扫描） */
 function getAndroidLocalLyric(): AndroidLocalLyricPlugin {
-  if (_androidLocalLyricPlugin) return _androidLocalLyricPlugin;
-  _androidLocalLyricPlugin = registerPlugin<AndroidLocalLyricPlugin>("AndroidLocalLyric");
-  return _androidLocalLyricPlugin!;
+  return AndroidLocalLyric;
 }
-
-let _androidCachePlugin: AndroidCachePlugin | null = null;
 
 /** 获取 AndroidCache 插件（统一缓存管理） */
 function getAndroidCache(): AndroidCachePlugin {
-  if (_androidCachePlugin) return _androidCachePlugin;
-  _androidCachePlugin = registerPlugin<AndroidCachePlugin>("AndroidCache");
-  return _androidCachePlugin!;
+  return AndroidCache;
 }
 
 /** 订阅 Android 扫描进度事件，返回同步取消订阅函数 */
