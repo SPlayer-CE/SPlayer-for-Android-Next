@@ -71,7 +71,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@hono/node-server": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@neteasecloudmusicapienhanced/api": "4.34.3",
+    "@neteasecloudmusicapienhanced/api": "4.40.1",
     "atomically": "^2.1.1",
     "better-sqlite3": "^13.0.3",
     "electron-log": "^5.4.4",
