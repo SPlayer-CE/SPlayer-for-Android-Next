@@ -15,6 +15,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -1055,6 +1056,50 @@ class PlaybackManager private constructor(
     if (remoteMode) return 1f
     if (!onPlaybackLooper()) return cachedPlaybackRate
     return player?.playbackParameters?.speed ?: 1f
+  }
+
+  /**
+   * 读取当前曲目内嵌封面的原始字节
+   *
+   * 只有本地源（content:// / file:// / 绝对路径）才有内嵌封面，远端流直接返回 null；
+   * [MediaMetadataRetriever] 会打开文件流，调用方必须放到后台线程执行。
+   */
+  fun readRawCoverBytes(): ByteArray? {
+    val source = currentSource
+    if (source.isEmpty()) return null
+    val scheme =
+      try {
+        Uri.parse(source).scheme?.lowercase()
+      } catch (ignored: Exception) {
+        null
+      }
+    if (scheme != null && scheme != "content" && scheme != "file") return null
+
+    var retriever: MediaMetadataRetriever? = null
+    return try {
+      retriever = MediaMetadataRetriever()
+      retriever.setDataSource(appContext, Uri.parse(source))
+      retriever.embeddedPicture
+    } catch (error: Exception) {
+      Log.w(TAG, "read embedded cover failed", error)
+      null
+    } finally {
+      try {
+        retriever?.release()
+      } catch (ignored: Exception) {
+      }
+    }
+  }
+
+  /**
+   * 读取当前曲目内嵌封面并编码为 data URL（供高清封面与海报导出使用）
+   *
+   * mime 统一按 JPEG 声明，与桌面端主进程的做法一致：渲染端会按内容嗅探解码，非 JPEG 内嵌封面同样可用。
+   * @returns 形如 data:image/jpeg;base64,... ；非本地源或无内嵌封面返回 null
+   */
+  fun readRawCoverDataUrl(): String? {
+    val bytes = readRawCoverBytes() ?: return null
+    return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
   }
 
   fun setMainLyricClockListener(listener: (() -> Unit)?) {

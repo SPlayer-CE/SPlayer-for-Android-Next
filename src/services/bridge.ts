@@ -209,6 +209,8 @@ interface AndroidNativePlaybackPlugin {
   seek: (options: { positionMs: number }) => Promise<IpcResponse>;
   setVolume: (options: { volume: number }) => Promise<IpcResponse>;
   setSpeed: (options: { speed: number }) => Promise<IpcResponse>;
+  /** 读取当前本地曲目内嵌封面的原始字节，返回 data URL；无内嵌封面时无 data 字段 */
+  getCoverRaw: () => Promise<{ data?: string | null }>;
   updateMetadata: (options: Record<string, unknown>) => Promise<void>;
   updateQueueContext: (options: Record<string, unknown>) => Promise<void>;
   updateNotificationPrefs: (options: Record<string, unknown>) => Promise<void>;
@@ -1997,7 +1999,18 @@ const bridge = {
         : electronApi().player.getSelectedDeviceName(),
     getCoverRaw: (): Promise<IpcResponse<string | null>> =>
       isAndroid
-        ? (androidWarn("player", "getCoverRaw"), Promise.resolve({ success: true, data: null }))
+        ? isAndroidNative
+          ? getPlaybackPlugin()
+              .getCoverRaw()
+              .then((res) => ({
+                success: true,
+                data: typeof res?.data === "string" && res.data ? res.data : null,
+              }))
+              .catch((error: unknown) => {
+                console.warn("[bridge:android] getCoverRaw failed", error);
+                return { success: true, data: null };
+              })
+          : Promise.resolve({ success: true, data: null })
         : electronApi().player.getCoverRaw(),
     readLyricFile: (filePath: string): Promise<IpcResponse<string>> =>
       isAndroidPreview

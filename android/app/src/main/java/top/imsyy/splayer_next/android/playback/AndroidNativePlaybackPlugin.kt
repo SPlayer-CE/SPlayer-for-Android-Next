@@ -18,6 +18,8 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import top.imsyy.splayer_next.android.MainActivity
 import top.imsyy.splayer_next.android.cache.AudioCacheProvider
 
@@ -34,6 +36,9 @@ class AndroidNativePlaybackPlugin : Plugin() {
   private val mediaSessionManager: AndroidMediaSessionManager by lazy {
     AndroidMediaSessionManager(context)
   }
+
+  /** 内嵌封面读取走独立单线程：MediaMetadataRetriever 会打开文件流，不能占用播放线程 */
+  private val coverExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
   override fun load() {
     PlaybackManager.getInstance(context).attachPlugin(this)
@@ -167,6 +172,21 @@ class AndroidNativePlaybackPlugin : Plugin() {
     runOnPlayback(call) {
       PlaybackManager.getInstance(context).setRate(speed)
       call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun getCoverRaw(call: PluginCall) {
+    val manager = PlaybackManager.getInstance(context)
+    coverExecutor.execute {
+      try {
+        val dataUrl = manager.readRawCoverDataUrl()
+        val result = JSObject()
+        if (dataUrl != null) result.put("data", dataUrl)
+        call.resolve(result)
+      } catch (error: Exception) {
+        call.reject(error.message, error)
+      }
     }
   }
 
