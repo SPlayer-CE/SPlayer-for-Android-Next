@@ -14,6 +14,9 @@ const neteaseApiRoot = await realpath(
   path.join(rootDir, "node_modules", "@neteasecloudmusicapienhanced", "api"),
 );
 const copiedRuntimePackages = new Set<string>();
+// 嵌入式运行时是 Node 12，而 jsdom 要求 Node >= 18；厂商包内唯一使用方
+// register_checktoken_v2 在下面被替换为本地桩实现，因此这里也跳过复制
+const excludedRuntimePackages = new Set<string>(["jsdom"]);
 const builtinModuleSet = new Set(
   builtinModules.flatMap((name) => [name, name.replace(/^node:/, "")]),
 );
@@ -110,6 +113,56 @@ const patchNeteaseVendor = async (rootPath: string) => {
   if (playlistTracksPatched !== playlistTracksSource) {
     await writeFile(playlistTracksPath, playlistTracksPatched, "utf8");
   }
+
+  // register_checktoken_v2.js：靠 jsdom 跑易盾 watchman 实时取反作弊 token，而 jsdom 要求
+  // Node >= 18 —— 嵌入式 Node 12 上它只会抛 `performance is not defined` 返回空串。
+  // 空串会被塞进 X-antiCheatToken（playlist_subscribe 强制 checkToken='v2'），
+  // 因此整体替换为回退配置内置静态 token 的桩，行为对齐 4.34.3。
+  await writeFile(
+    path.join(rootPath, "module", "register_checktoken_v2.js"),
+    `// Android 嵌入式替代实现：Node 12 跑不了 jsdom，回退配置内置的静态 token
+const { APP_CONF } = require('../util/config.json')
+
+const readToken = () => APP_CONF.checkToken || ''
+
+module.exports = async () => {
+  const token = readToken()
+  return { status: 200, body: { code: 200, token, registered: !!token } }
+}
+
+module.exports.getToken = async () => readToken()
+`,
+    "utf8",
+  );
+
+  // generateConfig.js：register_anonimous 现在走 xeapi，要求 xeapi public key 已存在，
+  // 但原顺序是先注册匿名再取 key，首次冷启动必然抛 xeapi public key is missing。
+  // 把取 key 的 try 块整体前移到注册块之前。
+  const generateConfigPath = path.join(rootPath, "generateConfig.js");
+  const generateConfigSource = await readFile(generateConfigPath, "utf8");
+  const generateConfigLines = generateConfigSource.split(/\r?\n/);
+  const anonymousBlockStart = generateConfigLines.findIndex((line) =>
+    line.includes("await register_anonimous()"),
+  );
+  const xeapiBlockStart = generateConfigLines.findIndex((line) =>
+    line.includes("let currentPublicKey = {}"),
+  );
+  const functionEnd = generateConfigLines.indexOf("}", xeapiBlockStart);
+
+  if (
+    anonymousBlockStart > 0 &&
+    xeapiBlockStart > anonymousBlockStart &&
+    functionEnd > xeapiBlockStart
+  ) {
+    // findIndex 命中的是块内首行，`try {` 在它上面一行
+    const reorderedLines = [
+      ...generateConfigLines.slice(0, anonymousBlockStart - 1),
+      ...generateConfigLines.slice(xeapiBlockStart - 1, functionEnd),
+      ...generateConfigLines.slice(anonymousBlockStart - 1, xeapiBlockStart - 1),
+      ...generateConfigLines.slice(functionEnd),
+    ];
+    await writeFile(generateConfigPath, reorderedLines.join("\n"), "utf8");
+  }
 };
 
 const resolveDependencyPackageJsonPath = async (
@@ -143,6 +196,7 @@ const resolveDependencyPackageJsonPath = async (
 
 const copyRuntimePackage = async (packageName: string, searchFromPackageJsonPath: string) => {
   if (builtinModuleSet.has(packageName)) return;
+  if (excludedRuntimePackages.has(packageName)) return;
   if (copiedRuntimePackages.has(packageName)) return;
 
   const packageJsonPath = await resolveDependencyPackageJsonPath(
