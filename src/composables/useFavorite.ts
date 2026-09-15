@@ -83,7 +83,7 @@ export const useFavorite = () => {
         return;
       }
       const wasLiked = user.isLiked(track.id);
-      const ok = await user.toggleLike(track.id);
+      const ok = await user.toggleLike(track.id, track);
       if (!ok) {
         toast.error(t("liked.toast.failed"));
         return;
