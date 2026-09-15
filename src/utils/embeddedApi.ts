@@ -203,4 +203,3 @@ export const waitForEmbeddedCookieReady = async (): Promise<void> => {
     }
   }
 };
-

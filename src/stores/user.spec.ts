@@ -139,7 +139,8 @@ describe("user store - 红心列表缓存与防死锁", () => {
   });
 
   it("并发覆盖：旧请求被 abort 时 loading 由最新请求收尾复位，且增量持久化批次", async () => {
-    const tick = (): Promise<void> => new Promise((resolve) => window.setTimeout(() => resolve(), 0));
+    const tick = (): Promise<void> =>
+      new Promise((resolve) => window.setTimeout(() => resolve(), 0));
     const secondGate: { release?: () => void } = {};
     let calls = 0;
 

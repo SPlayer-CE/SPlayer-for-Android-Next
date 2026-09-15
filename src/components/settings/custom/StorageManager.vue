@@ -212,7 +212,10 @@ const runAction = async (key: ActionKey): Promise<void> => {
           {{ t(`settings.${row.key}.description`) }}
           <template v-if="isAndroidTarget && row.key === 'backup'">
             <br />
-            <span class="text-xs opacity-70">保存路径: <span class="select-text font-mono">/storage/emulated/0/Download</span></span>
+            <span class="text-xs opacity-70">
+              保存路径:
+              <span class="select-text font-mono">/storage/emulated/0/Download</span>
+            </span>
           </template>
         </div>
       </div>

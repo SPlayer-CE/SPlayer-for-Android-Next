@@ -385,7 +385,10 @@ watch(
           />
         </div>
         <div
-          v-else-if="user.isLoggedIn && (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))"
+          v-else-if="
+            user.isLoggedIn &&
+            (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))
+          "
           class="flex-1 flex items-center justify-center h-full"
         >
           <div class="text-center text-on-surface-variant/60">

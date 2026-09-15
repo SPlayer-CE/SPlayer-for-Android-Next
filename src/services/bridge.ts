@@ -30,7 +30,11 @@ import {
   type AndroidCacheType,
   type AndroidDbCacheCategory,
 } from "@/plugins/androidCache";
-import { AndroidAppIcon, type AndroidAppIconPlugin, type AndroidAppIconVariant } from "@/plugins/androidAppIcon";
+import {
+  AndroidAppIcon,
+  type AndroidAppIconPlugin,
+  type AndroidAppIconVariant,
+} from "@/plugins/androidAppIcon";
 import { AndroidSongCache } from "@/plugins/androidSongCache";
 import { AndroidLanShare, type LanDevice } from "@/plugins/androidLanShare";
 import type {
@@ -309,7 +313,6 @@ function subscribeAndroidScanProgress(callback: (progress: ScanProgress) => void
     if (handle) void handle.remove();
   };
 }
-
 
 // ─── Capacitor ExternalApi 插件（外部 API 服务控制） ──────────────────────
 
@@ -1782,15 +1785,10 @@ const bridge = {
     exportToFile: (
       payload: unknown,
     ): Promise<{ ok: boolean; reason?: "canceled" | "writeFailed" }> =>
-      isAndroid
-        ? exportConfigToFileAndroid(payload)
-        : electronApi().config.exportToFile(payload),
+      isAndroid ? exportConfigToFileAndroid(payload) : electronApi().config.exportToFile(payload),
     importFromFile: (): Promise<
       { ok: true; data: unknown } | { ok: false; reason: "canceled" | "readFailed" | "parseFailed" }
-    > =>
-      isAndroid
-        ? importConfigFromFileAndroid()
-        : electronApi().config.importFromFile(),
+    > => (isAndroid ? importConfigFromFileAndroid() : electronApi().config.importFromFile()),
   } satisfies ConfigApi,
 
   // ── player ──────────────────────────────────────────────────────────────────

@@ -242,7 +242,10 @@ const handleMoreMenu = (key: string): void => {
         />
       </div>
       <div
-        v-else-if="tab === 'online' && (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))"
+        v-else-if="
+          tab === 'online' &&
+          (user.likedPlaylistLoading || (user.contentLoading && !user.likedPlaylistId))
+        "
         key="online-loading"
         class="flex-1 flex items-center justify-center"
       >
