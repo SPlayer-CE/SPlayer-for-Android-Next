@@ -140,6 +140,7 @@ export const useSettingsStore = defineStore(
       playerBgFreezeOnPause: true,
       playerBgBeat: true,
       coverLayout: "default",
+      dynamicCover: false,
       coverLyricRatio: 0.45,
       autoCenterCover: true,
       showPlaybackSource: false,

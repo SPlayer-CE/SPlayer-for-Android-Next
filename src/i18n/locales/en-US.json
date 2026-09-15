@@ -546,6 +546,7 @@
     "spectrumPc": "PC",
     "spectrumAndroid": "Android",
     "wordHighlight": "Word Highlight",
+    "dynamicCover": "Dynamic Cover",
     "onlineTTML": "Online TTML Lyrics",
     "volume": "Volume",
     "fontSize": "Lyric Font Size",
@@ -1661,6 +1662,10 @@
     "playerBgBeat": {
       "label": "Beat Pulse",
       "description": "Make the fluid background pulse with the low-frequency beat of the music"
+    },
+    "dynamicCover": {
+      "label": "Dynamic Cover",
+      "description": "Some songs provide an animated cover. Only applies in cover mode while signed in"
     },
     "coverLayout": {
       "label": "Cover Layout",

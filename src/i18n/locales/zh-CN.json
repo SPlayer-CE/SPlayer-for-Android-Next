@@ -546,6 +546,7 @@
     "spectrumPc": "PC方案",
     "spectrumAndroid": "安卓默认",
     "wordHighlight": "逐词效果",
+    "dynamicCover": "动态封面",
     "onlineTTML": "在线 TTML 歌词",
     "volume": "音量",
     "fontSize": "歌词字号",
@@ -1660,6 +1661,10 @@
     "playerBgBeat": {
       "label": "背景跳动",
       "description": "使流体背景随音乐低频节拍产生脉动效果"
+    },
+    "dynamicCover": {
+      "label": "动态封面",
+      "description": "部分歌曲可展示动态封面，仅在封面模式且已登录时生效"
     },
     "coverLayout": {
       "label": "封面布局",

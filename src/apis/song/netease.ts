@@ -153,6 +153,28 @@ export const resolveNeteaseUrl = async (
   return result;
 };
 
+/**
+ * 获取歌曲动态封面视频地址
+ *
+ * 接口需登录态，且只有部分歌曲有动态封面；失败一律返回 null，由调用方保持静态封面。
+ * @param id - 歌曲 id
+ * @returns 视频直链（已升级为 https，避免混合内容拦截）；无动态封面返回 null
+ */
+export const fetchNeteaseDynamicCover = async (id: string): Promise<string | null> => {
+  try {
+    const body = await neteaseCall<{ data?: { videoPlayUrl?: unknown } }>(
+      "song_dynamic_cover",
+      { id },
+      { notifyAuthFailure: false },
+    );
+    const url = body?.data?.videoPlayUrl;
+    if (typeof url !== "string" || !url) return null;
+    return url.replace(/^http:\/\//i, "https://");
+  } catch {
+    return null;
+  }
+};
+
 /** 下载源（带格式与体积） */
 export interface NeteaseDownloadSource {
   url: string;

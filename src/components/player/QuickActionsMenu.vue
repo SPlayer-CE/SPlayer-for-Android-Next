@@ -2,6 +2,7 @@
 import { isAndroid } from "@/services/bridge";
 import { useStatusStore } from "@/stores/status";
 import { useSettingsStore } from "@/stores/settings";
+import { useUserStore } from "@/stores/user";
 import * as player from "@/core/player";
 import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
 import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
@@ -102,6 +103,15 @@ const onlineTTML = computed<boolean>({
     settings.setSystem("lyric.enableOnlineTTMLLyric", v);
   },
 });
+
+/** 动态封面开关：接口需登录态，未登录时禁用 */
+const dynamicCover = computed<boolean>({
+  get: () => settings.player.dynamicCover,
+  set: (v) => {
+    settings.player.dynamicCover = v;
+  },
+});
+const dynamicCoverDisabled = computed<boolean>(() => !useUserStore().isLoggedIn);
 
 /** 音量（0-1） */
 const volumePercent = computed(() => Math.round(status.volume * 100));
@@ -312,6 +322,19 @@ const onVolumeChange = (val: number): void => {
             <span>{{ t("quickToggle.wordHighlight") }}</span>
           </div>
           <SSwitch v-model="wordHighlight" class="qa-switch" :round="false" />
+        </div>
+
+        <div class="qa-row">
+          <div class="qa-row-label">
+            <IconLucideImage :size="18" class="qa-row-icon" />
+            <span>{{ t("quickToggle.dynamicCover") }}</span>
+          </div>
+          <SSwitch
+            v-model="dynamicCover"
+            class="qa-switch"
+            :round="false"
+            :disabled="dynamicCoverDisabled"
+          />
         </div>
 
         <div class="qa-row">

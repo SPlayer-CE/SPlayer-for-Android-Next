@@ -1,6 +1,7 @@
 import type { SettingCategory } from "@/types/settings-schema";
 import { useSettingsStore } from "@/stores/settings";
 import { useThemeStore } from "@/stores/theme";
+import { useUserStore } from "@/stores/user";
 import FontConfig from "@/components/settings/custom/FontConfig.vue";
 import BackgroundImagePicker from "@/components/settings/custom/BackgroundImagePicker.vue";
 import SidebarCustomizeConfig from "@/components/settings/custom/SidebarCustomizeConfig.vue";
@@ -332,6 +333,14 @@ const appearanceCategory: SettingCategory = {
             { value: "fullscreen", labelKey: "settings.coverLayout.fullscreen" },
           ],
           defaultValue: "default",
+        },
+        {
+          key: "dynamicCover",
+          type: "switch",
+          binding: { store: "settings", path: "player.dynamicCover" },
+          defaultValue: false,
+          // 动态封面接口需登录态，未登录直接禁用，避免开关看似可用却永远拉不到视频
+          disabled: () => !useUserStore().isLoggedIn,
         },
         {
           key: "coverLyricRatio",

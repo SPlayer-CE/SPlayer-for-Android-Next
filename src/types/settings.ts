@@ -227,6 +227,8 @@ export interface PlayerSettings {
   playerBgBeat: boolean;
   /** 全屏播放器封面布局 */
   coverLayout: CoverLayout;
+  /** 动态封面：部分歌曲可用视频封面替代静态封面（需登录） */
+  dynamicCover: boolean;
   /** 播放页封面/歌词分栏占比（0-1，封面侧宽度） */
   coverLyricRatio: number;
   /** 无歌词时自动居中封面并隐藏歌词区域 */
