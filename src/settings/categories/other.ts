@@ -8,6 +8,7 @@ const otherCategory: SettingCategory = {
   sections: [
     {
       id: "platformLogin",
+      platform: "desktop",
       tag: { text: "Beta" },
       items: [
         {
@@ -40,6 +41,7 @@ const otherCategory: SettingCategory = {
     },
     {
       id: "platformConfig",
+      platform: "desktop",
       tag: { text: "Beta" },
       items: [
         {
