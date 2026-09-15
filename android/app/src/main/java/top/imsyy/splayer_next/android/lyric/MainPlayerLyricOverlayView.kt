@@ -138,8 +138,16 @@ class MainPlayerLyricOverlayView
     private var mainTypeface: Typeface = Typeface.DEFAULT
     private var subTypeface: Typeface = Typeface.DEFAULT
 
+    // 合成加粗标记：字体族内没有更粗档位时由 paint 合成加粗（对齐 Web 端 font-synthesis: weight style）
+    private var mainSyntheticBold = false
+    private var subSyntheticBold = false
+
     // 每行主文本字体：按行 language（ja/ko/zh-CN/und-Latn）匹配分语种字体，对齐 Web 端 :lang 选择
     private var lineMainTypefaces: Array<Typeface> = emptyArray()
+    private var lineMainSyntheticBolds: BooleanArray = BooleanArray(0)
+
+    // 字体解析：补齐原生缺失的「导入字体加载 + font-family 链回退」，字重与合成标记均派生自解析结果
+    private val typefaceResolver = LyricTypefaceResolver(context)
 
     private class LineWordLayout(
       val chunkMergedStartMs: LongArray,
@@ -1326,6 +1334,7 @@ class MainPlayerLyricOverlayView
     ): Float {
       mainPaint.textSize = contentMetrics.main.textSize
       mainPaint.typeface = lineMainTypeface(index)
+      mainPaint.isFakeBoldText = lineMainSyntheticBold(index)
       val useStaticAlphaLayer = enableWordHighlight && !isWordByWordLine(line)
       // H-4: 行透明度统一烤进 paint,无模糊时不再需要整行离屏层；
       // 启用离屏层时烤全亮，由层 alpha 一次性乘行透明度，避免与 paint alpha 相乘成 alpha²
@@ -2234,6 +2243,7 @@ class MainPlayerLyricOverlayView
       subPaint.textSize = romanSize
       // 词级罗马音位于主行内，继承行字体（对齐 Web mainDiv 的 :lang 字体），mainPaint.typeface 由 drawMainText 按行设置
       subPaint.typeface = mainPaint.typeface
+      subPaint.isFakeBoldText = mainPaint.isFakeBoldText
       subPaint.shader = null
       if (blurRadius > 0.5f) {
         subPaint.maskFilter = blurController.blurMaskFilter(blurRadius)
@@ -2414,6 +2424,7 @@ class MainPlayerLyricOverlayView
       if (rubyText.isEmpty()) return
       rubyPaint.textSize = mainTextSize * 0.5f
       rubyPaint.typeface = mainPaint.typeface
+      rubyPaint.isFakeBoldText = mainPaint.isFakeBoldText
       // 宽度复用布局期缓存(同字号同字体的纯函数结果)，未命中时测量并回填
       val textWidth =
         rubyWordWidthCache[word]
@@ -2576,6 +2587,7 @@ class MainPlayerLyricOverlayView
       // 对齐 AMLL matrix3d 合成层「不重光栅化、仅整体变换」的语义
       emphasisPaint.textSize = mainPaint.textSize
       emphasisPaint.typeface = lineMainTypeface(lineIndex)
+      emphasisPaint.isFakeBoldText = lineMainSyntheticBold(lineIndex)
       emphasisPaint.hinting = Paint.HINTING_OFF
 
       for (i in chars.indices) {
@@ -2745,6 +2757,7 @@ class MainPlayerLyricOverlayView
       if (subLines.isEmpty()) return
 
       subPaint.typeface = subTypeface
+      subPaint.isFakeBoldText = subSyntheticBold
       // 对齐 Web 引擎 .lp-sub: opacity = pass × 0.3，随 passAlpha 淡出
       subPaint.color = applyAlpha(textColor, lineAlpha * 0.3f)
       subPaint.shader = null
@@ -3815,9 +3828,12 @@ class MainPlayerLyricOverlayView
       // H-1: 词宽缓存随布局失效（按 Typeface 分桶，逐行字体后桶数会增长）
       wordTextWidthByFont.clear()
       hasDuetLinesCached = lyricLines.any { it.isDuet }
-      mainTypeface = createTypeface(fontFamily, fontWeight)
+      val globalFont = typefaceResolver.resolve(fontFamily, fontWeight)
+      mainTypeface = globalFont.typeface
+      mainSyntheticBold = globalFont.syntheticBold
       // 修复：翻译和罗马音也应该使用用户设置的字重，而不是固定 500
-      subTypeface = createTypeface(fontFamily, fontWeight)
+      subTypeface = mainTypeface
+      subSyntheticBold = mainSyntheticBold
       if (lyricLines.isEmpty() || viewportWidth <= 0) {
         lineWordLayouts = emptyArray()
         lineSubLinesCache = emptyArray()
@@ -3826,14 +3842,17 @@ class MainPlayerLyricOverlayView
         lineHeightsCache = FloatArray(0)
         lineHasRomanCache = BooleanArray(0)
         lineMainTypefaces = emptyArray()
+        lineMainSyntheticBolds = BooleanArray(0)
         lineWordEffectEndCache = LongArray(0)
         lineBgAboveCache = BooleanArray(0)
         return
       }
       val count = lyricLines.size
       lineWordLayouts = arrayOfNulls(count)
-      lineMainTypefaces =
-        Array(count) { i -> createTypeface(resolveLineFontFamily(lyricLines[i].language), fontWeight) }
+      val lineFonts =
+        Array(count) { i -> typefaceResolver.resolve(resolveLineFontFamily(lyricLines[i].language), fontWeight) }
+      lineMainTypefaces = Array(count) { i -> lineFonts[i].typeface }
+      lineMainSyntheticBolds = BooleanArray(count) { i -> lineFonts[i].syntheticBold }
       lineSubLinesCache = Array(count) { i -> buildSubLines(lyricLines[i]) }
       lineHasRomanCache =
         BooleanArray(count) { i ->
@@ -4553,6 +4572,13 @@ class MainPlayerLyricOverlayView
     private fun lineMainTypeface(index: Int): Typeface = if (index in lineMainTypefaces.indices) lineMainTypefaces[index] else mainTypeface
 
     /**
+     * 取第 index 行是否需要合成加粗，越界回退全局主文本
+     * @param index - 歌词行索引
+     */
+    private fun lineMainSyntheticBold(index: Int): Boolean =
+      if (index in lineMainSyntheticBolds.indices) lineMainSyntheticBolds[index] else mainSyntheticBold
+
+    /**
      * 按行语言匹配分语种字体，对齐 Web 端 :lang(zh/ja/ko/und-Latn) 选择器
      * @param language - 行 BCP 47 语言标签
      * @returns 匹配到的字体族，未配置分语种字体时回退全局字体族
@@ -4566,23 +4592,6 @@ class MainPlayerLyricOverlayView
         language.startsWith("und-Latn") -> fontFamilyLatin ?: fontFamily
         else -> fontFamily
       }
-    }
-
-    private fun createTypeface(
-      family: String?,
-      weight: Int,
-    ): Typeface {
-      // 对齐 Web 引擎 font-synthesis: weight style，使用 API 28+ 细粒度字重 API
-      // 旧实现只支持 BOLD/NORMAL 二值，无法呈现 100-900 的中间档（500/600/800 等）
-      // Typeface.create 的 weight 硬限制为 1-1000，超过会抛 IllegalArgumentException，渲染前钳制到 1000
-      val w = weight.coerceIn(100, 1000)
-      val base =
-        if (family.isNullOrBlank()) {
-          Typeface.DEFAULT
-        } else {
-          Typeface.create(family, Typeface.NORMAL)
-        }
-      return Typeface.create(base, w, false)
     }
 
     private fun applyAlpha(
