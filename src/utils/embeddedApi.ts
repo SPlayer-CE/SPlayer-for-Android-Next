@@ -187,3 +187,20 @@ export const waitForEmbeddedApiReady = async (): Promise<boolean> => {
   // 不抛异常：即使 embedded API 不可用，也让应用正常挂载
   return embeddedApiReadyPromise;
 };
+
+let embeddedCookieReadyPromise: Promise<void> | null = null;
+
+export const setEmbeddedCookieReadyPromise = (p: Promise<void>): void => {
+  embeddedCookieReadyPromise = p;
+};
+
+export const waitForEmbeddedCookieReady = async (): Promise<void> => {
+  if (embeddedCookieReadyPromise) {
+    try {
+      await embeddedCookieReadyPromise;
+    } catch {
+      // 捕获未处理异常，不阻塞调用链路
+    }
+  }
+};
+

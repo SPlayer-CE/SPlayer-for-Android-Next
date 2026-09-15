@@ -26,7 +26,11 @@ import {
   isAndroidNative,
 } from "./services/bridge";
 import bridge from "./services/bridge";
-import { EMBEDDED_API_PORT, waitForEmbeddedApiReady } from "./utils/embeddedApi";
+import {
+  EMBEDDED_API_PORT,
+  waitForEmbeddedApiReady,
+  setEmbeddedCookieReadyPromise,
+} from "./utils/embeddedApi";
 
 const pinia = createPinia();
 pinia.use(piniaPersistedstate);
@@ -77,6 +81,7 @@ if (isAndroid) {
     .catch((err) => {
       console.warn("[embedded-api] not available, some features may be limited:", err);
     });
+  setEmbeddedCookieReadyPromise(embeddedApiCookieReady);
 }
 
 // 应用级 effect scope：setup store 内的 onScopeDispose 需要活跃作用域才能注册，
