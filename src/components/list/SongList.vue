@@ -62,6 +62,8 @@ const props = withDefaults(
     hasMore?: boolean;
     /** 触底加载中 */
     loadingMore?: boolean;
+    /** 列表标识：同页面内多个互斥列表（不同 tab / 日期）用于区分各自的滚动记忆位置 */
+    scrollKey?: string | number;
   }>(),
   {
     searchQuery: "",
@@ -360,6 +362,7 @@ defineExpose({
         :item-height="useMobileLayout ? 76 : 88"
         :padding-bottom="listPaddingBottom"
         :get-item-key="(item: Track) => item.id"
+        :scroll-key="scrollKey"
         item-fixed
         height="100%"
         @scroll="onScroll"

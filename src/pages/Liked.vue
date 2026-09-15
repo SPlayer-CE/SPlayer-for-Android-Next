@@ -198,6 +198,7 @@ const handleMoreMenu = (key: string): void => {
           :items="localTracks"
           :search-query="searchQuery"
           :show-size="false"
+          :scroll-key="tab"
           source="local"
           enable-sort
         />
@@ -232,6 +233,7 @@ const handleMoreMenu = (key: string): void => {
           ref="songListRef"
           :items="user.likedPlaylistTracks"
           :search-query="searchQuery"
+          :scroll-key="tab"
           source="netease"
           :collection-id="user.likedPlaylistId ?? undefined"
           :playback-context="playbackContext"

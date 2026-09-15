@@ -29,6 +29,8 @@ export interface SVirtualListProps<T> {
   bufferSize?: number;
   /** 初始滚动到的索引 */
   defaultScrollIndex?: number;
+  /** 列表标识：同一页面内多个互斥列表（不同 tab / 不同日期）靠它区分各自的记忆位置 */
+  scrollKey?: string | number;
   /** 获取唯一键 */
   getItemKey?: (item: T, index: number) => string | number;
   /** 隐藏滚动条 */
@@ -206,8 +208,76 @@ const measureItemHeights = (): void => {
 
 const debouncedMeasure = useDebounceFn(measureItemHeights, 50);
 
+const route = useRoute();
+
+/**
+ * 滚动位置记忆：存于模块级，页面未走 KeepAlive 缓存而直接销毁时依然可恢复。
+ * 键由「路由 fullPath + 宿主组件链路」组成，宿主链路保证同一页面内的多个列表互不干扰。
+ */
+const scrollMemory = new Map<string, number>();
+
+/** 条目上限，超出后按写入顺序淘汰最早的一条 */
+const SCROLL_MEMORY_LIMIT = 50;
+
+/** 宿主组件链路，实例销毁重建后保持稳定 */
+const hostInstancePath = ((): string => {
+  const names: string[] = [];
+  for (let instance = getCurrentInstance(); instance; instance = instance.parent) {
+    const type = instance.type as { name?: string; __name?: string };
+    names.push(type.name ?? type.__name ?? "anonymous");
+  }
+  return names.reverse().join("/");
+})();
+
+/** 记忆键随路由实时变化，query 变化（搜索词、tab）后不会沿用旧位置 */
+const scrollMemoryKey = computed(() => {
+  const suffix = props.scrollKey === undefined ? "" : `::${props.scrollKey}`;
+  return `${route.fullPath}::${hostInstancePath}${suffix}`;
+});
+
+/** 记录滚动位置 */
+const rememberScrollPosition = (key: string, top: number): void => {
+  scrollMemory.delete(key);
+  scrollMemory.set(key, top);
+  if (scrollMemory.size > SCROLL_MEMORY_LIMIT) {
+    const oldest = scrollMemory.keys().next().value;
+    if (oldest !== undefined) scrollMemory.delete(oldest);
+  }
+};
+
+/** 待恢复的位置：列表内容高度不足时先挂起，等数据到位后重试 */
+let pendingRestoreTop = 0;
+
+/** 应用滚动位置，位置被内容高度钳制时挂起等待重试 */
+const applyScrollPosition = (target: number): void => {
+  const element = scrollRef.value;
+  if (!element) {
+    pendingRestoreTop = target;
+    return;
+  }
+  element.scrollTo({ top: target });
+  scrollTop.value = element.scrollTop;
+  calculateVisibleRange(element.scrollTop);
+  pendingRestoreTop = Math.abs(element.scrollTop - target) <= 1 ? 0 : target;
+};
+
+/** 读取记忆位置并应用 */
+const restoreScrollPosition = (): void => {
+  const target = scrollMemory.get(scrollMemoryKey.value) ?? 0;
+  if (target > 0) applyScrollPosition(target);
+};
+
+/** 数据或容器尺寸到位后重试挂起的恢复 */
+const retryPendingRestore = (): void => {
+  if (pendingRestoreTop <= 0) return;
+  const target = pendingRestoreTop;
+  pendingRestoreTop = 0;
+  nextTick(() => applyScrollPosition(target));
+};
+
 let rafId: number | null = null;
 let pendingScrollTarget: HTMLElement | null = null;
+let pendingScrollKey = "";
 
 const processScroll = (): void => {
   rafId = null;
@@ -216,6 +286,7 @@ const processScroll = (): void => {
   const { scrollTop: st, scrollHeight, clientHeight } = target;
   scrollTop.value = st;
   calculateVisibleRange(st);
+  rememberScrollPosition(pendingScrollKey, st);
   if (scrollHeight - st - clientHeight < 50) {
     emit("reachBottom");
   }
@@ -226,6 +297,8 @@ const handleScroll = (event: Event): void => {
   if (!target) return;
   emit("scroll", event);
   pendingScrollTarget = target;
+  // 记录事件发生时的记忆键，避免滚动帧回调被路由变化抢先而写错键
+  pendingScrollKey = scrollMemoryKey.value;
   if (rafId === null) {
     rafId = requestAnimationFrame(processScroll);
   }
@@ -309,11 +382,13 @@ watch(
   () => {
     initializeHeights();
     calculateVisibleRange(scrollTop.value);
+    retryPendingRestore();
   },
 );
 
 watch(viewportHeight, () => {
   calculateVisibleRange(scrollTop.value);
+  retryPendingRestore();
 });
 
 watch(
@@ -332,31 +407,28 @@ onMounted(() => {
     if (!props.itemFixed) measureItemHeights();
     // 重新计算
     if (viewportHeight.value > 0) calculateVisibleRange(scrollTop.value);
+    // 显式指定初始索引（如播放队列定位到当前曲目）时不恢复上次位置
+    if (props.defaultScrollIndex === undefined) restoreScrollPosition();
   });
 });
 
-/** 滚动位置 */
-let savedScrollTop = 0;
+/** 记录当前滚动位置：DOM 已脱离文档时 scrollTop 会归零，此时退回最近一次事件值 */
+const rememberCurrentScrollPosition = (): void => {
+  const domTop = scrollRef.value?.scrollTop ?? 0;
+  // 优先用最近一次滚动事件时的键：卸载发生在路由切换之后，实时键已指向新页面
+  const key = pendingScrollKey || scrollMemoryKey.value;
+  rememberScrollPosition(key, domTop > 0 ? domTop : scrollTop.value);
+};
 
-onDeactivated(() => {
-  const domTop = scrollRef.value?.scrollTop;
-  savedScrollTop = domTop && domTop > 0 ? domTop : scrollTop.value;
-});
+onDeactivated(rememberCurrentScrollPosition);
 
 /** 恢复滚动位置并重算可见范围 */
 onActivated(() => {
-  const targetTop = savedScrollTop > 0 ? savedScrollTop : scrollTop.value;
-  if (targetTop > 0) {
-    scrollTop.value = targetTop;
-    calculateVisibleRange(targetTop);
-    nextTick(() => {
-      scrollRef.value?.scrollTo({ top: targetTop });
-      calculateVisibleRange(targetTop);
-    });
-  }
+  restoreScrollPosition();
 });
 
 onUnmounted(() => {
+  rememberCurrentScrollPosition();
   if (rafId !== null) {
     cancelAnimationFrame(rafId);
     rafId = null;

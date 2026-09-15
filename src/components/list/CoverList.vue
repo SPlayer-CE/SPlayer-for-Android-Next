@@ -28,6 +28,8 @@ export interface CoverListProps {
   hasMore?: boolean;
   /** 触底加载中 */
   loadingMore?: boolean;
+  /** 列表标识：同页面内多个互斥列表（不同 tab / 分组）用于区分各自的滚动记忆位置 */
+  scrollKey?: string | number;
 }
 
 const props = withDefaults(defineProps<CoverListProps>(), {
@@ -120,6 +122,7 @@ const getRowKey = (row: Row): string => row.id;
     :get-item-key="getRowKey"
     :padding-top="paddingTop"
     :padding-bottom="virtualPaddingBottom"
+    :scroll-key="scrollKey"
     height="100%"
     @reach-bottom="emit('reachBottom')"
   >

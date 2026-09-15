@@ -155,6 +155,7 @@ onMounted(async () => {
       <div v-else-if="currentItems.length > 0" :key="tab" class="flex-1 min-h-0">
         <CoverList
           :items="currentItems"
+          :scroll-key="tab"
           :min-size="useMobileLayout ? 132 : 150"
           :padding-x="useMobileLayout ? 16 : 20"
           :padding-top="8"

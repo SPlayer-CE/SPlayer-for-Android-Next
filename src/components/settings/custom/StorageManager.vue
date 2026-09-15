@@ -76,7 +76,7 @@ const applyBackupPayload = async (payload: BackupPayload): Promise<boolean> => {
   if (payload.renderer) {
     const stores = ["settings", "theme", "data", "status"];
     for (const store of stores) {
-      // @ts-ignore
+      // @ts-ignore 恢复时按 store 名动态取值，renderer 为固定字段类型、无索引签名
       const state = payload.renderer[store];
       if (state !== undefined) {
         localStorage.setItem(store, JSON.stringify(state));

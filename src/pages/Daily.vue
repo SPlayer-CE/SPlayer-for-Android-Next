@@ -235,7 +235,12 @@ watch(
         :key="selectedDay.key"
         class="min-h-0 flex-1"
       >
-        <SongList ref="songListRef" :items="selectedDay.tracks" source="netease" />
+        <SongList
+          ref="songListRef"
+          :items="selectedDay.tracks"
+          :scroll-key="selectedDay.key"
+          source="netease"
+        />
       </div>
       <!-- 加载中 -->
       <div v-else-if="loading" key="loading" class="flex flex-1 items-center justify-center">

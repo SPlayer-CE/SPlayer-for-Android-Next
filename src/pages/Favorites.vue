@@ -410,6 +410,7 @@ watch(
           :items="currentItems"
           :type="listType"
           :virtual="activeTab !== 'video'"
+          :scroll-key="`${activeTab}-${playlistGroup}`"
           :min-size="listMinSize"
           :gap="useMobileLayout ? 14 : 20"
           :padding-x="useMobileLayout ? 16 : 20"
