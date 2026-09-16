@@ -122,6 +122,15 @@ import type {
 import type { UpdateApi, UpdateEvent } from "@shared/types/update";
 import type { PlaylistApi } from "@shared/types/playlist";
 import type { RecognitionApi } from "@shared/types/recognition";
+import {
+  cancelRecognition,
+  submitRecognitionPcm,
+  subscribeRecognition,
+} from "@/services/recognition/recognize";
+import {
+  cancelNativeRecognition,
+  startNativeRecognition,
+} from "@/services/recognition/nativeCapture";
 import type { TrackTags, TagEditRequest, TagWriteOutcome } from "@shared/types/tagEditor";
 import type { Platform } from "@shared/types/platform";
 import type {
@@ -3531,13 +3540,17 @@ const bridge = {
     clear: () => (androidWarn("playlist", "clear"), Promise.resolve()),
   } satisfies PlaylistApi,
 
-  // ── recognition（听歌识曲，Android 无桌面音频采集能力，整体降级不支持）─────
+  // ── recognition（听歌识曲：原生容器采集系统声音/麦克风，浏览器预览回落 WebView 麦克风）─────
   recognition: {
-    isSupported: () => Promise.resolve(false),
-    start: (_config) => (androidWarn("recognition", "start"), Promise.resolve(null)),
-    cancel: () => (androidWarn("recognition", "cancel"), Promise.resolve(null)),
-    submitPcm: (_pcm) => (androidWarn("recognition", "submitPcm"), Promise.resolve(null)),
-    onEvent: (_callback) => noopReturn(noop)(),
+    isSupported: () => Promise.resolve(isAndroidNative),
+    start: (config) => startNativeRecognition(config),
+    cancel: () => {
+      if (isAndroidNative) cancelNativeRecognition();
+      else cancelRecognition();
+      return Promise.resolve(null);
+    },
+    submitPcm: (pcm) => submitRecognitionPcm(pcm),
+    onEvent: (callback) => subscribeRecognition(callback),
   } satisfies RecognitionApi,
 
   // ── lanShare（局域网分享模式）──────────────────────────────────────────────

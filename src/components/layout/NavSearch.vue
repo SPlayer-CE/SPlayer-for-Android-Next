@@ -16,7 +16,6 @@ import IconLucideDisc from "~icons/lucide/disc";
 import IconLucideListMusic from "~icons/lucide/list-music";
 import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
 import IconLucideChevronDown from "~icons/lucide/chevron-down";
-import { isAndroid } from "@/services/bridge";
 
 const { t, locale } = useI18n();
 const router = useRouter();
@@ -579,9 +578,8 @@ onUnmounted(() => {
       </div>
     </Transition>
   </div>
-  <!-- 听歌识曲（依赖桌面端 audio-capture，Android 端隐藏） -->
+  <!-- 听歌识曲（桌面用原生 audio-capture，Android 用 WebView 麦克风采集） -->
   <SButton
-    v-if="!isAndroid"
     class="app-no-drag shrink-0"
     variant="tertiary"
     circle

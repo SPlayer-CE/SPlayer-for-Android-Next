@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 听歌识曲：麦克风与系统声音回采均需 RECORD_AUDIO，MODIFY_AUDIO_SETTINGS 供 WebView getUserMedia 授权；
+         系统声音回采（AudioPlaybackCapture）走 MediaProjection，Android 14+ 需 mediaProjection 类型前台服务 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <!-- Android 12+ (API 31+) 隐私归因：MediaSession/通知/缓存等敏感能力分类标记，
          消除系统 "AppOps: attributionTag not declared in manifest" 警告。
@@ -149,6 +154,12 @@
             android:name=".playback.DynamicIslandService"
             android:enabled="true"
             android:exported="false" />
+
+        <service
+            android:name=".capture.MediaProjectionCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <receiver
             android:name=".playback.PlaybackActionReceiver"
