@@ -109,6 +109,9 @@ export const submitRecognitionPcm = async (pcm: Float32Array): Promise<void> => 
   let candidates: RecognitionCandidate[] = [];
   for (const segment of segments) {
     if (token !== sessionToken) return;
+    // 每个窗口前让出事件循环：AFP WASM 计算密集，连续多窗长时间阻塞主线程会导致波形动画掉帧
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (token !== sessionToken) return;
     const fingerprint = await fingerprintPcm(segment.pcm);
     if (token !== sessionToken) return;
     if (!fingerprint.ok) {

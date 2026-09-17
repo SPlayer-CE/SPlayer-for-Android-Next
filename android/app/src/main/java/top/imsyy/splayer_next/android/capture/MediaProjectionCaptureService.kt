@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import java.util.concurrent.atomic.AtomicBoolean
 import top.imsyy.splayer_next.android.R
 
 /**
@@ -33,7 +34,22 @@ class MediaProjectionCaptureService : Service() {
   private val captureManager = AudioCaptureManager()
   private var projection: MediaProjection? = null
 
+  /** stopCapture 会从采集线程/onDestroy/投影回调多处触发，防重入确保只清理一次 */
+  private val stopped = AtomicBoolean(false)
+
   override fun onBind(intent: Intent?): IBinder? = null
+
+  override fun onCreate() {
+    super.onCreate()
+    // 立即在主线程升级前台：延迟到 onStartCommand 在系统资源紧张时可能触发
+    // Android 14+ 的 ForegroundServiceDidNotStartInTimeException（对齐 PlaybackService 做法）
+    ServiceCompat.startForeground(
+      this,
+      NOTIFICATION_ID,
+      buildNotification(),
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+    )
+  }
 
   @Suppress("DEPRECATION")
   override fun onStartCommand(
@@ -41,13 +57,6 @@ class MediaProjectionCaptureService : Service() {
     flags: Int,
     startId: Int,
   ): Int {
-    // 时序要求：必须先以前台服务升级，再获取 MediaProjection
-    ServiceCompat.startForeground(
-      this,
-      NOTIFICATION_ID,
-      buildNotification(),
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
-    )
     val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
     val data = intent?.getParcelableExtra<Intent>(EXTRA_DATA)
     val durationMs = intent?.getIntExtra(EXTRA_DURATION_MS, DEFAULT_DURATION_MS) ?: DEFAULT_DURATION_MS
@@ -84,8 +93,12 @@ class MediaProjectionCaptureService : Service() {
     super.onDestroy()
   }
 
-  /** 停止采集、投影与前台服务（幂等，可从采集线程/主线程/投影回调重入） */
+  /**
+   * 停止采集、投影与前台服务（幂等）：先 cancel 同步释放 AudioRecord，再停 MediaProjection，
+   * 避免先销毁父级投影导致底层录音设备释放异常/Binder 死锁。
+   */
   private fun stopCapture() {
+    if (!stopped.compareAndSet(false, true)) return
     captureManager.cancel()
     projection?.let { runCatching { it.stop() } }
     projection = null

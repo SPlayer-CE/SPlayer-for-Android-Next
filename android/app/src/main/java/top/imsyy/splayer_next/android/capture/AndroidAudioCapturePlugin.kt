@@ -119,6 +119,11 @@ class AndroidAudioCapturePlugin : Plugin() {
     call.resolve()
   }
 
+  /**
+   * 派发采集事件到 JS。retainUntilConsumed 一律用 false：监听器在 startCapture 前已注册，
+   * 会话内事件不会丢；若用 true，取消/关弹窗后原生派发的终止事件会驻留队列，
+   * 被下次会话的新监听器立即消费，导致新识别被上次残留的 Done(null) 秒退。
+   */
   private fun emitEvent(event: CaptureEvent) {
     val payload = JSObject()
     when (event) {
@@ -130,13 +135,13 @@ class AndroidAudioCapturePlugin : Plugin() {
       is CaptureEvent.Done -> {
         payload.put("eventType", "done")
         event.pcmBase64?.let { payload.put("data", it) }
-        notifyListeners(EVENT_NAME, payload, true)
+        notifyListeners(EVENT_NAME, payload)
       }
       is CaptureEvent.Error -> {
         payload.put("eventType", "error")
         payload.put("errorCode", event.code)
         payload.put("error", event.message)
-        notifyListeners(EVENT_NAME, payload, true)
+        notifyListeners(EVENT_NAME, payload)
       }
     }
   }

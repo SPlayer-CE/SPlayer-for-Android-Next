@@ -10,12 +10,15 @@ export type FingerprintResult = { ok: true; fingerprint: string } | { ok: false;
 
 let afpPromise: Promise<AfpModule | null> | null = null;
 
-/** 懒加载 AFP ESM 指纹库；加载失败缓存 null，避免每次识别重复尝试 */
+/** 懒加载 AFP ESM 指纹库；导入异常时清空缓存以允许后续识别重试，避免一次偶发失败导致永久不可用 */
 const loadAfp = (): Promise<AfpModule | null> => {
   if (afpPromise) return afpPromise;
   afpPromise = import("@root/resources/afp/afp.mjs")
     .then((mod: AfpModule) => (typeof mod.GenerateFP === "function" ? mod : null))
-    .catch(() => null);
+    .catch(() => {
+      afpPromise = null;
+      return null;
+    });
   return afpPromise;
 };
 
