@@ -110,7 +110,7 @@ class AudioCaptureManager {
     buildRecord: (Int, Int) -> AudioRecord?,
   ) {
     cancel()
-    val token = session.get()
+    val token = session.incrementAndGet()
     Thread({ runCapture(token, durationMs, onEvent, buildRecord) }, "audio-capture").start()
   }
 
@@ -166,8 +166,10 @@ class AudioCaptureManager {
         }
         runCatching { audioRecord.release() }
       }
-    // 终止事件在 AudioRecord 释放之后再发：系统源下保证 record 先于 MediaProjection 释放
-    onEvent(result)
+    // 终止事件在 AudioRecord 释放之后再发：仅当会话未被作废时才对外派发，避免已作废旧线程事件外溢
+    if (session.get() == token) {
+      onEvent(result)
+    }
   }
 
   @SuppressLint("MissingPermission")
