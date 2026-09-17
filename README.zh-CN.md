@@ -1,17 +1,17 @@
 <div align="center">
 
-<img alt="SPlayer-Next logo" width="120" height="120" src="public/icons/favicon.png" />
+<img alt="SPlayer for Android Next logo" width="120" height="120" src="public/icons/logo-next.png" />
 
-<h2>SPlayer-Next</h2>
+<h2>SPlayer for Android Next</h2>
 
-<p>🎵 跨平台桌面音乐播放器，支持丰富的歌词展现形式与广泛的音频格式</p>
+<p>🎵 现代化的 Android 移动端音乐播放器，基于 Capacitor + Vue 3 构建</p>
 
-<p>「<a href="https://github.com/SPlayer-Dev/SPlayer">SPlayer</a>」的继任版本</p>
+<p>融合 Android 原生音频插件、Kotlin 前台播放与音频回采服务，支持卓越的歌词展现形式与广泛的音频格式</p>
 
-[![Stars](https://img.shields.io/github/stars/SPlayer-Dev/SPlayer-Next?style=flat)](https://github.com/SPlayer-Dev/SPlayer-Next/stargazers)
-[![Release](https://img.shields.io/github/v/release/SPlayer-Dev/SPlayer-Next)](https://github.com/SPlayer-Dev/SPlayer-Next/releases)
-[![License](https://img.shields.io/github/license/SPlayer-Dev/SPlayer-Next)](https://github.com/SPlayer-Dev/SPlayer-Next/blob/main/LICENSE)
-[![Issues](https://img.shields.io/github/issues/SPlayer-Dev/SPlayer-Next)](https://github.com/SPlayer-Dev/SPlayer-Next/issues)
+[![Stars](https://img.shields.io/github/stars/SPlayer-CE/SPlayer-for-Android-Next?style=flat)](https://github.com/SPlayer-CE/SPlayer-for-Android-Next/stargazers)
+[![Release](https://img.shields.io/github/v/release/SPlayer-CE/SPlayer-for-Android-Next)](https://github.com/SPlayer-CE/SPlayer-for-Android-Next/releases)
+[![License](https://img.shields.io/github/license/SPlayer-CE/SPlayer-for-Android-Next)](https://github.com/SPlayer-CE/SPlayer-for-Android-Next/blob/Android/LICENSE)
+[![Issues](https://img.shields.io/github/issues/SPlayer-CE/SPlayer-for-Android-Next)](https://github.com/SPlayer-CE/SPlayer-for-Android-Next/issues)
 
 [English](./README.md) | **简体中文**
 
@@ -19,77 +19,124 @@
 
 ---
 
+## 官方文档与分发声明
+
+📖 **官方文档地址**：[https://next.sfa.l.cd/](https://next.sfa.l.cd/)
+
+> ### 官方分发域名与防骗声明
+>
+> 本项目的首要分发渠道为 GitHub 仓库；下列域名为开发组授权的二级分发域名，仅用于文档访问与下载分发：
+> - **Next Android 版文档**：`next.sfa.l.cd`
+> - **旧版 Android 文档**：`legacy.sfa.l.cd`
+>
+> 除上述域名与 GitHub 仓库外，以 `l.cd` 为根域的任何其他子域（包括但不限于 `sfa.l.cd` 下的其他子域）均与本项目及其开发组无关，亦从未被授权分发安装包、发布项目公告或提供任何形式的付费、代理与「客服」服务。
+>
+> 请谨防仿冒站点、二次打包或篡改的安装包，以及任何以项目名义进行的收费募集。因访问或信任非官方渠道而产生的一切纠纷、损失或法律风险，均由当事人自行承担，本项目及其开发组概不负责。
+
+---
+
+## 项目简介
+
+**SPlayer for Android Next** 是专为 Android 移动平台打造的新一代现代化音乐播放器。
+
+项目基于 **Capacitor + Vue 3 + TypeScript** 架构构建，通过深度定制的 Android 原生插件桥接操作系统底层能力：
+- **音频架构**：基于 Android 原生 **Media3 / ExoPlayer**，在专属 `SPlayerPlayback` 音频线程驱动播放、预加载优化与系统 `MediaSession` 集成；
+- **前台保活服务**：采用原生 Kotlin 实现的 `PlaybackService` 前台服务，无缝支持锁屏通知、耳机线控与稳定后台播放；
+- **双模歌词渲染**：结合 Android 原生 Canvas 硬件加速渲染层与 Web 物理动效引擎，支持逐行动态模糊与灵动岛悬浮歌词；
+- **内嵌移动运行时**：内置 Node.js Mobile 与轻量 NanoHTTPD 代理，在本地无缝处理在线音频解析、歌词检索与扩展插件。
+
+---
+
 ## 功能特性
 
-- 🎵 **广泛的格式支持** —— MP3、FLAC、WAV、AAC、OGG、APE 等，基于 FFmpeg 解码
-- 📝 **丰富的歌词** —— LRC / QRC / YRC / TTML，逐字高亮与翻译，支持桌面、灵动岛、任务栏歌词窗口
-- 🌐 **流媒体服务** —— Subsonic / Navidrome / Jellyfin / Emby（多服务器、自动连接）
-- 🖥️ **跨平台** —— Windows / macOS / Linux
-- 🎚️ **音乐频谱** —— 实时 FFT 可视化
-- 🏷️ **元信息编辑** —— 编辑本地曲目标签与封面
-- ⬇️ **下载** —— 内置下载管理器
-- 🎧 **系统媒体集成** —— Windows SMTC / Linux MPRIS / macOS Now Playing + Discord RPC
-- ⚡ **高性能音频引擎** —— FFmpeg + Rust
-- 🎨 **自适应主题** —— 基于封面取色，Light / Dark / Auto
-- 📈 **Last.fm Scrobble**
+- 🎵 **广泛的音频格式支持** —— MP3、FLAC、WAV、AAC、OGG 等格式，基于 Media3 与 Android 原生音频解码
+- 📝 **丰富的歌词展现** —— 支持 TTML / QRC / KRC / YRC / LRC / LYS / ASS 等格式，逐字逐行动态高亮、自研逐行模糊过渡、灵动岛悬浮歌词
+- 📱 **现代移动端交互** —— 针对触屏精细优化的 FullPlayer 全屏播放器，流畅的 Hero 元素共享过渡动效与手势操控
+- 🛡️ **前台保活与播放服务** —— Kotlin 原生 `PlaybackService` 前台服务，锁屏控件与系统 MediaSession 通知，保障后台播放稳定不被系统清理
+- 🎙️ **音频回采与识曲** —— 集成 Android 原生音频采集（AudioRecord）与听歌识曲服务
+- 📁 **本地音乐管理** —— 基于 Android Storage Access Framework (SAF) + jaudiotagger 与原生 SQLite 高性能扫描管理本地歌曲
+- 🌐 **流媒体服务连接** —— Subsonic / Navidrome / Jellyfin / Emby 无缝连接与流式播放
+- 🎨 **自适应动态取色** —— 提取封面色彩实时生成沉浸式自适应背景，支持深色/浅色模式与全屏状态栏沉浸
+- 🎚️ **实时音乐频谱** —— 硬件低开销 FFT 实时音频可视化
+- ⚡ **嵌入式移动服务** —— 内置 Node.js Mobile 本地运行环境，驱动在线解析与插件生态
 
-## 开发
+---
+
+## 架构概览
+
+```
+Vue 3 渲染层 (UI / FullPlayer / Web 歌词)
+       │
+       ▼ (Capacitor 插件通信 / bridge.ts)
+Android 原生层 (Kotlin Plugins)
+  ├── PlaybackManager (独立 SPlayerPlayback 线程 + Media3/ExoPlayer)
+  ├── PlaybackService (前台常驻通知 + 系统 MediaSession)
+  ├── MainPlayerLyricOverlayView (原生 Canvas 硬件加速歌词渲染 + 动态模糊)
+  ├── LibraryScanner & Database (SAF 目录权限 + jaudiotagger + SQLite)
+  └── KotlinApiServer (NanoHTTPD 本地代理服务 :13962)
+       │
+       ▼ (本地端口代理)
+Node.js Mobile 运行时 (:13233)
+  └── 在线 API 解析、歌词检索与移动端插件运行时
+```
+
+---
+
+## 开发指南
 
 ### 环境要求
 
 - **Node.js** >= 22
 - **pnpm** >= 10
-- **Rust 工具链**（构建原生模块所需，见下）
-
-### 原生模块
-
-核心性能特性由 Rust 编写的原生模块提供：
-
-| 模块            | 说明                                               |
-| --------------- | -------------------------------------------------- |
-| `audio-engine`  | 高性能音频解码（FFmpeg）、播放、FFT 频谱、封面提取 |
-| `media-ctrl`    | 系统媒体控制 + Discord Rich Presence               |
-| `taskbar-lyric` | Windows 任务栏歌词原生渲染                         |
-
-`pnpm dev` 与 `pnpm build` 会自动编译原生模块。若只做 UI 开发想跳过，可设置 `SKIP_NATIVE_BUILD=true`。
+- **JDK** 21（Android 编译必须，低版本如 JDK 17 会报兼容性错误）
+- **Android SDK**（支持 API 34/35）与 **Android NDK**
 
 ### 快速开始
 
 ```bash
-# 1. 安装依赖
+# 1. 安装依赖（自动执行 nodejs-mobile 补丁）
 pnpm install
 
-# 2. 启动开发（先以 debug 构建原生模块，再启动 Electron）
-pnpm dev
+# 2. Web UI 开发预览（在浏览器中启动 Android 界面与开发版 API）
+pnpm exec vite --config vite.config.android.ts --host 0.0.0.0
 ```
 
-### 构建
+### Android 打包与构建
 
 ```bash
-pnpm build         # 完整构建：清理 → 原生模块 → 类型检查 → electron-vite
+# 完整安卓前端与嵌入式资源构建流水线
+# (build:web -> cap:sync -> build:android:node -> prepare:android:embedded)
+pnpm build:android
 
-pnpm build:win     # 打包 Windows
-pnpm build:mac     # 打包 macOS
-pnpm build:linux   # 打包 Linux（AppImage / deb / rpm / tar.gz / pacman）
+# 构建原生 APK（需进入 android 目录）
+cd android
+./gradlew assembleDebug    # 构建 Debug 版 APK
+./gradlew assembleRelease  # 构建 Release 版 APK
 ```
 
-> 默认仅构建当前架构，暂不支持交叉编译。
-
-### 其他脚本
+### 代码检查与规范
 
 ```bash
-pnpm typecheck        # tsc + vue-tsc（node + web 双目标）
-pnpm lint             # ESLint
-pnpm format           # Prettier
-pnpm build:native     # 仅构建 Rust 原生模块（加 `--dev` 为 debug 构建）
+pnpm typecheck        # TypeScript 类型检查 (tsc + vue-tsc)
+pnpm lint             # ESLint 静态检查
+pnpm format           # Prettier 代码格式化
+pnpm android:check    # Kotlin 静态检查与编译 (ktlintCheck + compileKotlin + detekt，需 JDK 21)
+pnpm android:format   # Kotlin 代码格式化 (ktlintFormat)
 ```
+
+---
 
 ## 致谢
 
-特别感谢以下让 SPlayer-Next 成为可能的开源项目：
+特别感谢以下让 SPlayer for Android Next 成为可能的开源项目与技术：
 
-- [applemusic-like-lyrics](https://github.com/Steve-xmh/applemusic-like-lyrics) —— 类 Apple Music 歌词显示组件库
-- [NeteaseCloudMusicApiEnhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) —— 网易云音乐 API 备份 + 增强
+- [Capacitor](https://capacitorjs.com/) —— 跨平台移动混合开发框架
+- [Media3 / ExoPlayer](https://github.com/androidx/media) —— 强大的 Android 媒体播放引擎
+- [applemusic-like-lyrics](https://github.com/Steve-xmh/applemusic-like-lyrics) —— 类 Apple Music 歌词渲染库
+- [NeteaseCloudMusicApiEnhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) —— 网易云音乐 API 增强
+- [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) —— Android 嵌入式 Node.js 运行时
+
+---
 
 ## 开源许可
 
@@ -100,6 +147,8 @@ pnpm build:native     # 仅构建 Rust 原生模块（加 `--dev` 为 debug 构�
 - **署名：** 必须保留原作者及版权信息。可为二次开发添加你自己的署名，但不得移除或篡改原始信息。
 - **商业用途：** 如用于售卖或其他盈利用途，必须提供源代码及原项目链接。由于本项目涉及第三方服务，商业使用可能存在法律风险。
 - **免责：** 本软件按「现状」提供，不附带任何形式的担保，详见 AGPL-3.0。
+
+---
 
 ## 免责声明
 

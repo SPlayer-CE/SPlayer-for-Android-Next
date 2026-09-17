@@ -1,14 +1,13 @@
 name: 遇到问题
-description: 关于使用过程中遇到的问题
+description: 提交在 Android 设备使用过程中遇到的 Bug 或异常
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
         ---
-        在此之前，我们默认你已经知道该如何提问。简而言之，**你要精确地描述问题并提供充足的信息**
-
-        此外，如果需要，你可以在右上角的齿轮图标中打开**开发者工具**为我们提供信息
+        感谢反馈问题！在提交前，请查阅 [官方文档](https://next.sfa.l.cd/) 并确认你已阅读过相关使用说明。
+        为了能够高效复现并解决问题，**请务必尽可能详细地提供设备型号、系统版本、CPU 架构以及复现步骤**。
 
   - type: checkboxes
     validations:
@@ -16,44 +15,84 @@ body:
     attributes:
       label: "检查清单"
       description: |
-        我们需要了解一些信息，你需要检查下面的检查项 <br />
-        **这里并不是每一个检查项都必要，根据你的真实情况勾选即可**
+        提交前请核对以下项目（根据实际情况勾选）：
       options:
-        - label: "我已检索仓库中所有的 Issues，确保我**没有重复提交问题**；或有相似 Issue，但我觉得我的情况不包含在那个相似 Issue 之内"
-        - label: "我已经找到了可以复现这个问题的方法，并且写在了下面的「具体信息」中"
+        - label: "我已检索仓库中现有的 Issues / Discussions，确认没有重复提交相同的问题"
+        - label: "我已经找到了可以复现该问题的方法，并在下方「具体信息与复现步骤」中详细记录"
         - label: "此问题可以在我的设备和当前环境中**稳定复现**"
-        - label: "此问题可以在最新版本 (Latest Release) 中复现"
-        - label: "此问题是在我更新到当前版本后**才**出现的"
+        - label: "此问题可以在最新版本（Latest Release 或最新 Actions 构建）中复现"
+        - label: "此问题是在更新到当前版本后**才**出现的"
 
   - type: input
+    id: device-model
     validations:
       required: true
     attributes:
-      label: "当前系统环境"
-      placeholder: "如：Windows 11"
+      label: "设备型号 (Device Model)"
+      description: "请提供发生问题的 Android 硬件设备型号"
+      placeholder: "如：小米 13 / Samsung Galaxy S23 / Google Pixel 8 / OnePlus 11"
 
   - type: input
+    id: os-version
     validations:
       required: true
     attributes:
-      label: "当前版本"
-      description: |
-        填写关于软件里的或 Releases 中版本号即可 <br />
-        如果是自行构建或从 GitHub Actions 下载的开发版，还需要提供 Commit ID
-      placeholder: "如：v1.0.0 或 ad045f5"
+      label: "系统版本与 ROM (Android Version & ROM)"
+      description: "请提供 Android 系统版本以及定制 ROM 名称与版本"
+      placeholder: "如：Android 14 (HyperOS 1.0.12) / Android 13 (OneUI 5.1) / 原生 Android 14 / LineageOS 21"
+
+  - type: dropdown
+    id: arch-abi
+    validations:
+      required: true
+    attributes:
+      label: "CPU 架构 / 安装包 ABI (Architecture ABI)"
+      description: "请选择你设备使用的架构或所安装的 APK ABI 类型"
+      options:
+        - "arm64-v8a（主流 64 位 Android 设备）"
+        - "armeabi-v7a（老旧 32 位 Android 设备）"
+        - "x86_64（Android 模拟器 / PC 体验环境）"
+        - "Universal（全架构通用安装包）"
+        - "不确定 / 未知"
+
+  - type: input
+    id: app-version
+    validations:
+      required: true
+    attributes:
+      label: "应用版本与安装来源 (App Version & Source)"
+      description: "请填写应用设置关于中的版本号，以及 APK 获取渠道（如 GitHub Releases、GitHub Actions、自行编译等）"
+      placeholder: "如：v1.2.0 (GitHub Releases) 或 Commit 7a8b9c (GitHub Actions)"
+
+  - type: dropdown
+    id: issue-category
+    validations:
+      required: true
+    attributes:
+      label: "问题涉及模块"
+      description: "请选择最符合该问题的主要模块"
+      options:
+        - "音频播放 / Media3 ExoPlayer 异常（无声 / 爆音 / 卡顿 / 跳曲）"
+        - "前台服务 / 后台播放中断 / 锁屏与系统 MediaSession 通知"
+        - "歌词渲染 / 原生 Canvas 歌词 / 逐行模糊 / 灵动岛悬浮歌词"
+        - "本地音乐扫描 / SAF 目录权限 / 标签与封面识别"
+        - "流媒体服务连接（Subsonic / Navidrome / Jellyfin / Emby）"
+        - "移动端界面交互 / 全屏播放器 (FullPlayer) / 旋转屏幕"
+        - "应用闪退 / 崩溃 (Crash) / 无响应 (ANR)"
+        - "其他功能异常"
 
   - type: textarea
-    id: other
+    id: reproduction-steps
+    validations:
+      required: true
     attributes:
-      label: "具体信息"
+      label: "具体信息与复现步骤"
       description: |
-        请填写完整的复现步骤和遇到的问题，还请尽量提供所有可能的信息，提供包括但不限于：
-
-         - 分步的复现步骤，可以使用 `1. xxx` (换行) `2. xxx` 的格式
-         - 哪里出现了问题（实际行为），正常应该是什么样的（预期行为）
-         - 截图（如果结合复现步骤还是无法详细表述，甚至可以录屏）
-         - 开发者工具中的控制台输出报错、程序的日志文件
-         - 出现问题的在线歌曲链接、出现问题的文件（本地歌曲、歌词等）的下载链接
-
-        等信息，以更好地帮助我们解决你的问题。更多详见 [调试模式与错误排查](https://splayer-next.imsyy.top/troubleshooting/debug.html)
-      placeholder: "请填写具体的复现步骤和遇到的问题"
+        请尽量提供详尽的信息，包括但不限于：
+        1. **详细复现步骤**：按 `1. xxx` `2. xxx` 的格式描述操作过程
+        2. **实际现象**：发生了什么错误或异常
+        3. **预期表现**：正常情况下应该怎样
+        4. **音频/文件信息**：如涉及特定曲目，请注明格式与采样率（如 FLAC 24bit/96kHz、MP3 等）
+        5. **日志与堆栈**：如遇到闪退或错误，请附带 Android logcat 日志或控制台输出
+        6. **截图 / 录屏**：直观展示问题现象
+      placeholder: "请在此详细填写复现步骤、问题表现与日志..."

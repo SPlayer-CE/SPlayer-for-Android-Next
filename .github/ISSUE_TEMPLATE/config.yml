@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: 官方文档
+    url: https://next.sfa.l.cd/
+    about: 查看 SPlayer for Android Next 官方使用指南与常见问题解答
   - name: 交流讨论
-    url: https://github.com/SPlayer-Dev/SPlayer-Next/discussions
-    about: 使用提问、日常交流与答疑请到讨论区发起
-  - name: 提问的艺术
+    url: https://github.com/SPlayer-CE/SPlayer-for-Android-Next/discussions
+    about: 使用提问、日常交流与答疑请前往社区讨论区发起
+  - name: 提问的智慧
     url: https://github.com/ryanhanwu/How-To-Ask-Questions-The-Smart-Way/blob/main/README-zh_CN.md
-    about: 默认所有 Issues 发起者均已了解此处的内容
+    about: 提问前建议阅读此指南，帮助他人更高效地理解你的问题

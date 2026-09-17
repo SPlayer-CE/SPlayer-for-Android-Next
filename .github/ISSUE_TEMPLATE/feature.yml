@@ -1,12 +1,13 @@
 name: 功能建议
-description: 提出新功能或改进建议
+description: 为 SPlayer for Android Next 提出新功能或体验改进建议
 labels: ["新功能"]
 body:
   - type: markdown
     attributes:
       value: |
         ---
-        感谢你为 SPlayer-Next 提出建议！请在提交前先检索已有 Issues 或 Discussions，避免重复提出相似需求。
+        感谢你为 SPlayer for Android Next 贡献想法！
+        提交前请先浏览 [官方文档](https://next.sfa.l.cd/) 以及仓库中的已有 Issues 或 [Discussions](https://github.com/SPlayer-CE/SPlayer-for-Android-Next/discussions)，避免重复提交相同建议。
 
   - type: checkboxes
     validations:
@@ -16,7 +17,22 @@ body:
       description: "在提交前请确认以下事项"
       options:
         - label: "我已检索过仓库中现有的 Issues / Discussions，确保没有相同或极为相似的功能建议"
-        - label: "我已经详细思考了该功能的合理性与使用场景，并在下方进行了清晰描述"
+        - label: "我已经详细思考了该功能的合理性与移动端使用场景，并在下方进行了清晰描述"
+
+  - type: dropdown
+    id: feature-category
+    validations:
+      required: true
+    attributes:
+      label: "功能涉及模块"
+      options:
+        - "移动端播放体验与音频引擎"
+        - "歌词展现（原生 Canvas 歌词 / 动效 / 灵动岛）"
+        - "移动端 UI / 交互动效 / 主题适配"
+        - "本地音乐库管理与扫描"
+        - "流媒体服务集成"
+        - "Android 系统特性与外设适配（耳机控制 / 桌面小组件 / 穿戴设备）"
+        - "其他建议"
 
   - type: textarea
     id: feature-description
@@ -24,8 +40,8 @@ body:
       required: true
     attributes:
       label: "功能描述"
-      description: "请清晰描述你希望添加的功能或现有功能的改进方案"
-      placeholder: "例如：希望支持某种功能、在某界面增加新的交互..."
+      description: "请清晰描述你希望添加的新功能或现有功能的改进方案"
+      placeholder: "例如：希望在全屏播放器中增加...，或者对本地扫描逻辑进行如下优化..."
 
   - type: textarea
     id: use-case
@@ -33,14 +49,14 @@ body:
       required: false
     attributes:
       label: "使用场景与价值"
-      description: "这个功能解决了什么问题？在什么情况下会用到？"
-      placeholder: "例如：当我在特定场景使用时，目前的体验不够便捷..."
+      description: "该功能主要解决什么场景下的痛点？能为 Android 用户带来哪些体验提升？"
+      placeholder: "例如：在移动端通勤场景下使用耳机时..."
 
   - type: textarea
     id: alternatives
     validations:
       required: false
     attributes:
-      label: "替代方案或补充说明"
-      description: "你是否考虑过其他可行的替代方案？或者有相关的参考设计/竞品截图？"
-      placeholder: "其他补充信息、参考截图等"
+      label: "替代方案或设计参考"
+      description: "你是否考虑过其他可行的替代方案？是否有相关 Android 应用的优秀设计作为参考（可附截图）？"
+      placeholder: "其他补充信息、参考截图或竞品实现方案等..."
