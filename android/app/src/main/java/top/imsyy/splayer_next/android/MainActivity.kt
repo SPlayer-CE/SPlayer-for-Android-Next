@@ -17,6 +17,7 @@ import com.getcapacitor.BridgeActivity
 import top.imsyy.splayer_next.android.cache.AndroidCachePlugin
 import top.imsyy.splayer_next.android.cache.AndroidSongCachePlugin
 import top.imsyy.splayer_next.android.cache.AudioPrefetchTtlIndex
+import top.imsyy.splayer_next.android.capture.AndroidAudioCapturePlugin
 import top.imsyy.splayer_next.android.download.AndroidDownloadPlugin
 import top.imsyy.splayer_next.android.library.AndroidLibraryPlugin
 import top.imsyy.splayer_next.android.lyric.AndroidLocalLyricPlugin
@@ -52,6 +53,7 @@ class MainActivity : BridgeActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     registerPlugin(AndroidNativePlaybackPlugin::class.java)
+    registerPlugin(AndroidAudioCapturePlugin::class.java)
     registerPlugin(AndroidClipboardPlugin::class.java)
     registerPlugin(AndroidAppIconPlugin::class.java)
     registerPlugin(AndroidLocalLyricPlugin::class.java)

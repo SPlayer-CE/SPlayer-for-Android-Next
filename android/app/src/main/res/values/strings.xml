@@ -15,4 +15,10 @@
     <string name="playback_notification_next">下一首</string>
     <string name="playback_notification_play_pause">播放/暂停</string>
     <string name="playback_notification_desktop_lyric">桌面歌词</string>
+
+    <!-- 听歌识曲系统声音采集前台服务通知（MediaProjectionCaptureService.kt） -->
+    <string name="capture_notification_channel_name">听歌识曲采集</string>
+    <string name="capture_notification_channel_description">识别系统声音时的采集前台服务通知渠道</string>
+    <string name="capture_notification_title">正在识别系统声音</string>
+    <string name="capture_notification_text">采集一小段系统声音用于听歌识曲</string>
 </resources>

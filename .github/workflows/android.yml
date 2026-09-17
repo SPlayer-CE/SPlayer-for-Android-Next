@@ -31,8 +31,13 @@ jobs:
           java-version: 21
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
+      - name: 构建 Web 并同步 Capacitor
+        # android 工程配置阶段依赖 cap sync 产物（capacitor-cordova-android-plugins/cordova.variables.gradle 等），
+        # 新克隆仓库必须先 build:web + cap sync，否则 gradle 配置阶段即报脚本不存在
+        run: pnpm build:web && pnpm cap:sync
       - name: 静态校验
-        run: pnpm android:check
+        # 直接用 ./gradlew：package.json 的 android:check 用裸 gradlew，在 Linux bash 下当前目录不在 PATH 会报 gradlew not found
+        run: cd android && ./gradlew ktlintCheck compileKotlin detekt
 
   # push Android 分支 / 打 tag 时构建 Release 签名 APK（分 ABI 出包）
   build:

@@ -7,6 +7,11 @@ declare module "*.vue" {
   export default component;
 }
 
+/** 网易云音频指纹库（Chrome 扩展血统，纯 WASM，无 Node 依赖），供 Android 渲染层听歌识曲使用 */
+declare module "@root/resources/afp/afp.mjs" {
+  export function GenerateFP(pcm: Float32Array): Promise<string>;
+}
+
 declare const __APP_VERSION__: string;
 declare const __APP_REPO_URL__: string;
 declare const __APP_REPO_NAME__: string;
