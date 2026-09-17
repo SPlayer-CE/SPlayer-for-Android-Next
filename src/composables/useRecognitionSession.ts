@@ -18,6 +18,7 @@ import {
 } from "@/services/recognition/microphoneCapture";
 import * as player from "@/core/player";
 import { useStatusStore } from "@/stores/status";
+import { isAndroid } from "@/services/bridge";
 
 /** 默认采集时长 */
 const DEFAULT_DURATION_MS = 8000;
@@ -49,8 +50,8 @@ export const useRecognitionSession = () => {
   const candidates = ref<RecognitionCandidate[]>([]);
   /** error 阶段的错误信息 */
   const error = ref<RecognitionError | null>(null);
-  /** 本次会话的采集来源 */
-  const source = ref<RecognitionSource>("system");
+  /** 本次会话的采集来源；Android 默认麦克风（RECORD_AUDIO 授权一次长期可用），系统声音回采每次需 MediaProjection 授权 */
+  const source = ref<RecognitionSource>(isAndroid ? "microphone" : "system");
 
   let unsubscribe: (() => void) | null = null;
   let abort = new AbortController();
