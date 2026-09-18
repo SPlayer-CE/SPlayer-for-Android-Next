@@ -3,7 +3,9 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, dev]
+    # Android 主线也纳入：否则直接 push / squash 合并到 Android 时不跑 format/lint/typecheck，
+    # 脏文件可绕过校验进入主线，再拖垮后续所有基于它的 PR（见 issue #8 的 README 实例）
+    branches: [main, dev, Android]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
