@@ -19,7 +19,7 @@ import {
   pluginsRootDir,
   pluginsScriptsDir,
 } from "../runtime-paths";
-import { loadScript } from "../../electron/main/plugins/loader";
+import { loadScript } from "./loader";
 import { pluginStorageDrop } from "./android-storage";
 import { fetchScript } from "./android-net";
 import { AndroidPluginSandbox } from "./android-host";

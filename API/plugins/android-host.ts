@@ -16,7 +16,7 @@ import type {
   SourceCapability,
 } from "../../shared/types/plugin";
 import { PluginErrorCodes } from "../../shared/defaults/plugin-api";
-import { installLxShim } from "../../electron/main/plugins/lx-shim";
+import { installLxShim } from "./lx-shim";
 import { dispatchAndroidHostCall } from "./android-host-dispatch";
 
 interface AndroidPluginLoadSpec {
