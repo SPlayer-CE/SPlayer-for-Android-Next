@@ -260,13 +260,19 @@ class KotlinApiServer(
     }
   }
 
+  /** WS 握手 Origin 白名单：复用 HTTP 的本机/LAN 来源判定，防 CSWSH（issue #11 #3） */
+  private fun isAllowedWsOrigin(origin: String): Boolean =
+    isAllowedLocalOrigin(origin) || (LanShareManager.config.enabled && isAllowedLanOrigin(origin))
+
   private fun isSensitiveNodeRoute(uri: String): Boolean =
     uri == "/api/apis/call" ||
       uri == "/api/apis/setCookie" ||
       uri == "/api/apis/clearSession" ||
       uri == "/api/apis/openLoginWeb" ||
-      // 插件安装等于向 Node vm 沙箱注入任意代码，必须仅限本机触发，禁止经 LAN 代理
-      uri.startsWith("/api/plugins/install")
+      // 配置读写含敏感参数、插件管理可改运行时行为（安装等同向 vm 沙箱注入代码），
+      // 均强制仅限本机回路，禁止经 LAN 代理（issue #11 #2）
+      uri.startsWith("/api/config/") ||
+      uri.startsWith("/api/plugins/")
 
   private fun extractExternalApiToken(session: IHTTPSession): String {
     val headerToken = session.headers["x-splayer-token"]?.trim().orEmpty()
@@ -917,6 +923,12 @@ class KotlinApiServer(
 
   override fun openWebSocket(handshake: IHTTPSession): WebSocket {
     val path = handshake.uri
+    // CSWSH 防护：本机连接虽免 token，但必须校验握手 Origin，拒绝恶意网页跨域直连本地 WS；
+    // 无 Origin 头的内部客户端（Kotlin/Node）不受影响（issue #11 #3）
+    val wsOrigin = handshake.headers["origin"]
+    if (wsOrigin != null && !isAllowedWsOrigin(wsOrigin)) {
+      throw NanoHTTPD.ResponseException(Response.Status.FORBIDDEN, "Unexpected WebSocket origin")
+    }
     // 外部 API WS：按 enabled/wsEnabled/allowLan 鉴权，独立于 LAN 共享 WS
     if (path == "/ws/external") {
       val externalConfig = ExternalApiManager.config
