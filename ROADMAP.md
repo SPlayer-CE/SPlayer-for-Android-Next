@@ -37,7 +37,7 @@
 | O3  | God 模块渐进拆分（mobile-server.ts / MainPlayerLyricOverlayView.kt / PlaybackManager.kt） | 待排期                                   |
 | O6  | bridge.ts 收敛 Android-only（分叉后死代码清理）                                           | 待评估（影响 upstream src/ cherry-pick） |
 | O7  | dev→Android 同步策略文档化（cherry-pick src/shared）                                      | 本文档即起点                             |
-| O4  | 测试补齐（recognize / match / AudioCaptureManager；streaming 迁移同步补）                 | 待排期                                   |
+| O4  | 测试补齐（recognize / match / AudioCaptureManager；streaming 迁移同步补）                 | 进行中（recognize.spec.ts，PR #17）      |
 
 ## 四、桌面能力迁移（M1–M5）
 
@@ -57,15 +57,15 @@
 
 - 插件生态：#285 playTrack、#284 market @grant ui、#258 源插件 id → 归 M4。
 - 歌词：#278 副行字号、#201 单曲循环进度 / 歌词重叠、#63 AMLL 滚动、#176 编码识别。
-- 移动端 UI：#149 / #263 小屏适配（P1）、#254 缩放。
+- 移动端 UI：#149 / #263 小屏适配（P1，需真机核验）、#254 缩放。
 - 音源 / 播放：#280 跨平台音源、#259 播放中断、#199 切换暂停、#249 收藏歌单。
-- 内嵌 API：#247 酷狗歌单 >300 截断（P1）、#207 代理 / 证书。
+- 内嵌 API：#247 酷狗歌单 >300 截断（**N/A：酷狗歌单非 Android 既有功能**）、#207 代理 / 证书。
 - i18n：#171 韩文显示。
 
 ## 六、执行路线
 
 1. **安全加固优先**：#12 / #13 评审合并、#6 产品决策。
-2. **路线 A（快赢）**：#247 酷狗歌单、#149 / #263 小屏适配、O4 测试补齐。
+2. **路线 A（快赢）**：O4 测试补齐（PR #17 进行中）、#149 / #263 小屏适配（需真机核验）；#247 经核实为桌面专属（N/A）。
 3. **路线 B（里程碑）**：M1 流媒体（Subsonic 打样）。
 4. **路线 C（架构）**：O7 同步文档化、O6 bridge 收敛、O3 God 模块拆分。
 
