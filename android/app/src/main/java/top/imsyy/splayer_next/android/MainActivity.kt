@@ -10,6 +10,7 @@ import android.os.Looper
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebSettings
+import android.webkit.WebView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -66,6 +67,9 @@ class MainActivity : BridgeActivity() {
     registerPlugin(ApiServerPlugin::class.java)
     registerPlugin(ExternalApiPlugin::class.java)
     super.onCreate(savedInstanceState)
+    if (BuildConfig.DEBUG) {
+      WebView.setWebContentsDebuggingEnabled(true)
+    }
     NativeLogConsoleBridge.start(bridge?.webView)
 
     // 版本升级时清除 WebView 资源缓存，避免旧 JS/CSS/HTML 残留导致误判问题

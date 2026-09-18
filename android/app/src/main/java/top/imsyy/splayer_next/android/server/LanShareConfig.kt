@@ -38,9 +38,16 @@ object LanShareManager {
     private set
 
   fun init(context: Context) {
-    val rootDir = File(context.getExternalFilesDir(null), "splayer-data")
+    val baseDir = context.noBackupFilesDir ?: context.filesDir
+    val rootDir = File(baseDir, "splayer-data")
     if (!rootDir.exists()) rootDir.mkdirs()
-    configPath = File(rootDir, "lan-share.json")
+    val newConfigFile = File(rootDir, "lan-share.json")
+    val legacyRootDir = context.getExternalFilesDir(null)?.let { File(it, "splayer-data") }
+    val legacyConfigFile = legacyRootDir?.let { File(it, "lan-share.json") }
+    if (!newConfigFile.exists() && legacyConfigFile != null && legacyConfigFile.exists()) {
+      runCatching { legacyConfigFile.copyTo(newConfigFile, overwrite = true); legacyConfigFile.delete() }
+    }
+    configPath = newConfigFile
     loadConfig()
     config.devices = Collections.synchronizedList(config.devices.toMutableList())
     if (config.enabled && config.wsToken.isBlank()) regenerateToken()

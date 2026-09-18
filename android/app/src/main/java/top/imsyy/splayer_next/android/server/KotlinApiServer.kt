@@ -232,11 +232,23 @@ class KotlinApiServer(
     return response
   }
 
-  private fun isAllowedLocalOrigin(origin: String): Boolean =
-    origin == "https://localhost" ||
+  private fun isAllowedLocalOrigin(origin: String): Boolean {
+    if (origin == "https://localhost" ||
       origin == "http://localhost" ||
       origin == "capacitor://localhost" ||
       origin == "http://127.0.0.1:13962"
+    ) {
+      return true
+    }
+    return try {
+      val parsed = URI(origin)
+      val scheme = parsed.scheme?.lowercase()
+      val host = parsed.host?.lowercase()
+      (scheme == "http" || scheme == "https") && (host == "localhost" || host == "127.0.0.1" || host == "::1")
+    } catch (e: Exception) {
+      false
+    }
+  }
 
   private fun isPrivateHost(host: String): Boolean {
     val normalized = host.lowercase()
@@ -260,21 +272,45 @@ class KotlinApiServer(
     }
   }
 
-  private fun isSensitiveNodeRoute(uri: String): Boolean =
+  private fun isSensitiveAction(uri: String): Boolean =
     uri == "/api/apis/call" ||
       uri == "/api/apis/setCookie" ||
       uri == "/api/apis/clearSession" ||
       uri == "/api/apis/openLoginWeb" ||
-      // 插件安装等于向 Node vm 沙箱注入任意代码，必须仅限本机触发，禁止经 LAN 代理
-      uri.startsWith("/api/plugins/install")
+      uri == "/api/config/getAll" ||
+      uri == "/api/config/set" ||
+      uri == "/api/config/replaceAll" ||
+      uri == "/api/config/reset" ||
+      uri.startsWith("/api/config/") ||
+      uri.startsWith("/api/plugins/")
 
-  private fun extractExternalApiToken(session: IHTTPSession): String {
+  private fun extractToken(session: IHTTPSession): String {
     val headerToken = session.headers["x-splayer-token"]?.trim().orEmpty()
     if (headerToken.isNotEmpty()) return headerToken
+    val authHeader = session.headers["authorization"]?.trim().orEmpty()
+    if (authHeader.startsWith("Bearer ", ignoreCase = true)) {
+      return authHeader.substring(7).trim()
+    }
     return session.parameters["token"]
       ?.firstOrNull()
       ?.trim()
       .orEmpty()
+  }
+
+  private fun extractExternalApiToken(session: IHTTPSession): String = extractToken(session)
+
+  private fun isAuthorizedLanRequest(session: IHTTPSession): Boolean {
+    val token = extractToken(session)
+    if (token.isBlank()) return false
+    val lanWsToken = LanShareManager.config.wsToken
+    if (LanShareManager.config.enabled && lanWsToken.isNotBlank() && token == lanWsToken) {
+      return true
+    }
+    val extToken = ExternalApiManager.config.token
+    if (ExternalApiManager.config.enabled && extToken.isNotBlank() && token == extToken) {
+      return true
+    }
+    return false
   }
 
   private fun escapeJson(value: String): String =
@@ -410,12 +446,19 @@ class KotlinApiServer(
       }
 
       if (uri.startsWith("/api/")) {
-        if (!isLocal && isSensitiveNodeRoute(uri)) {
-          consumeRequestBody(session)
-          return addCorsHeaders(
-            jsonResponse(Response.Status.FORBIDDEN, "FORBIDDEN", "Sensitive API requires local access"),
-            session,
-          )
+        if (!isLocal && isSensitiveAction(uri)) {
+          if (!isAuthorizedLanRequest(session)) {
+            consumeRequestBody(session)
+            val token = extractToken(session)
+            val status =
+              if (token.isNotBlank()) Response.Status.UNAUTHORIZED else Response.Status.FORBIDDEN
+            val message =
+              if (token.isNotBlank()) "Invalid token for sensitive API" else "Sensitive API requires local access or authorization"
+            return addCorsHeaders(
+              jsonResponse(status, if (status == Response.Status.UNAUTHORIZED) "UNAUTHORIZED" else "FORBIDDEN", message),
+              session,
+            )
+          }
         }
         return addCorsHeaders(proxyToNodeJs(session), session)
       }
@@ -917,6 +960,11 @@ class KotlinApiServer(
 
   override fun openWebSocket(handshake: IHTTPSession): WebSocket {
     val path = handshake.uri
+    val origin = handshake.headers["origin"]?.trim()
+    // 防御跨站 WebSocket 劫持 (CSWSH)：若存在 Origin 且为非本地可信来源，拒绝连接
+    if (origin != null && !isAllowedLocalOrigin(origin) && !isAllowedLanOrigin(origin)) {
+      throw NanoHTTPD.ResponseException(Response.Status.FORBIDDEN, "CSWSH protection: origin not allowed")
+    }
     // 外部 API WS：按 enabled/wsEnabled/allowLan 鉴权，独立于 LAN 共享 WS
     if (path == "/ws/external") {
       val externalConfig = ExternalApiManager.config
