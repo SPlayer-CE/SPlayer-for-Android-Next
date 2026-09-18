@@ -12,7 +12,7 @@ defaults:
     shell: bash
 
 jobs:
-  # PR 时仅做静态校验（ktlint / Kotlin 编译 / detekt），拦截破坏构建的改动
+  # PR 时做构建前置校验 + 静态检查（内嵌 Node 打包 / ktlint / Kotlin 编译 / detekt），拦截破坏构建的改动
   check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -35,6 +35,10 @@ jobs:
         # android 工程配置阶段依赖 cap sync 产物（capacitor-cordova-android-plugins/cordova.variables.gradle 等），
         # 新克隆仓库必须先 build:web + cap sync，否则 gradle 配置阶段即报脚本不存在
         run: pnpm build:web && pnpm cap:sync
+      - name: 校验内嵌 Node 服务打包
+        # API/ 是内嵌 Node.js Mobile 服务源，PR 常改它；其 esbuild 打包曾因对 electron/main 的隐性依赖回归而失败，
+        # 而 gradle 静态校验只覆盖 Kotlin，故单独守护 build:android:node
+        run: pnpm build:android:node
       - name: 静态校验
         # 直接用 ./gradlew：package.json 的 android:check 用裸 gradlew，在 Linux bash 下当前目录不在 PATH 会报 gradlew not found
         run: cd android && ./gradlew ktlintCheck compileKotlin detekt
