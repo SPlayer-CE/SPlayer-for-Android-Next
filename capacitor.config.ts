@@ -22,7 +22,8 @@ const config: AndroidCapacitorConfig = {
   android: {
     backgroundColor: "#00000000",
     allowMixedContent: true,
-    webContentsDebuggingEnabled: true,
+    // 远程调试改由 MainActivity 按 BuildConfig.DEBUG 门控，配置层默认关闭（issue #11 #5）
+    webContentsDebuggingEnabled: false,
     initialFocus: true,
   },
   plugins: {

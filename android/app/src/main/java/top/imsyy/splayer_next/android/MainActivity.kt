@@ -2,6 +2,7 @@ package top.imsyy.splayer_next.android
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +11,7 @@ import android.os.Looper
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebSettings
+import android.webkit.WebView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -66,7 +68,14 @@ class MainActivity : BridgeActivity() {
     registerPlugin(ApiServerPlugin::class.java)
     registerPlugin(ExternalApiPlugin::class.java)
     super.onCreate(savedInstanceState)
-    NativeLogConsoleBridge.start(bridge?.webView)
+    // 调试构建判定：本项目未开启 buildConfig 生成，用 FLAG_DEBUGGABLE 运行时判定（debug 包为真、release 为假）
+    val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    // WebView 远程调试仅调试构建开启；Release 关闭以防 USB 连接即被 DevTools 注入/提取 localStorage（issue #11 #5）
+    WebView.setWebContentsDebuggingEnabled(isDebugBuild)
+    // Release 包不向 WebView 控制台转发 Logcat 报错，收敛调试通道的信息外泄面（issue #11 #7）
+    if (isDebugBuild) {
+      NativeLogConsoleBridge.start(bridge?.webView)
+    }
 
     // 版本升级时清除 WebView 资源缓存，避免旧 JS/CSS/HTML 残留导致误判问题
     clearWebViewCacheOnUpgrade(savedInstanceState == null)
