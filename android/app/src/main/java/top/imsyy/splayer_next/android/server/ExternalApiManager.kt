@@ -34,7 +34,10 @@ object ExternalApiManager {
     val legacyRootDir = context.getExternalFilesDir(null)?.let { File(it, "splayer-data") }
     val legacyConfigFile = legacyRootDir?.let { File(it, "external-api.json") }
     if (!newConfigFile.exists() && legacyConfigFile != null && legacyConfigFile.exists()) {
-      runCatching { legacyConfigFile.copyTo(newConfigFile, overwrite = true); legacyConfigFile.delete() }
+      runCatching {
+        legacyConfigFile.copyTo(newConfigFile, overwrite = true)
+        legacyConfigFile.delete()
+      }
     }
     configPath = newConfigFile
     nodejsPort = nodePort
