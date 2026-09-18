@@ -26,6 +26,7 @@
 > ### 官方分发域名与防骗声明
 >
 > 本项目的首要分发渠道为 GitHub 仓库；下列域名为开发组授权的二级分发域名，仅用于文档访问与下载分发：
+>
 > - **Next Android 版文档**：`next.sfa.l.cd`
 > - **旧版 Android 文档**：`legacy.sfa.l.cd`
 >
@@ -40,6 +41,7 @@
 **SPlayer for Android Next** 是专为 Android 移动平台打造的新一代现代化音乐播放器。
 
 项目基于 **Capacitor + Vue 3 + TypeScript** 架构构建，通过深度定制的 Android 原生插件桥接操作系统底层能力：
+
 - **音频架构**：基于 Android 原生 **Media3 / ExoPlayer**，在专属 `SPlayerPlayback` 音频线程驱动播放、预加载优化与系统 `MediaSession` 集成；
 - **前台保活服务**：采用原生 Kotlin 实现的 `PlaybackService` 前台服务，无缝支持锁屏通知、耳机线控与稳定后台播放；
 - **双模歌词渲染**：结合 Android 原生 Canvas 硬件加速渲染层与 Web 物理动效引擎，支持逐行动态模糊与灵动岛悬浮歌词；

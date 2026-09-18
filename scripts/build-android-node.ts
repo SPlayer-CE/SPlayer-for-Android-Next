@@ -20,10 +20,7 @@ const excludedRuntimePackages = new Set<string>(["jsdom"]);
 const builtinModuleSet = new Set(
   builtinModules.flatMap((name) => [name, name.replace(/^node:/, "")]),
 );
-const aliasEntries = [
-  { prefix: "@shared/", targetDir: path.join(rootDir, "shared") },
-  { prefix: "@main/", targetDir: path.join(rootDir, "electron", "main") },
-];
+const aliasEntries = [{ prefix: "@shared/", targetDir: path.join(rootDir, "shared") }];
 
 const resolveAliasFilePath = async (targetPath: string): Promise<string> => {
   const candidates = [
@@ -242,23 +239,6 @@ await build({
   sourcemap: false,
   minify: true,
   plugins: [
-    {
-      // 嵌入式 bundle 复用了 electron 主进程的 kugou 模块（KRC 解码），
-      // 其 config.ts 依赖 @main/store（Electron 主进程配置，无法在 Node.js Mobile 运行）。
-      // 概念版登录是桌面 KG 场景，嵌入端恒走标准客户端标识，stub 让 isKugouConceptMode() 返回 false。
-      // 必须注册在 resolve-ts-path-aliases 之前，否则会被泛化的 @main/ 前缀先吃掉
-      name: "embedded-main-store-stub",
-      setup(buildContext) {
-        buildContext.onResolve({ filter: /^@main\/store$/ }, () => ({
-          path: "embedded-main-store-stub",
-          namespace: "embedded-stub",
-        }));
-        buildContext.onLoad({ filter: /.*/, namespace: "embedded-stub" }, () => ({
-          contents: "export const store = { get: () => undefined };",
-          loader: "js",
-        }));
-      },
-    },
     {
       name: "resolve-ts-path-aliases",
       setup(buildContext) {

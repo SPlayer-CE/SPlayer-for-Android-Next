@@ -1,26 +1,11 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": [
-    "electron.vite.config.*",
-    "vitest.config.*",
-    "electron/main/**/*",
-    "electron/preload/**/*",
-    "API/**/*",
-    "scripts/**/*",
-    "shared/**/*"
-  ],
+  "include": ["vitest.config.*", "API/**/*", "scripts/**/*", "shared/**/*"],
   "compilerOptions": {
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo",
-    "types": ["node", "electron-vite/node"],
+    "types": ["node"],
     "paths": {
-      "@main/*": ["./electron/main/*"],
-      "@shared/*": ["./shared/*"],
-      "@splayer/audio-engine": ["./native/audio-engine"],
-      "@splayer/audio-capture": ["./native/audio-capture"],
-      "@splayer/media-ctrl": ["./native/media-ctrl"],
-      "@splayer/taskbar-lyric": ["./native/taskbar-lyric"],
-      "@splayer/taskbar-thumbnail": ["./native/taskbar-thumbnail"],
-      "@splayer/opencc": ["./native/opencc"]
+      "@shared/*": ["./shared/*"]
     }
   }
 }

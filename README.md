@@ -26,6 +26,7 @@
 > ### Official Distribution Domains & Anti-Fraud Statement
 >
 > The primary distribution channel for this project is the GitHub repository. The following domains are authorized secondary distribution domains by the development team, strictly used for documentation access and download distribution:
+>
 > - **Next Android Documentation**: `next.sfa.l.cd`
 > - **Legacy Android Documentation**: `legacy.sfa.l.cd`
 >
@@ -40,6 +41,7 @@
 **SPlayer for Android Next** is a next-generation modern music player tailored specifically for the Android mobile platform.
 
 The project is built on **Capacitor + Vue 3 + TypeScript**, bridging low-level operating system capabilities through customized Android native plugins:
+
 - **Audio Architecture**: Powered by Android native **Media3 / ExoPlayer**, running on a dedicated `SPlayerPlayback` audio thread to manage playback, preloading, and system `MediaSession` integration;
 - **Foreground Playback Service**: Implemented in native Kotlin (`PlaybackService`) to ensure seamless lock screen controls, headset remote commands, and persistent background playback without system kills;
 - **Dual-Mode Lyric Engine**: Combining a hardware-accelerated native Android Canvas overlay with a Web physics animation engine, supporting dynamic line-by-line blur and floating dynamic island lyrics;

@@ -1,20 +1,11 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
-  "include": [
-    "src/env.d.ts",
-    "src/**/*",
-    "src/**/*.vue",
-    "windows/**/*",
-    "windows/**/*.vue",
-    "electron/preload/*.d.ts",
-    "shared/**/*"
-  ],
+  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "shared/**/*"],
   "compilerOptions": {
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.web.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["./shared/*"],
-      "@windows/*": ["./windows/*"]
+      "@shared/*": ["./shared/*"]
     },
     "types": ["./auto-imports.d.ts", "./components.d.ts"]
   }

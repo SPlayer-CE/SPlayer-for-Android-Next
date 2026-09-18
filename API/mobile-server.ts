@@ -25,8 +25,8 @@ import type {
   TopArtist,
   TopTrack,
 } from "../shared/types/stats";
-import { decodeKrc } from "../electron/main/apis/kugou/core/krc";
-import { decryptQrc } from "../electron/main/apis/qqmusic/core/qrc";
+import { decodeKrc } from "./lyric/krc";
+import { decryptQrc } from "./lyric/qrc";
 import {
   getSystemConfigStore as sharedGetSystemConfigStore,
   replaceSystemConfigStore as sharedReplaceSystemConfigStore,
