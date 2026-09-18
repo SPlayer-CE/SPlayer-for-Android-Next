@@ -22,7 +22,6 @@ const config: AndroidCapacitorConfig = {
   android: {
     backgroundColor: "#00000000",
     allowMixedContent: true,
-    webContentsDebuggingEnabled: true,
     initialFocus: true,
   },
   plugins: {

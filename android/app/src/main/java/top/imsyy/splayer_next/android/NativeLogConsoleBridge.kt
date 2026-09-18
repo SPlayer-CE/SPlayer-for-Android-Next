@@ -54,7 +54,8 @@ object NativeLogConsoleBridge {
   private var worker: Thread? = null
 
   fun start(webView: WebView?) {
-    if (webView == null || !running.compareAndSet(false, true)) return
+    // 仅在 Debug 构建中开启 Logcat 桥接透传，避免 Release 泄露系统环境与底层堆栈 (SEC-10)
+    if (!BuildConfig.DEBUG || webView == null || !running.compareAndSet(false, true)) return
     val webViewRef = WeakReference(webView)
     worker =
       Thread { runLogcat(webViewRef) }.apply {

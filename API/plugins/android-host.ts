@@ -541,9 +541,17 @@ export class AndroidPluginSandbox {
 
     const { Promise: sandboxPromise, AggregateError } = ensureModernPromiseApi();
 
+    // 安全代理包装 Buffer，阻断 .constructor 原型链向上溯源至宿主 Function/process (SEC-01)
+    const SafeBuffer = new Proxy(Buffer, {
+      get(target, prop, receiver) {
+        if (prop === "constructor") return undefined;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
     const sandboxGlobal: Record<string, unknown> = {
       splayer,
-      Buffer,
+      Buffer: SafeBuffer,
       ...makeTimerApi(this.record),
       queueMicrotask,
       Promise: sandboxPromise,
@@ -603,7 +611,21 @@ export class AndroidPluginSandbox {
 
     try {
       const compiledSource = transpilePluginSourceForLegacyVm(this.spec.source, this.spec.pluginId);
-      const script = new vm.Script(compiledSource, {
+      // 注入沙箱环境内部原型链固化，防止通过对象字面量原型向上遍历 Function
+      const sandboxPreamble = `
+        (function() {
+          try {
+            var O = Object;
+            var F = Function;
+            delete globalThis.process;
+            delete globalThis.require;
+            if (globalThis.Buffer) {
+              try { O.defineProperty(globalThis.Buffer, "constructor", { value: undefined, configurable: false, writable: false }); } catch(e){}
+            }
+          } catch(e){}
+        })();
+      `;
+      const script = new vm.Script(sandboxPreamble + compiledSource, {
         filename: `plugin-${this.spec.pluginId}.js`,
       });
       script.runInContext(context, { timeout: 5_000, breakOnSigint: false });
