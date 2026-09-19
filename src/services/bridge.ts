@@ -143,16 +143,10 @@ import { defaultSystemConfig } from "@shared/defaults/settings";
 import { defaultHotkeyConfig } from "@shared/defaults/hotkeys";
 import { useSettingsStore } from "@/stores/settings";
 import { toggleEruda, reportNetworkEntry } from "@/composables/useEruda";
+import { isAndroid, isAndroidNative, isAndroidPreview } from "@/utils/platform";
 
-// ─── 平台检测 ────────────────────────────────────────────────────────────────
-
-export const isAndroid =
-  typeof __SPLAYER_TARGET__ !== "undefined" && __SPLAYER_TARGET__ === "android";
-
-/** 真实 Capacitor Android 容器；浏览器预览 Android UI 时为 false。 */
-export const isAndroidNative = isAndroid && Capacitor.isNativePlatform();
-/** 浏览器预览 Android UI（如从设备打开主机 IP 页面）；此时无法运行嵌入式服务，不能充当广播主机。 */
-export const isAndroidPreview = isAndroid && !isAndroidNative;
+// 平台检测常量已抽到叶子模块 @/utils/platform 以打破循环依赖；re-export 保持既有导入路径
+export { isAndroid, isAndroidNative, isAndroidPreview };
 
 /**
  * 将 file:// / content:// URI 转为 Capacitor WebView 可加载的 URL。
