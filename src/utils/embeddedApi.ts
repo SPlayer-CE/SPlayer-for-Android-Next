@@ -1,4 +1,5 @@
-import { isAndroid, isAndroidNative, setAndroidEmbeddedApiAvailable } from "@/services/bridge";
+import { isAndroid, isAndroidNative } from "@/utils/platform";
+import { setAndroidEmbeddedApiAvailable } from "@/services/bridge";
 
 export const EMBEDDED_API_PORT = 13962;
 
