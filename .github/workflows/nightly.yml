@@ -1,0 +1,152 @@
+name: Android Nightly Release
+
+on:
+  schedule:
+    # 每天 UTC 16:00 (北京时间 00:00) 触发
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "强制触发 Nightly 构建（忽略当天提交检查）"
+        required: false
+        default: false
+        type: boolean
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-commits:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      nightly_date: ${{ steps.check.outputs.nightly_date }}
+      short_sha: ${{ steps.check.outputs.short_sha }}
+    steps:
+      - name: 检出 Android 分支
+        uses: actions/checkout@v4
+        with:
+          ref: Android
+          fetch-depth: 0
+
+      - name: 检查过去 24 小时内是否有新提交
+        id: check
+        run: |
+          DATE_TAG="$(TZ="Asia/Shanghai" date +"%Y%m%d")"
+          echo "nightly_date=$DATE_TAG" >> "$GITHUB_OUTPUT"
+
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "手动触发强制构建"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 检查过去 24 小时内的 commit
+          SINCE_DATE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          RECENT_COMMITS="$(git log --since="$SINCE_DATE" --oneline)"
+
+          if [ -n "$RECENT_COMMITS" ]; then
+            echo "检测到过去 24 小时内有新提交:"
+            echo "$RECENT_COMMITS"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "过去 24 小时内无新提交，跳过 Nightly 构建"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-release:
+    needs: check-commits
+    if: needs.check-commits.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出 Android 分支代码
+        uses: actions/checkout@v4
+        with:
+          ref: Android
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 配置签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
+            echo "已从 secrets 恢复正式签名密钥"
+          else
+            echo "未配置签名 secrets，回退 debug 签名（app/build.gradle 自带回退逻辑）"
+          fi
+
+      - name: 构建 WebView 与嵌入 Node 资源
+        run: pnpm build:android
+
+      - name: 构建 Release APK
+        run: cd android && ./gradlew assembleRelease --stacktrace
+
+      - name: 收集并重命名 Nightly APK
+        run: |
+          TAG_NAME="nightly-${{ needs.check-commits.outputs.nightly_date }}"
+          mkdir -p dist-android
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            src="android/app/build/outputs/apk/release/app-${abi}-release.apk"
+            if [ -f "$src" ]; then
+              cp "$src" "dist-android/SPlayer-Next-${TAG_NAME}-${abi}.apk"
+            fi
+          done
+          ls -la dist-android
+
+      - name: 生成 Nightly Release 说明
+        run: |
+          TAG_NAME="nightly-${{ needs.check-commits.outputs.nightly_date }}"
+          SINCE_DATE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          {
+            echo "## SPlayer Next Android Nightly 每夜构建 ($TAG_NAME)"
+            echo
+            echo "> ⚠️ **注意**：Nightly 为自动构建的每夜预览版本，可能包含未经充分测试的改动与潜在缺陷。如追求稳定体验，请安装正式发布版本。"
+            echo
+            echo "### 基础信息"
+            echo "- **构建基准分支**：\`Android\`"
+            echo "- **构建提交哈希**：[\`${{ needs.check-commits.outputs.short_sha }}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${{ github.sha }})"
+            echo "- **构建触发时间**：$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S") (CST)"
+            echo
+            echo "### 最近 24 小时提交日志"
+            git log --since="$SINCE_DATE" --no-merges --format="- %s (%h) by %an" | sed -E "s/@([A-Za-z0-9][A-Za-z0-9-]*)/\\\\@\\1/g" || echo "- 持续迭代优化"
+          } > nightly-notes.md
+          cat nightly-notes.md
+
+      - name: 发布 Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ needs.check-commits.outputs.nightly_date }}
+          name: SPlayer Next Nightly ${{ needs.check-commits.outputs.nightly_date }}
+          prerelease: true
+          files: dist-android/*.apk
+          body_path: nightly-notes.md
