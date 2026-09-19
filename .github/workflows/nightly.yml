@@ -2,8 +2,8 @@ name: Android Nightly Release
 
 on:
   schedule:
-    # 每天 UTC 16:00 (北京时间 00:00) 触发
-    - cron: "0 16 * * *"
+    # 每天北京时间 23:30 (UTC 15:30) 触发
+    - cron: "30 15 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -30,7 +30,7 @@ jobs:
           ref: Android
           fetch-depth: 0
 
-      - name: 检查过去 24 小时内是否有新提交
+      - name: 检查当天（北京时间）是否有新提交
         id: check
         run: |
           DATE_TAG="$(TZ="Asia/Shanghai" date +"%Y%m%d")"
@@ -45,16 +45,16 @@ jobs:
             exit 0
           fi
 
-          # 检查过去 24 小时内的 commit
-          SINCE_DATE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          # 检查当天 00:00:00（北京时间）以来的提交
+          SINCE_DATE="$(TZ="Asia/Shanghai" date -d 'today 00:00:00' +"%Y-%m-%dT%H:%M:%S+08:00")"
           RECENT_COMMITS="$(git log --since="$SINCE_DATE" --oneline)"
 
           if [ -n "$RECENT_COMMITS" ]; then
-            echo "检测到过去 24 小时内有新提交:"
+            echo "检测到当天（$DATE_TAG）有新提交:"
             echo "$RECENT_COMMITS"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           else
-            echo "过去 24 小时内无新提交，跳过 Nightly 构建"
+            echo "当天（$DATE_TAG）无新提交，跳过 Nightly 构建"
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -126,7 +126,7 @@ jobs:
       - name: 生成 Nightly Release 说明
         run: |
           TAG_NAME="nightly-${{ needs.check-commits.outputs.nightly_date }}"
-          SINCE_DATE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          SINCE_DATE="$(TZ="Asia/Shanghai" date -d 'today 00:00:00' +"%Y-%m-%dT%H:%M:%S+08:00")"
           {
             echo "## SPlayer Next Android Nightly 每夜构建 ($TAG_NAME)"
             echo
@@ -137,7 +137,7 @@ jobs:
             echo "- **构建提交哈希**：[\`${{ needs.check-commits.outputs.short_sha }}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${{ github.sha }})"
             echo "- **构建触发时间**：$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S") (CST)"
             echo
-            echo "### 最近 24 小时提交日志"
+            echo "### 当天提交日志"
             git log --since="$SINCE_DATE" --no-merges --format="- %s (%h) by %an" | sed -E "s/@([A-Za-z0-9][A-Za-z0-9-]*)/\\\\@\\1/g" || echo "- 持续迭代优化"
           } > nightly-notes.md
           cat nightly-notes.md
