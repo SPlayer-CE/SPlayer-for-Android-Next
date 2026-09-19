@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <!-- 收敛文件共享路径，遵循最小权限原则，避免目录遍历风险 (SEC-08) -->
+    <external-path name="my_images" path="images/" />
+    <cache-path name="my_cache_images" path="cache_images/" />
 </paths>

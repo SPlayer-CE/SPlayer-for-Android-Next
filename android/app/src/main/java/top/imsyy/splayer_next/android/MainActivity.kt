@@ -2,7 +2,6 @@ package top.imsyy.splayer_next.android
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -68,9 +67,8 @@ class MainActivity : BridgeActivity() {
     registerPlugin(ApiServerPlugin::class.java)
     registerPlugin(ExternalApiPlugin::class.java)
     super.onCreate(savedInstanceState)
-    // 调试构建判定：本项目未开启 buildConfig 生成（无 BuildConfig 类），用 FLAG_DEBUGGABLE 运行时判定
-    val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    if (isDebugBuild) {
+    // 调试构建判定：buildConfig 生成已开启（见 app/build.gradle 的 buildFeatures），统一使用 BuildConfig.DEBUG
+    if (BuildConfig.DEBUG) {
       WebView.setWebContentsDebuggingEnabled(true)
     }
     NativeLogConsoleBridge.start(bridge?.webView)
