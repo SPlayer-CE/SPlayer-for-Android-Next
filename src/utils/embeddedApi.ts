@@ -1,12 +1,16 @@
-import { isAndroid, isAndroidNative, setAndroidEmbeddedApiAvailable } from "@/services/bridge";
+import { isAndroid, isAndroidNative } from "@/utils/platform";
+import { setAndroidEmbeddedApiAvailable } from "@/services/bridge";
 
 export const EMBEDDED_API_PORT = 13962;
 
 // 真机固定走设备回环地址；浏览器预览跟随当前页面 hostname（支持局域网访问）
-const getEmbeddedApiHost = (): string => {
+export const getEmbeddedApiHost = (): string => {
   if (isAndroidNative) return "127.0.0.1";
   return typeof window !== "undefined" ? window.location.hostname || "127.0.0.1" : "127.0.0.1";
 };
+
+export const getEmbeddedApiOrigin = (): string =>
+  `http://${getEmbeddedApiHost()}:${EMBEDDED_API_PORT}`;
 
 export const EMBEDDED_API_ORIGIN = `http://${getEmbeddedApiHost()}:${EMBEDDED_API_PORT}`;
 
