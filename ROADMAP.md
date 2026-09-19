@@ -83,3 +83,22 @@
 - 迁移优先复用内嵌 API / 现有原生通路；不引入 Electron 专属依赖。
 - 平台不支持项：UI 按 isAndroid 隐藏 + bridge 统一契约，不静默 no-op。
 - 原生→JS 事件桥接：可取消异步任务的终止事件派发前必须校验会话 token。
+
+## 九、路线 B 预研（M1 流媒体迁移）
+
+取材：历史提交 `828eb988` 的 `electron/main/services/streaming/`（9 文件）。可移植性结论：
+
+- **可直接移植（纯 HTTP）**：`adapters/subsonic.ts`、`adapters/jellyfin.ts`、`adapters/resolve.ts`、`adapters/types.ts`——仅依赖 `node:crypto` 与 `@shared/types`，无 Electron；落地为内嵌 Node API 的 streaming 路由。
+- **需 Android 替换**：
+  - `config.ts`：`electron.safeStorage` → Android Keystore（Kotlin 插件暴露加解密）或内嵌侧 AES + Keystore 密钥；`@main/utils/paths` → 内嵌配置目录；logger → 内嵌日志。
+  - `sync.ts`：`@main/database`（better-sqlite3，Android Node 不可用）→ 复用 Kotlin 缓存 DB（`/api/cache/db` 路由）；`@main/utils/broadcast`（Electron IPC）→ Capacitor / 内嵌事件。
+  - `coverProtocol.ts`：Electron `streaming-cover://` → 内嵌 HTTP 路由 `/api/streaming/cover`，渲染层以 HTTP URL 加载。
+  - `connection.ts`：基本可移植（依赖 config）。
+- 渲染层：`stores/streaming.ts` 复用；bridge 的 streaming 桩（现 reject/空）改路由到内嵌 API。
+- 打样顺序：Subsonic 家族（adapter 最成熟）→ Jellyfin / Emby。
+
+## 十、路线 C 预研（架构清理）
+
+- **O6 bridge 收敛**：`bridge.ts` 3521 行、245 处 `electronApi()` 死调用（Android 恒 isAndroid）。收敛可大幅瘦身，但与 upstream `src/` cherry-pick 冲突面大；**若继续吸收 upstream 修复则暂缓 O6**，否则可收敛。
+- **O7 同步策略**：分叉后改按需 cherry-pick `src/`、`shared/`；流程（挑拣范围、冲突处理、回归验证）写入 CONTRIBUTING / 本文档。
+- **O3 God 模块渐进拆分**：`mobile-server.ts` 3095 行（lyric/plugins/config/cache/stats 路由混杂）→ 按域拆路由模块；`MainPlayerLyricOverlayView.kt` 4402 行（渲染+时间轴+分段）→ 拆 renderer/timeline/segment；`PlaybackManager.kt` 2730 行（播放+会话+通知+FFT/EQ）→ 拆 session/notification/processor。均小步拆分 + 测试护航。
