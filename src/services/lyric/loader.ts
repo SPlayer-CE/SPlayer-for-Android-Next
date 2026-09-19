@@ -128,8 +128,25 @@ const fetchFromPlatform = async (
   // apiFetch 的 res.json() 类型为 any，防御性检查 null/undefined
   if (!resp || !resp.ok || !resp.data) return null;
   const data = resp.data;
+  // 内容与格式一致性校验：防止后端推断失真（例如 QRC 标为 LRC，或 LRC 误标为 QRC）
+  let format = data.format;
+  if (data.content) {
+    const detected = detectFormat(data.content);
+    // 若原标为逐字格式但实际内容仅为标准行级 LRC（无逐字标签），及时纠偏为 lrc 避免 parser 解析为 0 行
+    if (format !== detected) {
+      if ((format === "qrc" || format === "krc" || format === "yrc") && detected === "lrc") {
+        format = "lrc";
+      } else if (
+        format === "lrc" &&
+        (detected === "qrc" || detected === "krc" || detected === "yrc")
+      ) {
+        format = detected;
+      }
+    }
+  }
+
   const result: OnlineResult = {
-    source: { source: "online", format: data.format, platform: data.platform },
+    source: { source: "online", format, platform: data.platform },
     input: {
       content: data.content,
       translation: data.translation,

@@ -2111,19 +2111,26 @@ const fetchProviderALyricById = async (id: string, mid?: string) => {
     let qrc: string | undefined;
     let lrc: string | undefined;
     if (mainDecrypted) {
-      if (resp.qrc_t === 0) lrc = mainDecrypted;
-      else qrc = mainDecrypted;
+      // 内容自检：优先按内容特征判断，避免 qrc_t 字段缺失或标错 (Issue #23)
+      const hasQrcPattern = /\[\d+,\d+\]/.test(mainDecrypted) || /<\d+,\d+>/.test(mainDecrypted);
+      if (resp.qrc_t === 0 || (!hasQrcPattern && /^\[\d+:\d+[.:]\d+\]/m.test(mainDecrypted))) {
+        lrc = mainDecrypted;
+      } else {
+        qrc = mainDecrypted;
+      }
     }
-    if (qrc && !lrc) {
+    // 若未拿到行级 lrc 且未拿到有效逐字 qrc（或 qrc 解密失败），主动拉取标准纯 LRC 版本做保底
+    if (!lrc) {
       try {
         const lrcResp = await callProviderAApi<{ lyric?: string }>(
           "music.musichallSong.PlayLyricInfo",
           "GetPlayLyricInfo",
           { ...baseParam, qrc: 0, qrc_t: 0 },
         );
-        lrc = tryDecryptProviderALyric(lrcResp.lyric);
-      } catch {
-        // 主歌词已命中，行级 LRC 失败不影响展示
+        const fetchedLrc = tryDecryptProviderALyric(lrcResp.lyric);
+        if (fetchedLrc) lrc = fetchedLrc;
+      } catch (lrcErr) {
+        console.warn("[embedded-api] provider-a fallback to LRC failed:", lrcErr);
       }
     }
     const main = pickProviderAFormatted(qrc, lrc);
@@ -2378,14 +2385,46 @@ const fetchProviderBLyricByHash = async (hash: string, name = "", durationMs?: n
   let lrc: string | undefined;
   let trans: string | undefined;
   let roma: string | undefined;
-  if (download.fmt === "krc") {
-    const parsed = await decodeKrc(download.content);
-    krc = parsed.krc;
-    lrc = parsed.lrc;
-    trans = parsed.trans;
-    roma = parsed.roma;
-  } else if (download.fmt === "lrc") {
-    lrc = Buffer.from(download.content, "base64").toString("utf8");
+  const rawFmt = String(download.fmt || "")
+    .trim()
+    .toLowerCase();
+
+  // 若 fmt 明确为 krc，或内容看起来像 base64 krc
+  if (rawFmt === "krc" || (!rawFmt && download.content)) {
+    try {
+      const parsed = await decodeKrc(download.content);
+      krc = parsed.krc;
+      lrc = parsed.lrc;
+      trans = parsed.trans;
+      roma = parsed.roma;
+    } catch (krcErr) {
+      console.warn("[embedded-api] provider-b decodeKrc failed, trying lrc fallback:", krcErr);
+      try {
+        // 解密失败降级尝试 base64 文本解码
+        const plain = Buffer.from(download.content, "base64").toString("utf8");
+        if (/^\[\d+:\d+[.:]\d+\]/m.test(plain)) {
+          lrc = plain;
+        }
+      } catch {}
+    }
+  } else if (rawFmt === "lrc") {
+    try {
+      lrc = Buffer.from(download.content, "base64").toString("utf8");
+    } catch (lrcErr) {
+      console.warn("[embedded-api] provider-b decode lrc failed:", lrcErr);
+    }
+  } else {
+    // 未知 fmt 时结合内容尝试解析
+    try {
+      const parsed = await decodeKrc(download.content);
+      krc = parsed.krc;
+      lrc = parsed.lrc;
+    } catch {
+      try {
+        const plain = Buffer.from(download.content, "base64").toString("utf8");
+        if (/^\[\d+:\d+[.:]\d+\]/m.test(plain)) lrc = plain;
+      } catch {}
+    }
   }
 
   const main = pickProviderBFormatted(krc, lrc);
