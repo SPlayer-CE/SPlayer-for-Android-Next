@@ -158,7 +158,34 @@ module.exports.getToken = async () => readToken()
       ...generateConfigLines.slice(anonymousBlockStart - 1, xeapiBlockStart - 1),
       ...generateConfigLines.slice(functionEnd),
     ];
-    await writeFile(generateConfigPath, reorderedLines.join("\n"), "utf8");
+    // 前移后取公钥发生在 register_anonimous 之前，而 global.deviceId 只在 register_anonimous
+    // 内部才被赋值；deviceId 为空时 key/get 会返回不含 sk 的响应，公钥文件写不进去，本会话所有
+    // xeapi 接口（含 song/url/v1）都会抛 xeapi public key is missing 导致播放失败，
+    // 因此取公钥前先兜底生成一个 deviceId（register_anonimous 之后会按自身逻辑覆盖）。
+    const reorderedSource = reorderedLines.join("\n");
+    const deviceIdImportAnchor =
+      "const { cookieToJson, generateRandomChineseIP } = require('./util/index')";
+    const publicKeyAnchor =
+      "const publicKey = await getXeapiPublicKey(currentPublicKey, global.deviceId)";
+    if (
+      !reorderedSource.includes(deviceIdImportAnchor) ||
+      !reorderedSource.includes(publicKeyAnchor)
+    ) {
+      throw new Error("generateConfig.js 结构变更，deviceId 兜底补丁无法应用");
+    }
+    await writeFile(
+      generateConfigPath,
+      reorderedSource
+        .replace(
+          deviceIdImportAnchor,
+          "const { cookieToJson, generateRandomChineseIP, generateDeviceId } = require('./util/index')",
+        )
+        .replace(
+          publicKeyAnchor,
+          "if (!global.deviceId) global.deviceId = generateDeviceId()\n    const publicKey = await getXeapiPublicKey(currentPublicKey, global.deviceId)",
+        ),
+      "utf8",
+    );
   }
 };
 
