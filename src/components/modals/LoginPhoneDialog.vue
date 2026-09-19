@@ -107,7 +107,7 @@ const onSendCaptcha = async (): Promise<void> => {
       toast.error(t("login.phoneCaptchaSendFailed"));
     }
   } catch (err) {
-    console.warn("[login] send captcha failed:", err);
+    console.warn("[login] captcha send failed:", err);
     toast.error(t("login.phoneCaptchaSendFailed"));
   } finally {
     sendingCaptcha.value = false;

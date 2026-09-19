@@ -382,6 +382,7 @@
     "qrTipDone": "登录成功",
     "qrTipUnknown": "状态异常，请重试",
     "qrRefresh": "刷新二维码",
+    "qrLoadFailed": "二维码加载失败，请重试",
     "autoFetch": "自动获取",
     "autoFetchTitle": "使用前告知",
     "autoFetchTip": "该功能无法保证账号绝对安全，请自行判断是否使用。打开窗口后如出现白屏或无法点击，请关闭并重试",
