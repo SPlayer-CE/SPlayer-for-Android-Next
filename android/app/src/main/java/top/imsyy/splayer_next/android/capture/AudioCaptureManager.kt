@@ -266,7 +266,7 @@ class AudioCaptureManager {
   }
 
   /** 单声道降采样：按输入/输出比例做窗口平均（低通 + 抽取），对齐桌面 downsample_mono */
-  private fun downsample(
+  internal fun downsample(
     input: FloatArray,
     inRate: Int,
     outRate: Int,
