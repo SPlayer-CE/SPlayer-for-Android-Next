@@ -49,6 +49,8 @@ const refresh = async (): Promise<void> => {
     if (props.active) resume();
   } catch (err) {
     console.error("[login] refresh qr code failed:", err);
+    qrUrl.value = "";
+    state.value = "waiting";
     loadError.value = true;
   } finally {
     refreshing.value = false;
