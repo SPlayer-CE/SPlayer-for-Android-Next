@@ -11,6 +11,7 @@ import {
 import http, { IncomingMessage, ServerResponse } from "http";
 import https from "https";
 import { createRequire } from "module";
+import os from "os";
 import path from "path";
 import { gunzipSync, inflateSync } from "zlib";
 import type { SystemConfig } from "../shared/types/settings";
@@ -2515,9 +2516,27 @@ const handleNeteaseRoute = async (
   const requestPath = pathname.replace(/^\/api\/netease\//, "");
   // ensureNeteaseApiConfig 必须在 loadNeteaseApi 之前执行：
   // request.js 在模块加载时同步读取 anonymous_token 文件，若文件不存在会直接抛异常
-  await ensureNeteaseApiConfig();
-  if (!loadNeteaseApi(requestPath)) {
-    sendJson(request, response, 404, { error: "API not found" });
+  try {
+    await ensureNeteaseApiConfig();
+    if (!loadNeteaseApi(requestPath)) {
+      sendJson(request, response, 404, { error: "API not found" });
+      return;
+    }
+  } catch (error: unknown) {
+    // 引导层（generateConfig/loadNeteaseApi）失败会同步抛出，无法进入下方业务 try；
+    // 单独捕获并打印 os.tmpdir() 与 anonymous_token 状态，方便真机日志一次定位根因
+    const errObj = error as { message?: string } | null;
+    const detail = String((errObj && errObj.message) || error);
+    console.error(
+      "[embedded-api] Netease API bootstrap failed",
+      requestPath,
+      error,
+      "tmpdir:",
+      os.tmpdir(),
+      "anonymous_token exists:",
+      existsSync(path.join(os.tmpdir(), "anonymous_token")),
+    );
+    sendJson(request, response, 500, { error: "netease_api_load_failed", detail });
     return;
   }
 
