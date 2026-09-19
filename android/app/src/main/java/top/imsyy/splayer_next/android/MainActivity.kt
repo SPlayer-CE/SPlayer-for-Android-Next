@@ -2,6 +2,7 @@ package top.imsyy.splayer_next.android
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +11,7 @@ import android.os.Looper
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebSettings
+import android.webkit.WebView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -66,6 +68,11 @@ class MainActivity : BridgeActivity() {
     registerPlugin(ApiServerPlugin::class.java)
     registerPlugin(ExternalApiPlugin::class.java)
     super.onCreate(savedInstanceState)
+    // 调试构建判定：本项目未开启 buildConfig 生成（无 BuildConfig 类），用 FLAG_DEBUGGABLE 运行时判定
+    val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    if (isDebugBuild) {
+      WebView.setWebContentsDebuggingEnabled(true)
+    }
     NativeLogConsoleBridge.start(bridge?.webView)
 
     // 版本升级时清除 WebView 资源缓存，避免旧 JS/CSS/HTML 残留导致误判问题
