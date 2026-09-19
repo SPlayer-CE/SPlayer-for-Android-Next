@@ -36,6 +36,12 @@ android {
         }
     }
     buildTypes {
+        // debug 包用 .debug 后缀与正式包并存、签名独立（走 AGP 默认 debug keystore）
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            minifyEnabled false
+        }
         release {
             minifyEnabled false
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
