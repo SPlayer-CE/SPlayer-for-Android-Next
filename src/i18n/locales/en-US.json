@@ -382,6 +382,7 @@
     "qrTipDone": "Signed in",
     "qrTipUnknown": "Unknown state, please retry",
     "qrRefresh": "Refresh QR code",
+    "qrLoadFailed": "Failed to load QR code, please retry",
     "autoFetch": "Auto fetch",
     "autoFetchTitle": "Before you continue",
     "autoFetchTip": "This feature can't guarantee account safety — use it at your own discretion. If the official page goes blank or unresponsive, close it and try again.",

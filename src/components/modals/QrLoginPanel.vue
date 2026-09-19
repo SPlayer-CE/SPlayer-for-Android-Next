@@ -12,6 +12,8 @@ const state = ref<QrLoginState>("waiting");
 const nickname = ref("");
 const avatarUrl = ref("");
 const refreshing = ref(false);
+/** 二维码获取失败标记，避免失败时停留在无限 loading 态 */
+const loadError = ref(false);
 
 const tip = computed(() => {
   if (state.value === "expired") return t("login.qrTipExpired");
@@ -23,6 +25,7 @@ const tip = computed(() => {
 const refresh = async (): Promise<void> => {
   if (refreshing.value) return;
   refreshing.value = true;
+  loadError.value = false;
   pause();
   if (state.value !== "expired") qrUrl.value = "";
   nickname.value = "";
@@ -44,6 +47,9 @@ const refresh = async (): Promise<void> => {
     }
     state.value = "waiting";
     if (props.active) resume();
+  } catch (err) {
+    console.error("[login] refresh qr code failed:", err);
+    loadError.value = true;
   } finally {
     refreshing.value = false;
   }
@@ -51,18 +57,22 @@ const refresh = async (): Promise<void> => {
 
 const poll = async (): Promise<void> => {
   if (!key.value) return;
-  const result = await props.adapter.check(key.value);
-  state.value = result.state;
-  nickname.value = result.nickname ?? nickname.value;
-  avatarUrl.value = result.avatarUrl ?? avatarUrl.value;
-  if (result.state === "expired") {
-    pause();
-    await refresh();
-    return;
-  }
-  if (result.state === "success") {
-    pause();
-    emit("success");
+  try {
+    const result = await props.adapter.check(key.value);
+    state.value = result.state;
+    nickname.value = result.nickname ?? nickname.value;
+    avatarUrl.value = result.avatarUrl ?? avatarUrl.value;
+    if (result.state === "expired") {
+      pause();
+      await refresh();
+      return;
+    }
+    if (result.state === "success") {
+      pause();
+      emit("success");
+    }
+  } catch (err) {
+    console.warn("[login] poll qr status failed:", err);
   }
 };
 
@@ -97,6 +107,15 @@ defineExpose({ pause, resume, refresh });
           state === 'expired' && 'opacity-40',
         ]"
       />
+      <div
+        v-else-if="loadError"
+        class="absolute inset-0 flex flex-col items-center justify-center gap-2 px-3 text-center"
+      >
+        <span class="text-xs font-medium text-gray-700">{{ t("login.qrLoadFailed") }}</span>
+        <SButton size="small" variant="outline" :loading="refreshing" @click="refresh">
+          {{ t("common.retry") }}
+        </SButton>
+      </div>
       <SLoading v-else class="absolute inset-0 m-auto size-6 text-gray-400" />
       <Transition name="fade">
         <div

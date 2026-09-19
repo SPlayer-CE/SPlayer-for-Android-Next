@@ -6,6 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [Android]
+    types: [opened, synchronize, labeled]
 
 defaults:
   run:
@@ -43,10 +44,20 @@ jobs:
         # 直接用 ./gradlew：package.json 的 android:check 用裸 gradlew，在 Linux bash 下当前目录不在 PATH 会报 gradlew not found
         run: cd android && ./gradlew ktlintCheck compileKotlin detekt
 
-  # push Android 分支 / 打 tag 时构建 Release 签名 APK（分 ABI 出包）
+  # push Android 分支 / 打 v* tag 时构建签名 APK（分 ABI 出包）
+  # matrix.variant=release：分支 push 和 tag push 均执行
+  # matrix.variant=debug：仅 v* tag push 执行，产出带 .debug applicationId 的可调试包
   build:
-    if: github.event_name != 'pull_request'
+    # 防递归守卫：softprops/action-gh-release 为 debug 变体自动创建 v*-debug 派生 tag，
+    # GitHub API 创建的 tag 不触发 push event（无递归），此处 !endsWith 为双重保险
+    if: >-
+      github.event_name != 'pull_request' &&
+      !endsWith(github.ref_name, '-debug') &&
+      (matrix.variant == 'release' || startsWith(github.ref, 'refs/tags/'))
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [release, debug]
     permissions:
       contents: write
     steps:
@@ -87,25 +98,48 @@ jobs:
           fi
       - name: 构建 WebView 与嵌入 Node 资源
         run: pnpm build:android
+
+      - name: 计算变体参数
+        id: variant
+        run: |
+          if [ "${{ matrix.variant }}" = "release" ]; then
+            echo "src_dir=android/app/build/outputs/apk/release" >> "$GITHUB_OUTPUT"
+            echo "src_suffix=-release.apk" >> "$GITHUB_OUTPUT"
+            echo "file_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "src_dir=android/app/build/outputs/apk/debug" >> "$GITHUB_OUTPUT"
+            echo "src_suffix=-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "file_tag=${GITHUB_REF_NAME}-debug" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 构建 Release APK
+        if: matrix.variant == 'release'
         run: cd android && ./gradlew assembleRelease --stacktrace
+      - name: 构建 Debug APK
+        if: matrix.variant == 'debug'
+        run: cd android && ./gradlew assembleDebug --stacktrace
+
       - name: 收集 APK
         run: |
           mkdir -p dist-android
+          SRC_DIR="${{ steps.variant.outputs.src_dir }}"
+          SRC_SUFFIX="${{ steps.variant.outputs.src_suffix }}"
+          FILE_TAG="${{ steps.variant.outputs.file_tag }}"
           for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-            src="android/app/build/outputs/apk/release/app-${abi}-release.apk"
+            src="${SRC_DIR}/app-${abi}${SRC_SUFFIX}"
             if [ -f "$src" ]; then
-              cp "$src" "dist-android/SPlayer-Next-${GITHUB_REF_NAME}-${abi}.apk"
+              cp "$src" "dist-android/SPlayer-Next-${FILE_TAG}-${abi}.apk"
             fi
           done
           ls -la dist-android
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: SPlayer-Next-APKs-${{ github.run_number }}
+          name: SPlayer-Next-${{ matrix.variant }}-APKs-${{ github.run_number }}
           path: dist-android/*.apk
+
       - name: 生成 Release 说明
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'release'
         run: |
           PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
           RANGE="${PREV:+$PREV..}${GITHUB_REF_NAME}"
@@ -120,10 +154,131 @@ jobs:
             fi
           } > release-notes.md
           cat release-notes.md
-      - name: 发布到 GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: 生成 Debug Release 说明
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'debug'
+        run: |
+          {
+            echo "## Debug 可调试包"
+            echo
+            echo "此为 \`${GITHUB_REF_NAME}\` 的可调试构建，与正式版功能一致但额外开启："
+            echo
+            echo "- \`applicationId\` 带 \`.debug\` 后缀，可与正式包并存安装"
+            echo "- WebView 远程调试（\`chrome://inspect\`）"
+            echo "- Logcat → console 透传（方便排查前端错误）"
+            echo
+            echo "> 数据/登录/缓存与正式包完全独立，卸载不影响正式版。"
+          } > debug-notes.md
+          cat debug-notes.md
+
+      # softprops/action-gh-release 传 tag_name 时自动创建派生 tag（指向 github.sha），无需 git push
+      - name: 发布正式版 Release
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: false
           files: dist-android/*.apk
           body_path: release-notes.md
           generate_release_notes: true
+
+      - name: 发布 Debug 预发布 Release
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'debug'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}-debug
+          name: ${{ github.ref_name }} (debug)
+          prerelease: true
+          files: dist-android/*.apk
+          body_path: debug-notes.md
+          # 派生 tag 无对比基准，generate_release_notes 会异常，关闭改用自生成说明
+          generate_release_notes: false
+
+  # PR 标签驱动测试构建：ci:debug 产出 debug APK，ci:dual 产出 release+debug
+  # 标签需在仓库 Settings → Labels 预先创建；ci:dual 的 release 变体依赖签名 secrets（仅同仓分支 PR 可用，fork PR 拿不到 secrets）
+  build-pr-apk:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (contains(github.event.pull_request.labels.*.name, 'ci:debug') ||
+       contains(github.event.pull_request.labels.*.name, 'ci:dual'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 配置签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
+            echo "已从 secrets 恢复正式签名密钥"
+          else
+            echo "未配置签名 secrets，回退 debug 签名（app/build.gradle 自带回退逻辑）"
+          fi
+      - name: 构建 WebView 与嵌入 Node 资源
+        run: pnpm build:android
+
+      - name: 构建 Debug APK
+        run: cd android && ./gradlew assembleDebug --stacktrace
+      - name: 构建 Release APK
+        if: contains(github.event.pull_request.labels.*.name, 'ci:dual')
+        run: cd android && ./gradlew assembleRelease --stacktrace
+
+      - name: 收集 Debug APK
+        run: |
+          mkdir -p dist-android-debug
+          PR_NUM="${{ github.event.pull_request.number }}"
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            src="android/app/build/outputs/apk/debug/app-${abi}-debug.apk"
+            if [ -f "$src" ]; then
+              cp "$src" "dist-android-debug/SPlayer-Next-PR${PR_NUM}-debug-${abi}.apk"
+            fi
+          done
+          ls -la dist-android-debug
+      - name: 上传 Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPlayer-Next-PR${{ github.event.pull_request.number }}-debug
+          path: dist-android-debug/*.apk
+
+      - name: 收集 Release APK
+        if: contains(github.event.pull_request.labels.*.name, 'ci:dual')
+        run: |
+          mkdir -p dist-android-release
+          PR_NUM="${{ github.event.pull_request.number }}"
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            src="android/app/build/outputs/apk/release/app-${abi}-release.apk"
+            if [ -f "$src" ]; then
+              cp "$src" "dist-android-release/SPlayer-Next-PR${PR_NUM}-release-${abi}.apk"
+            fi
+          done
+          ls -la dist-android-release
+      - name: 上传 Release APK
+        if: contains(github.event.pull_request.labels.*.name, 'ci:dual')
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPlayer-Next-PR${{ github.event.pull_request.number }}-release
+          path: dist-android-release/*.apk

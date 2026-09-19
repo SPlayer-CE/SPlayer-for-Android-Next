@@ -105,6 +105,8 @@ export const neteaseQrLoginAdapter: QrLoginAdapter = {
 interface CaptchaSentBody {
   code?: number;
   data?: boolean;
+  msg?: string;
+  message?: string;
 }
 
 /** login/cellphone 响应体 */
@@ -137,6 +139,13 @@ export const sendCaptcha = async (phone: string, ctcode = 86): Promise<boolean> 
         timestamp: Date.now(),
       })
     : await neteaseApi.captcha_sent<CaptchaSentBody>({ phone, ctcode, timestamp: Date.now() });
+  if (body?.code !== 200) {
+    console.warn(
+      "[login] captcha_sent rejected by upstream:",
+      body?.code,
+      body?.msg ?? body?.message,
+    );
+  }
   return body?.code === 200;
 };
 
