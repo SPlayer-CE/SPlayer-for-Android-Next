@@ -48,6 +48,10 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    buildFeatures {
+        buildConfig true
+    }
+
     // 分架构构建：每个 ABI 生成独立 APK，不再生成 universal 合包
     splits {
         abi {

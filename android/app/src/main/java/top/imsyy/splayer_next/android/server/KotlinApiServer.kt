@@ -1160,15 +1160,57 @@ class KotlinApiServer(
     }
 
     return try {
-      val url = URL(targetUrl)
-      val connection = url.openConnection() as HttpURLConnection
-      connection.requestMethod = "GET"
-      connection.connectTimeout = 10_000
-      connection.readTimeout = 15_000
-      connection.instanceFollowRedirects = true
-      connection.setRequestProperty("User-Agent", "SPlayer-Next-Android")
+      var currentUrl = targetUrl
+      var redirects = 0
+      var connection: HttpURLConnection? = null
+      var responseCode = 0
 
-      val responseCode = connection.responseCode
+      // 手动跟随重定向，防止 30x 重定向绕过首层 isPrivateHost 校验探测内网 (SEC-09)
+      while (redirects < 5) {
+        val currentUri = URI(currentUrl)
+        val currentScheme = currentUri.scheme?.lowercase()
+        if (currentScheme != "http" && currentScheme != "https") {
+          return jsonResponseObj(Response.Status.BAD_REQUEST, JSONObject().put("success", false).put("error", "BAD_PROTOCOL"))
+        }
+        val currentHost = currentUri.host?.lowercase().orEmpty()
+        if (isPrivateHost(currentHost)) {
+          return jsonResponseObj(Response.Status.BAD_REQUEST, JSONObject().put("success", false).put("error", "PRIVATE_HOST"))
+        }
+
+        // 解析实际底层 IP，阻断 DNS Rebinding
+        try {
+          val inetAddresses = java.net.InetAddress.getAllByName(currentHost)
+          if (inetAddresses.any { it.isLoopbackAddress || it.isSiteLocalAddress || it.isAnyLocalAddress || it.isLinkLocalAddress }) {
+            return jsonResponseObj(Response.Status.BAD_REQUEST, JSONObject().put("success", false).put("error", "PRIVATE_IP"))
+          }
+        } catch (e: Exception) {
+          return jsonResponseObj(Response.Status.BAD_REQUEST, JSONObject().put("success", false).put("error", "DNS_RESOLVE_FAILED"))
+        }
+
+        val url = URL(currentUrl)
+        connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 15_000
+        connection.instanceFollowRedirects = false
+        connection.setRequestProperty("User-Agent", "SPlayer-Next-Android")
+
+        responseCode = connection.responseCode
+        if (responseCode in 300..399) {
+          val location = connection.getHeaderField("Location")
+          connection.disconnect()
+          if (location.isNullOrBlank()) break
+          currentUrl = url.toURI().resolve(location).toString()
+          redirects++
+          continue
+        }
+        break
+      }
+
+      if (connection == null) {
+        return jsonResponseObj(Response.Status.BAD_REQUEST, JSONObject().put("success", false).put("error", "CONNECTION_FAILED"))
+      }
+
       if (responseCode != 200) {
         connection.errorStream?.close()
         return jsonResponseObj(
