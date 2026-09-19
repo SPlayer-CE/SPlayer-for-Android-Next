@@ -58,9 +58,20 @@ Release 描述由 GitHub 自动生成（基于两个 tag 之间的提交记录�
 
 - **applicationId**：`top.imsyy.splayer_next.debug`（带 `.debug` 后缀）
 - **应用名**："SPlayer Next (Debug)"
-- **并存**：可与正式包同设备安装，数据/登录/缓存完全独立、互不干扰
+- **并存**：可与正式包同设备安装，存储/登录态/缓存相互独立
 - **调试能力**：已开启 WebView 远程调试（`chrome://inspect`）与 Logcat → console 透传
 - **签名**：使用 CI 构建时的临时 debug keystore（每次构建签名不同）
+
+::: danger 端口共用——测试前必须强制停止正式包
+本地服务端口（KotlinApiServer `:13962` / Node `:13233`）为硬编码常量，debug 包与正式包共用。若正式包在后台运行（前台服务常驻），debug 包的 API 请求会连到正式包进程，导致：
+
+- 登录复现失真（请求实际由正式包处理）
+- debug 包的 `chrome://inspect` 看不到诊断日志（日志打在正式包进程）
+
+**操作规范**：测试 debug 包前，先在系统设置中强制停止正式包（或滑动清除后台）。
+
+后续开放问题：按变体分端口偏移（`buildConfigField` + Kotlin/TS/Node 联动）根治端口冲突。
+:::
 
 ::: warning Debug 签名覆盖安装
 由于 CI 每次构建生成不同的 debug keystore，新 debug 包**无法覆盖安装**旧 debug 包。安装新版本前需先卸载旧的 debug 包（正式版不受影响）。
