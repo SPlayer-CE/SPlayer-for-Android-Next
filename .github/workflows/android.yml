@@ -6,7 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [Android]
-    types: [opened, synchronize, labeled]
+    types: [opened, synchronize, reopened, labeled]
 
 defaults:
   run:
@@ -44,20 +44,38 @@ jobs:
         # 直接用 ./gradlew：package.json 的 android:check 用裸 gradlew，在 Linux bash 下当前目录不在 PATH 会报 gradlew not found
         run: cd android && ./gradlew ktlintCheck compileKotlin detekt
 
-  # push Android 分支 / 打 v* tag 时构建签名 APK（分 ABI 出包）
-  # matrix.variant=release：分支 push 和 tag push 均执行
-  # matrix.variant=debug：仅 v* tag push 执行，产出带 .debug applicationId 的可调试包
-  build:
+  # 根据触发事件动态计算 build job 应执行的变体列表
+  # job 级 if 不支持 matrix 上下文，故用独立 needs job 输出 variants JSON 数组驱动 matrix
+  build-variants:
     # 防递归守卫：softprops/action-gh-release 为 debug 变体自动创建 v*-debug 派生 tag，
     # GitHub API 创建的 tag 不触发 push event（无递归），此处 !endsWith 为双重保险
     if: >-
       github.event_name != 'pull_request' &&
-      !endsWith(github.ref_name, '-debug') &&
-      (matrix.variant == 'release' || startsWith(github.ref, 'refs/tags/'))
+      !endsWith(github.ref_name, '-debug')
+    runs-on: ubuntu-latest
+    outputs:
+      variants: ${{ steps.calc.outputs.variants }}
+    steps:
+      - id: calc
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo 'variants=["release","debug"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'variants=["release"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  # push Android 分支 / 打 v* tag 时构建签名 APK（分 ABI 出包）
+  # 分支 push → 仅 release；v* tag push → release + debug 双包双 Release
+  build:
+    needs: build-variants
+    if: >-
+      github.event_name != 'pull_request' &&
+      !endsWith(github.ref_name, '-debug')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [release, debug]
+        variant: ${{ fromJSON(needs.build-variants.outputs.variants) }}
     permissions:
       contents: write
     steps:
@@ -131,6 +149,11 @@ jobs:
               cp "$src" "dist-android/SPlayer-Next-${FILE_TAG}-${abi}.apk"
             fi
           done
+          [ -n "$(ls -A dist-android 2>/dev/null)" ] || {
+            echo "::error::No APK collected from ${SRC_DIR}"
+            ls -la "$SRC_DIR" 2>/dev/null || echo "source dir does not exist"
+            exit 1
+          }
           ls -la dist-android
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -141,7 +164,8 @@ jobs:
       - name: 生成 Release 说明
         if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'release'
         run: |
-          PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          # --exclude='*-debug'：跳过 CI 自动创建的派生 debug tag，只对比正式版本 tag
+          PREV="$(git describe --tags --abbrev=0 --exclude='*-debug' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
           RANGE="${PREV:+$PREV..}${GITHUB_REF_NAME}"
           {
             echo "## 提交详情"
@@ -167,11 +191,19 @@ jobs:
             echo "- WebView 远程调试（\`chrome://inspect\`）"
             echo "- Logcat → console 透传（方便排查前端错误）"
             echo
-            echo "> 数据/登录/缓存与正式包完全独立，卸载不影响正式版。"
+            echo "> 存储/登录态/缓存与正式包相互独立，卸载不影响正式版。"
+            echo
+            echo "⚠️ **端口共用提示**：本地服务端口（KotlinApiServer :13962 / Node :13233）为硬编码常量，"
+            echo "debug 包与正式包共用。**测试 debug 包前必须先彻底退出（强制停止）正式包**，"
+            echo "否则正式包前台服务持有端口，debug 包的 API 请求会连到正式包进程，"
+            echo "导致登录复现失真且 debug 的 chrome://inspect 看不到诊断日志。"
+            echo
+            echo "_后续开放问题：按变体分端口偏移（buildConfigField + Kotlin/TS/Node 联动）根治端口冲突。_"
           } > debug-notes.md
           cat debug-notes.md
 
-      # softprops/action-gh-release 传 tag_name 时自动创建派生 tag（指向 github.sha），无需 git push
+      # softprops/action-gh-release 传 tag_name 时派生 tag 建在 target_commitish（默认=仓库默认分支 HEAD），
+      # 故 debug 变体显式钉 github.sha 确保 tag 指向本次构建 commit
       - name: 发布正式版 Release
         if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'release'
         uses: softprops/action-gh-release@v2
@@ -188,6 +220,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}-debug
+          target_commitish: ${{ github.sha }}
           name: ${{ github.ref_name }} (debug)
           prerelease: true
           files: dist-android/*.apk
@@ -201,7 +234,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       (contains(github.event.pull_request.labels.*.name, 'ci:debug') ||
-       contains(github.event.pull_request.labels.*.name, 'ci:dual'))
+      contains(github.event.pull_request.labels.*.name, 'ci:dual'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,12 +284,18 @@ jobs:
         run: |
           mkdir -p dist-android-debug
           PR_NUM="${{ github.event.pull_request.number }}"
+          SRC_DIR="android/app/build/outputs/apk/debug"
           for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-            src="android/app/build/outputs/apk/debug/app-${abi}-debug.apk"
+            src="${SRC_DIR}/app-${abi}-debug.apk"
             if [ -f "$src" ]; then
               cp "$src" "dist-android-debug/SPlayer-Next-PR${PR_NUM}-debug-${abi}.apk"
             fi
           done
+          [ -n "$(ls -A dist-android-debug 2>/dev/null)" ] || {
+            echo "::error::No debug APK collected"
+            ls -la "$SRC_DIR" 2>/dev/null || echo "source dir does not exist"
+            exit 1
+          }
           ls -la dist-android-debug
       - name: 上传 Debug APK
         uses: actions/upload-artifact@v4
@@ -269,12 +308,18 @@ jobs:
         run: |
           mkdir -p dist-android-release
           PR_NUM="${{ github.event.pull_request.number }}"
+          SRC_DIR="android/app/build/outputs/apk/release"
           for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-            src="android/app/build/outputs/apk/release/app-${abi}-release.apk"
+            src="${SRC_DIR}/app-${abi}-release.apk"
             if [ -f "$src" ]; then
               cp "$src" "dist-android-release/SPlayer-Next-PR${PR_NUM}-release-${abi}.apk"
             fi
           done
+          [ -n "$(ls -A dist-android-release 2>/dev/null)" ] || {
+            echo "::error::No release APK collected"
+            ls -la "$SRC_DIR" 2>/dev/null || echo "source dir does not exist"
+            exit 1
+          }
           ls -la dist-android-release
       - name: 上传 Release APK
         if: contains(github.event.pull_request.labels.*.name, 'ci:dual')
