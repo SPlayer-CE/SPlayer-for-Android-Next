@@ -8,6 +8,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
+import crypto from "crypto";
+import { LIVE_UPDATE_PUBLIC_KEY_BASE64 } from "../shared/constants/liveUpdate";
 import http, { IncomingMessage, ServerResponse } from "http";
 import https from "https";
 import { createRequire } from "module";
@@ -1079,6 +1081,32 @@ const handleConfigRoute = (
       Object.prototype.hasOwnProperty.call(body, "config") ? body.config : body,
     );
     sendJson(request, response, 200, { ok: true });
+    return true;
+  }
+
+  // 热更新清单验签（Issue #26）：Node 侧 Ed25519 验签，客户端对 manifest.json 原文验签
+  if (pathname === "/api/liveUpdate/verify") {
+    const { manifestJson, signature } = body as { manifestJson?: string; signature?: string };
+    if (!manifestJson || !signature) {
+      sendJson(request, response, 400, { ok: false, error: "manifestJson and signature required" });
+      return true;
+    }
+    if (LIVE_UPDATE_PUBLIC_KEY_BASE64 === "") {
+      // 密钥体系（M0.3）落地前无法验签，明确告知而非假装通过
+      sendJson(request, response, 200, { ok: false, reason: "key-not-provisioned" });
+      return true;
+    }
+    const verified = crypto.verify(
+      null,
+      Buffer.from(manifestJson, "utf-8"),
+      crypto.createPublicKey({
+        key: Buffer.from(LIVE_UPDATE_PUBLIC_KEY_BASE64, "base64"),
+        format: "der",
+        type: "spki",
+      }),
+      Buffer.from(signature, "base64"),
+    );
+    sendJson(request, response, 200, { ok: verified });
     return true;
   }
 

@@ -65,6 +65,18 @@ function walkDir(
   }
 }
 
+/** 解析私钥输入：文件路径 / PEM 文本 / base64(PEM)；无法解析返回 null */
+function resolvePrivateKeyPem(input: string): string | null {
+  try {
+    if (fs.existsSync(input)) return fs.readFileSync(input, "utf-8");
+    if (input.includes("BEGIN PRIVATE KEY")) return input;
+    const decoded = Buffer.from(input, "base64").toString("utf-8");
+    return decoded.includes("BEGIN PRIVATE KEY") ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   if (!fs.existsSync(distDir)) {
     console.error(`[live-update] dist directory not found: ${distDir}`);
@@ -102,44 +114,28 @@ async function main() {
   fs.writeFileSync(manifestPath, canonicalJson, "utf-8");
   console.log(`[live-update] Wrote manifest to: ${manifestPath}`);
 
-  // 如果提供了 Ed25519 私钥，则进行签名
+  // 提供私钥则签名。Ed25519 必须用一次性签名 API（createSign 不支持 Ed25519，
+  // 旧实现 createSign(undefined) 抛错被吞导致 manifest 静默不带签名）
   if (privateKeyInput) {
-    try {
-      let privateKeyPem = privateKeyInput;
-      // 如果传入的是 base64 字符串或者文件路径
-      if (fs.existsSync(privateKeyInput)) {
-        privateKeyPem = fs.readFileSync(privateKeyInput, "utf-8");
-      } else if (
-        !privateKeyInput.includes("BEGIN PRIVATE KEY") &&
-        !privateKeyInput.includes("BEGIN ED25519 PRIVATE KEY")
-      ) {
-        try {
-          const decoded = Buffer.from(privateKeyInput, "base64").toString("utf-8");
-          if (decoded.includes("PRIVATE KEY")) privateKeyPem = decoded;
-        } catch {}
-      }
-
-      const signer = crypto.createSign(undefined);
-      signer.update(canonicalJson);
-      const signature = signer.sign(privateKeyPem, "base64");
-
-      const sigPath = path.join(outputDir, "manifest.sig");
-      fs.writeFileSync(sigPath, signature, "utf-8");
-      console.log(
-        `[live-update] Manifest signed successfully with Ed25519. Signature saved to: ${sigPath}`,
+    const privateKeyPem = resolvePrivateKeyPem(privateKeyInput);
+    if (!privateKeyPem) {
+      console.error(
+        "[live-update] Invalid private key input; refusing to publish unsigned manifest.",
       );
-
-      // 同时也可将 signature 嵌入更新版 manifest 中
-      manifest.signature = signature;
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
-    } catch (signErr) {
-      console.warn(`[live-update] Warning: Failed to sign manifest with provided key:`, signErr);
+      process.exit(1);
     }
+    // 签名对象为不含 signature 字段的 canonical JSON；manifest.json 保持无签名发布，
+    // 签名单独存 manifest.sig，验签方对 manifest.json 原文验签（避免签名后改写发布内容导致验签永远失败）
+    const signature = crypto
+      .sign(null, Buffer.from(canonicalJson, "utf-8"), privateKeyPem)
+      .toString("base64");
+    const sigPath = path.join(outputDir, "manifest.sig");
+    fs.writeFileSync(sigPath, signature, "utf-8");
+    console.log(`[live-update] Manifest signed (Ed25519). Signature saved to: ${sigPath}`);
   } else {
     console.log(`[live-update] No private key provided. Manifest written without signature.`);
   }
 
-  // 生成发布打包 zip (包含全部静态文件与 manifest)
   console.log(`[live-update] Manifest generation finished.`);
 }
 
