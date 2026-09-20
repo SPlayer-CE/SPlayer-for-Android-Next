@@ -102,12 +102,11 @@ async function main() {
     files,
   };
 
-  // 生成规范化的待签名字串 (key 排序序列化以确保签名确定性)
-  // 对 manifest 进行 key 排序序列化以确保签名确定性
+  // canonical JSON：对 manifest 做 key 排序序列化，确保签名确定性
   const sortedKeys = Object.keys(manifest).sort();
   const sortedManifest: Record<string, unknown> = {};
   for (const k of sortedKeys) {
-    sortedManifest[k] = (manifest as Record<string, unknown>)[k];
+    sortedManifest[k] = (manifest as unknown as Record<string, unknown>)[k];
   }
   const canonicalJson = JSON.stringify(sortedManifest, null, 2);
   const manifestPath = path.join(outputDir, "manifest.json");
