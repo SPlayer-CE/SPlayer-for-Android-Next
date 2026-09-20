@@ -204,6 +204,16 @@ jobs:
 
       # softprops/action-gh-release 传 tag_name 时派生 tag 建在 target_commitish（默认=仓库默认分支 HEAD），
       # 故 debug 变体显式钉 github.sha 确保 tag 指向本次构建 commit
+      - name: 生成差异化热更新 Manifest 清单 (Issue #26)
+        if: matrix.variant == 'release'
+        run: |
+          mkdir -p dist-live-update
+          ./node_modules/.bin/tsx scripts/generate-live-update-manifest.ts dist/capacitor dist-live-update --version "${{ github.ref_name }}" --channel "stable"
+          cp dist-live-update/manifest.json dist-android/manifest.json
+          if [ -f "dist-live-update/manifest.sig" ]; then
+            cp dist-live-update/manifest.sig dist-android/manifest.sig
+          fi
+
       - name: 发布正式版 Release
         if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'release'
         uses: softprops/action-gh-release@v2
@@ -211,7 +221,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           prerelease: false
-          files: dist-android/*.apk
+          files: |
+            dist-android/*.apk
+            dist-android/manifest.json
+            dist-android/manifest.sig
           body_path: release-notes.md
           generate_release_notes: true
 
