@@ -60,9 +60,9 @@ export const detectFormat = (text: string): LyricFormat => {
   if (/\[\d+,\d+\]\(\d+,\d+,\d+\)/.test(text)) return "yrc";
   // QRC 纯文本：[起始,时长]文字(起始,时长)
   if (/\[\d+,\d+\][^[\n]+\(\d+,\d+\)/.test(text)) return "qrc";
-  // KRC 逐字：[mm:ss.xxx]<偏移,时长>字
-  if (/^\[\d+:\d+[.:]\d{1,3}\]\s*<\d+,\d+>/m.test(text) || /<\d+,\d+>[^<\n]+/.test(text))
-    return "krc";
+  // KRC 逐字：[mm:ss.xxx] 时间戳行内出现 <偏移,时长> 逐字标签
+  // 必须同时具备两者，避免正文含 <数字,数字> 的普通 LRC 被误判为 krc 而解析为空
+  if (/^\[\d+:\d+[.:]\d{1,3}\][^\n]*<\d+,\d+>/m.test(text)) return "krc";
   // LyS：[属性码]文字(起始,时长)
   if (/^\[\d\][^[\]]+\(\d+,\d+\)/m.test(text)) return "lys";
   // 兜底 LRC
