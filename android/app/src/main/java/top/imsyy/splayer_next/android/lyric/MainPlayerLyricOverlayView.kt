@@ -1,5 +1,6 @@
 package top.imsyy.splayer_next.android.lyric
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
@@ -11,6 +12,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.os.Build
 import android.util.AttributeSet
 import android.util.LruCache
 import android.view.MotionEvent
@@ -61,6 +63,7 @@ class MainPlayerLyricOverlayView
       val baselineOffset: Float,
       val chunkId: Int,
       val chunkShouldEmphasize: Boolean,
+      val sustainGroupId: Int,
     )
 
     private data class ContentBlockMetrics(
@@ -126,9 +129,16 @@ class MainPlayerLyricOverlayView
     private var lineLayouts: List<LineLayout> = emptyList()
     private var lineHitTops = FloatArray(0)
     private var lineHitBottoms = FloatArray(0)
+
+    // 卡住计数：弹簧无排队目标却落后布局超过一屏的连续帧数，跨行数变更时随下行重建块清零
+    private var lineStuckFrames = IntArray(0)
+
     private var contentHeight = 0f
     private var lineBrightAlphas = FloatArray(0)
     private var linePassAlphas = FloatArray(0)
+
+    // 亮暗双图层状态机（对齐 AMLL dom/line-brightness.ts）：逐行亮层进度 p 与暗层合成
+    private val lineBrightness = LyricLineBrightness()
 
     // lineFloatFadeProgress：逐词浮动退场进度，1 = 保持当前浮动量，0 = 完全落回
     private var lineFloatFadeProgress = FloatArray(0)
@@ -313,12 +323,27 @@ class MainPlayerLyricOverlayView
     private val rubySweepWindowsCache = IdentityHashMap<NativeLyricWord, LongArray>()
     private val solidWordShaderCache = object : LruCache<Int, LinearGradient>(32) {}
 
+    // HDR 单色渐变缓存：与 SDR 侧存放分离，两者互不污染。键取「量化 alpha 的色标」——
+    // extended-sRGB 长整色是 (色标 × 固定增益) 的纯函数，同一键必然对应同一长整色；
+    // 量化让逐帧变化的行亮度收敛到有限档位，缓存才会跨帧命中（见 LyricHdrController.quantizeAlpha）。
+    // 「固定增益」由 [hdrShaderCacheGain] 守着：增益变化即整体失效，见 [syncHdrWindowState]
+    private val solidWordShaderCacheHdrBright = object : LruCache<Int, LinearGradient>(32) {}
+    private val solidWordShaderCacheHdrDim = object : LruCache<Int, LinearGradient>(32) {}
+
+    // 上述两份缓存与复用槽位当前是按哪个增益构造的。0 是不可能取值：首次同步必定失效一次
+    // （此时缓存本就为空），之后只在面板余量变化时失效
+    private var hdrShaderCacheGain = 0f
+
     // 复用逐词扫光渐变：固定宽度的 played→unplayed 渐变 + localMatrix 平移到任意 gradientStartX，
     // 避免激活行每帧每词新建 LinearGradient 对象造成 GC 压力（掉帧 / 功耗主因），视觉完全一致。
     // localMatrix 把 shader 的「固定窗口 [0,fadeWidth]」映射到「词的实际扫光窗口」。
     private var reusableFadeWidth = -1f
     private var reusableFadePlayedColor = 0
     private var reusableFadeUnplayedColor = 0
+
+    // 复用槽位上一次是否按 HDR 构造：同一槽位在 SDR/HDR 之间切换时必须重建，
+    // 否则会拿 SDR 渐变配 HDR 色标（或反之）画出错误亮度
+    private var reusableFadeHdr = false
     private var reusableWordShader: LinearGradient? = null
     private val reusableWordShaderMatrix = Matrix()
 
@@ -330,6 +355,30 @@ class MainPlayerLyricOverlayView
     // shader 由调用方设置（alpha-only 位图与 paint shader 做 DST_IN 组合，单次 GPU pass 无离屏）
     private val alphaGlyphPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val emphasisInverseMatrix = Matrix()
+
+    // 强调流体 halo：离散光点太碎，用户要的是发光体晕染 + 气体流动感。
+    // 以字形辉光位图为发光体，三层错峰漂移叠加成连续气团；独立 paint，不能复用 alphaGlyphPaint
+    // （绘制中途它的 shader/alpha 会被辉光层与主字形层改写，串用会互相污染）。
+    private val fluidHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    // 激活行 HDR 显示：enabled（用户开关）+ 面板能力 + foreground 三态聚合为 isHdrActive，
+    // 绘制路径只读这一个开关，关闭时逐帧回到改动前的 SDR 行为
+    private val hdrController = LyricHdrController()
+
+    // 静态行位图的字色（位图本身只存 ALPHA_8 覆盖度，颜色在这里与绘制时施加）：
+    // HDR 生效时换成宽色域白，行级层次仍由 paint 的 alpha 承载——层次与亮度体系解耦后，
+    // 非激活行在 HDR 下同样落在宽色域里，不会因为仍是 SDR 白而显得消失
+    private var staticInk = LyricBlurController.StaticInk(Color.WHITE, 0L)
+
+    // 窗口级可见性（onWindowVisibilityChanged）。HDR 前台态取「窗口可见 ∧ 歌词层自身可见」：
+    // 歌词页关闭后覆盖层只是 GONE 仍挂在窗口上，只看窗口可见性会让整窗一直留在 HDR 色域空耗功耗
+    private var windowVisible = false
+
+    // 本帧激活行的 extended-sRGB 色标（分量可 >1.0）。逐词音译、注音与长音辉光
+    // 都复用同一份扫光渐变（AMLL 的 text-shadow 位于字符元素内部，本就不该与正文分色），
+    // 因此只需在扫光渐变构造处换成 ColorLong 重载，无需额外的绘制 pass
+    private var playedColorHdr = 0L
+    private var unplayedColorHdr = 0L
 
     private var fontSizePx = 34f
     private var fontWeight = 700
@@ -376,8 +425,19 @@ class MainPlayerLyricOverlayView
     // 用户滚动偏移：0 = 激活行居中，正值 = 上滑看后续行，负值 = 下滑看前面行
     private var userScrollOffset = 0f
     private var inertialVelocity = 0f
-    private var scrollResetNano = 0L
+
+    // 对齐 AMLL #617 条件式滚动重置：交互结束时刻 + 自动对齐挂起标记，
+    // 替代旧的「5s 无条件定时回弹」倒计时语义
+    private var scrollEndNano = 0L
+    private var isAutoAlignSuspended = false
+    private var prevScrollToViewIndex = -1
+    private var prevFocusOnInterlude = false
     private var isDragging = false
+
+    // 本次手势是否已确认滑动意图（手指位移超过拖动阈值）。仅它参与「用户滚动态」判定：
+    // 按下不动与轻点都不算滚动（对齐 AMLL touchState.isIntentConfirmed）。
+    // 跟手位移仍只依赖 isDragging，从按下点起算，与该判定无关
+    private var isGestureScrollConfirmed = false
     private var dragStartY = 0f
     private var dragStartUserScroll = 0f
 
@@ -433,6 +493,11 @@ class MainPlayerLyricOverlayView
     private var sweepWordSegLast = IntArray(0)
     private var sweepSegCount = 0
 
+    // 逐帧布局的中间量复用缓冲：拖拽/惯性期间 scrollChanged 每一帧都成立，会连续触发
+    // computeFrameLayouts，容量只增不减可省掉这两块 FloatArray 的逐帧分配
+    private var frameLayoutTops = FloatArray(0)
+    private var frameLayoutFlowBottoms = FloatArray(0)
+
     // 用户配置的弹簧参数缓存
     private var springMass = 0.9f
     private var springDamping = 15f
@@ -475,6 +540,8 @@ class MainPlayerLyricOverlayView
     fun setRendererVisible(visible: Boolean) {
       visibleState = visible
       visibility = if (visible) VISIBLE else GONE
+      // 歌词页关闭只是 GONE，窗口仍可见：必须在这里一并回退 HDR 前台态，否则整窗留在 HDR 色域
+      applyHdrForeground()
       if (visible) postInvalidateOnAnimation()
     }
 
@@ -487,9 +554,9 @@ class MainPlayerLyricOverlayView
       resetLineVisualStates()
       resetTimelineState()
       // 对齐 Web 引擎 setLyrics → handleSeek → resetUserScrollState：新歌词不继承上一首的滚动偏移
-      userScrollOffset = 0f
-      inertialVelocity = 0f
-      scrollResetNano = 0L
+      resetScrollState()
+      prevScrollToViewIndex = -1
+      prevFocusOnInterlude = false
       val activeState = resolveActiveState(baseTimeMs)
       if (viewportWidth > 0 && viewportHeight > 0 && lyricLines.isNotEmpty()) {
         ensureLayoutCache()
@@ -511,6 +578,7 @@ class MainPlayerLyricOverlayView
       lineLayouts = emptyList()
       lineHitTops = FloatArray(0)
       lineHitBottoms = FloatArray(0)
+      lineStuckFrames = IntArray(0)
       contentHeight = 0f
       lineBrightAlphas = FloatArray(0)
       linePassAlphas = FloatArray(0)
@@ -526,9 +594,9 @@ class MainPlayerLyricOverlayView
       snapNextLineSpring = false
       timelineBoundaries = LongArray(0)
       rebuildControllerTimeline()
-      userScrollOffset = 0f
-      inertialVelocity = 0f
-      scrollResetNano = 0L
+      resetScrollState()
+      prevScrollToViewIndex = -1
+      prevFocusOnInterlude = false
       resetTimelineState()
       blurController.invalidateAll()
       // 重置视口，避免退出后重新进入时残留旧视口导致歌词位置错误或触摸拦截
@@ -565,6 +633,7 @@ class MainPlayerLyricOverlayView
       springDamping: Float?,
       springStiffness: Float?,
       alwaysPostpositionBackground: Boolean = false,
+      enableHdr: Boolean = false,
     ) {
       this.fontSizePx = fontSizePx.coerceAtLeast(12f)
       this.fontWeight = fontWeight.coerceIn(100, 1500)
@@ -575,6 +644,8 @@ class MainPlayerLyricOverlayView
       this.fontFamilyLatin = fontFamilyLatin?.takeIf { it.isNotBlank() }
       this.textColor = textColor
       this.inactiveAlpha = inactiveAlpha.coerceIn(0.02f, 1f)
+      // 亮度层暗层与逐词遮罩的暗部共用该系数，未激活行的颜色随设置项一起变
+      lineBrightness.inactiveAlpha = this.inactiveAlpha
       this.alignPosition = alignPosition.coerceIn(0.05f, 0.95f)
       this.wordFadeWidth = wordFadeWidth.coerceIn(0.05f, 1f)
       this.hidePassedLines = hidePassedLines
@@ -592,6 +663,10 @@ class MainPlayerLyricOverlayView
       this.springDamping = springDamping ?: 15f
       this.springStiffness = springStiffness ?: 90f
       this.alwaysPostpositionBackground = alwaysPostpositionBackground
+      // 开关可能在覆盖层尚未挂窗时就被下发，能力探测推迟到 attach 时；
+      // 此处只更新开关并同步色域（未挂窗时 window 为 null，sync 内部直接空转）
+      hdrController.enabled = enableHdr
+      syncHdrWindowState()
       applySpringParams()
       emphasisWordMetricsCache.evictAll()
       baseGlyphCache.evictAll()
@@ -739,13 +814,23 @@ class MainPlayerLyricOverlayView
       recalculateLayouts()
     }
 
+    override fun onAttachedToWindow() {
+      super.onAttachedToWindow()
+      // 挂窗后才能拿到 Display 与 Window，能力探测与色域申请都放在这里
+      hdrController.refreshCapability(Build.VERSION.SDK_INT, display)
+      // 覆盖层可能是在窗口已可见时被加进来的，框架不保证补发 onWindowVisibilityChanged，
+      // 因此以挂窗当下的窗口可见性初始化
+      windowVisible = windowVisibility == VISIBLE
+      applyHdrForeground()
+    }
+
     override fun onDetachedFromWindow() {
       super.onDetachedFromWindow()
       // M-5: 清理已投递的延迟帧与惯性/时钟状态,避免离屏后仍被唤醒一次或复用时带入旧动量
       handler?.removeCallbacksAndMessages(null)
       inertialVelocity = 0f
       touchExclusionRects.clear()
-      scrollResetNano = 0L
+      resetScrollState()
       lastDrawNano = 0L
       blurController.invalidateAll()
       emphasisWordMetricsCache.evictAll()
@@ -753,6 +838,68 @@ class MainPlayerLyricOverlayView
       glowGlyphCache.evictAll()
       alphaWordBitmapCache.evictAll()
       alphaRomanBitmapCache.evictAll()
+      // 离窗必须回退窗口色域，否则整窗会一直挂在 HDR 模式空耗功耗；
+      // windowVisible 显式置假，不依赖 detach 期间 windowVisibility 是否已更新
+      windowVisible = false
+      applyHdrForeground()
+    }
+
+    /**
+     * 按「窗口可见 ∧ 歌词层自身可见」重算 HDR 前台态并同步窗口色域。
+     *
+     * 只在可见性/开关状态变化点调用，绝不进入绘制循环。
+     */
+    private fun applyHdrForeground() {
+      hdrController.foreground = windowVisible && visibleState
+      syncHdrWindowState()
+    }
+
+    /**
+     * 按当前 HDR 三态幂等同步窗口色域模式，并清掉不再生效的 HDR shader 缓存。
+     *
+     * 只在状态变化点调用（开关切换、挂窗/离窗、前后台可见性变化），绝不进入绘制循环。
+     */
+    private fun syncHdrWindowState() {
+      val active = hdrController.isHdrActive
+      // 不再因 SDR/HDR 边沿全量失效位图：静态行位图已改成 ALPHA_8 覆盖度掩码，字色在绘制时才
+      // 施加，跨边沿复用同一份缓存没有色彩假设（原先 ARGB_8888 烘焙字色时才需要）
+      // HDR 渐变的键只含色标，而长整色是「色标 × 增益」：面板余量变化（亮度变化、前后台重探）后
+      // 必须整体丢弃，否则会沿用旧增益的高光直到色标 alpha 变化才自愈
+      val gain = hdrController.highlightGain
+      if (!active || gain != hdrShaderCacheGain) {
+        // SDR 与 HDR 渐变存放在不同缓存里，状态回退时必须丢弃当前复用槽位，
+        // 否则下一帧会拿 HDR 渐变配 SDR 色标画出过亮的高光
+        reusableFadeWidth = -1f
+        reusableFadeHdr = false
+        solidWordShaderCacheHdrBright.evictAll()
+        solidWordShaderCacheHdrDim.evictAll()
+        hdrShaderCacheGain = gain
+      }
+      refreshStaticInk()
+      hdrController.syncWindowColorMode((context as? Activity)?.window)
+    }
+
+    /**
+     * 刷新静态行位图的字色。
+     *
+     * SDR 用 [textColor] 原色；HDR 生效时换成宽色域白（alpha=1 的 [LyricHdrController.hdrColor]），
+     * 行级层次照旧由绘制时 paint 的 alpha 承载。这样「层次关系」与「亮度体系」解耦：
+     * alpha 比例在 SDR/HDR 下完全一致（静息 0.2 / 呈现中 0.85 / 激活 1.0），HDR 只把颜色整体
+     * 抬进宽色域，未来行与已播放行、模糊行不再因为仍是 SDR 白而显得消失或被当前行压掉。
+     *
+     * 只在字色或 HDR 状态变化点调用，绘制路径直接取用。
+     */
+    private fun refreshStaticInk() {
+      staticInk =
+        LyricBlurController.StaticInk(
+          sdrColor = textColor,
+          hdrColor =
+            if (hdrController.isHdrActive) {
+              hdrController.hdrColor(textColor, hdrController.highlightGain)
+            } else {
+              0L
+            },
+        )
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -777,6 +924,8 @@ class MainPlayerLyricOverlayView
       when (event.actionMasked) {
         MotionEvent.ACTION_DOWN -> {
           isDragging = true
+          // 新手势：意图确认标记复位，等 ACTION_MOVE 超过阈值再置位
+          isGestureScrollConfirmed = false
           dragStartY = event.y
           dragStartUserScroll = userScrollOffset
           lastTouchX = event.x
@@ -786,7 +935,6 @@ class MainPlayerLyricOverlayView
           lastTouchTime = event.eventTime
           touchVelocity = 0f
           inertialVelocity = 0f
-          scrollResetNano = 0L
           parent?.requestDisallowInterceptTouchEvent(true)
           return true
         }
@@ -798,6 +946,13 @@ class MainPlayerLyricOverlayView
             touchVelocity = touchVelocity * 0.65f + velocity * 0.35f
             lastTouchY = event.y
             lastTouchTime = event.eventTime
+            // 对齐 AMLL ScrollInteractionEngine.onTouchMove → startInteraction：只有确认滑动意图
+            // （位移超过阈值）才清除静止计时并进入滚动态；轻点/按住不重置 500ms 回弹等待，
+            // 拖拽期间 canResumeAutoAlign 恒为假（scrollEndNano 为 0）。重复进入幂等
+            if (isDragGesture(event)) {
+              scrollEndNano = 0L
+              isGestureScrollConfirmed = true
+            }
             // 手指上滑 dy<0 → offset 增大 → 内容上移
             userScrollOffset = dragStartUserScroll - dy
             invalidate()
@@ -807,16 +962,22 @@ class MainPlayerLyricOverlayView
         MotionEvent.ACTION_UP -> {
           isDragging = false
           parent?.requestDisallowInterceptTouchEvent(false)
+          // 用意图标志而非当场复算位移：手指越过阈值后又拖回起点时，UP 处的总位移可能又小于阈值，
+          // 复算会把已发生过的滑动误判成轻点（丢惯性、不置挂起）。对齐 AMLL 由 endInteraction 收尾，
+          // 确认标记在此交棒给 isAutoAlignSuspended，随后清除
+          val scrollConfirmed = isGestureScrollConfirmed
+          isGestureScrollConfirmed = false
 
-          val dx = event.x - touchStartX
-          val dy = event.y - touchStartY
-          if (dx * dx + dy * dy > (16f * density) * (16f * density)) {
-            // 拖动松手：惯性 + 5 秒后自动回弹到激活行；轻点不进入用户滚动状态，避免抑制淡出/模糊
+          if (scrollConfirmed) {
+            // 对齐 AMLL #617：拖动松手只记录交互结束时刻，不再设 5s 无条件回弹；
+            // 轻点不进入用户滚动态，避免抑制淡出/模糊
             // 惯性：touchVelocity 正值 = 上滑，继续增大 offset
             if (kotlin.math.abs(touchVelocity) > 0.015f) {
               inertialVelocity = touchVelocity.coerceIn(-2.4f, 2.4f)
             }
-            scrollResetNano = System.nanoTime() + 5_000_000_000L
+            // 对齐 AMLL endInteraction：交互结束打点，挂起标记保留到回弹发生
+            isAutoAlignSuspended = true
+            scrollEndNano = System.nanoTime()
             return true
           }
           if (suppressNextTapSeek) {
@@ -835,7 +996,10 @@ class MainPlayerLyricOverlayView
           return true
         }
         MotionEvent.ACTION_CANCEL -> {
-          // 对齐 Web 引擎 handleTouchCancel：清除速度，不触发惯性/回弹/tap seek
+          // 对齐 Web 引擎 handleTouchCancel：清除速度，不触发惯性/回弹/tap seek；
+          // 但已确认意图的手势仍需保留滚动态，否则残留偏移不会被条件式回弹收走
+          if (isGestureScrollConfirmed) isAutoAlignSuspended = true
+          isGestureScrollConfirmed = false
           isDragging = false
           parent?.requestDisallowInterceptTouchEvent(false)
           touchVelocity = 0f
@@ -844,6 +1008,14 @@ class MainPlayerLyricOverlayView
         }
       }
       return super.onTouchEvent(event)
+    }
+
+    /** 手势位移是否超过拖动意图阈值（未达阈值按轻点处理，不进入用户滚动态） */
+    private fun isDragGesture(event: MotionEvent): Boolean {
+      val dx = event.x - touchStartX
+      val dy = event.y - touchStartY
+      val threshold = 16f * density
+      return dx * dx + dy * dy > threshold * threshold
     }
 
     override fun onVisibilityChanged(
@@ -859,7 +1031,12 @@ class MainPlayerLyricOverlayView
 
     override fun onWindowVisibilityChanged(visibility: Int) {
       super.onWindowVisibilityChanged(visibility)
-      if (visibility == VISIBLE && visibleState && playing && !frozen) {
+      // 退到后台立即回退窗口色域，避免整窗在不可见时仍维持 HDR 输出空耗功耗；
+      // 回到前台时重新探测能力（窗口保持可见时换 Display 的外接屏热插拔不会走到这里）
+      windowVisible = visibility == VISIBLE
+      if (windowVisible) hdrController.refreshCapability(Build.VERSION.SDK_INT, display)
+      applyHdrForeground()
+      if (windowVisible && visibleState && playing && !frozen) {
         lastDrawNano = 0L
         postInvalidateOnAnimation()
       }
@@ -870,6 +1047,11 @@ class MainPlayerLyricOverlayView
       if (!visibleState || width <= 0 || height <= 0 || lyricLines.isEmpty()) return
       if (viewportWidth <= 0 || viewportHeight <= 0) return
 
+      // P0 度量埋点：Perfetto 中把「状态推进」与「画布绘制」分开，
+      // 用于判定绘制耗时中「自身工作」与「等待 RenderThread/GPU 同步」的比例。
+      // 未开 tracing 时 beginSection/setCounter 仍要逐次过 JNI，统一用 isEnabled() 门控
+      val tracing = android.os.Trace.isEnabled()
+      if (tracing) android.os.Trace.beginSection("Lyric.state")
       val currentTimeMs = resolveCurrentTimeMs()
       val currentNano = System.nanoTime()
       if (isNativeClockJump(currentTimeMs, currentNano)) handleProgressJump()
@@ -899,16 +1081,15 @@ class MainPlayerLyricOverlayView
           val frameDelta = (inertialVelocity * clampedDeltaMs).coerceIn(-96f, 96f)
           userScrollOffset += frameDelta
           inertialVelocity *= Math.exp((-(clampedDeltaMs / 280f)).toDouble()).toFloat()
+          // 惯性推进中覆盖静止计时，对齐 AMLL 惯性 RAF 期间不结算 canResumeAutoAlign
+          scrollEndNano = 0L
         } else {
           inertialVelocity = 0f
+          if (isAutoAlignSuspended && scrollEndNano == 0L) scrollEndNano = currentNano
         }
-        if (scrollResetNano > 0 && currentNano >= scrollResetNano) {
-          // 对齐 Web 引擎 resetUserScrollToActiveLine：置零偏移后由布局块重设弹簧目标，
-          // 行弹簧动画回位（可能带轻微弹性），而非指数衰减
-          userScrollOffset = 0f
-          inertialVelocity = 0f
-          scrollResetNano = 0L
-        }
+        // 对齐 AMLL #617：条件式回弹由 maybeResetScroll 六重门控判定，不再无条件定时回弹；
+        // 惯性耗尽后首帧打点，静止满 500ms 且门控全过才置零偏移由布局块重设弹簧目标
+        maybeResetScroll(activeState, currentNano)
       }
       // 对齐 Web 引擎：userScrollOffset 参与布局目标计算，偏移变化即触发重定位
       val scrollChanged = userScrollOffset != lastLayoutUserScrollOffset
@@ -917,17 +1098,21 @@ class MainPlayerLyricOverlayView
         val (frameLayouts, frameContentHeight) = computeFrameLayouts(activeState, candidateInterlude)
         lineLayouts = frameLayouts
         contentHeight = frameContentHeight
-        // 对齐 AMLL LayoutStrategy.snapPosY：冻结/可见性恢复/视口变化/拖拽与惯性滑动
-        // (ContinuousScroll) 期间行位置瞬移跟手；常规行切换、seek、暂停缩放均走弹簧过渡
-        val syncImmediate =
-          frozen ||
-            snapNextLineSpring ||
-            viewportChanged ||
-            isDragging ||
-            kotlin.math.abs(inertialVelocity) > 0.015f
+        // 与滚动无关的硬瞬移：冻结/可见性恢复/视口变化（AMLL 侧属 Resize/恢复语义）
+        val hardSnap = frozen || snapNextLineSpring || viewportChanged
+        // 连续滚动（拖拽/惯性）期间先把「滚动偏移增量」瞬时平移给各行弹簧，保证跟手 1:1；
+        // 换行分量仍交给弹簧与缩放缓动。对齐 AMLL 的两次 calcLayout 顺序：pointermove 先按
+        // ContinuousScroll(snapPosY) 瞬移位置，随后 rAF 的播放 tick 再按 PlaybackTick 把
+        // 新锚点的完整布局交给弹簧——合并到一帧时必须显式复现这个先后关系，否则换行被瞬移吞掉
+        val scrollDelta =
+          if (!hardSnap && (isDragging || kotlin.math.abs(inertialVelocity) > 0.015f)) {
+            lastLayoutUserScrollOffset - userScrollOffset
+          } else {
+            0f
+          }
         val noCascade = noCascadeNextLayout
         noCascadeNextLayout = false
-        applyLineSpringTargets(frameLayouts, activeState, syncImmediate, noCascade)
+        applyLineSpringTargets(frameLayouts, activeState, hardSnap, scrollDelta, noCascade)
         if (snapNextLineSpring) {
           // 对齐 Web 引擎 snapVisualState：恢复/可见性变化时瞬移 alpha/pass 到目标值
           snapVisualState(activeState)
@@ -939,7 +1124,7 @@ class MainPlayerLyricOverlayView
         val (frameLayouts, frameContentHeight) = computeFrameLayouts(activeState, candidateInterlude)
         lineLayouts = frameLayouts
         contentHeight = frameContentHeight
-        applyLineSpringTargets(frameLayouts, activeState, syncImmediate = true, noCascade = false)
+        applyLineSpringTargets(frameLayouts, activeState, hardSnap = true, scrollDelta = 0f, noCascade = false)
         commitViewportState()
       }
 
@@ -965,6 +1150,10 @@ class MainPlayerLyricOverlayView
       }
 
       val maxVerticalEffectPadding = max(8f * density, fontSizePx * 0.4f)
+      if (tracing) {
+        android.os.Trace.endSection()
+        android.os.Trace.beginSection("Lyric.draw")
+      }
       canvas.save()
       canvas.clipRect(
         viewportLeft.toFloat(),
@@ -973,8 +1162,8 @@ class MainPlayerLyricOverlayView
         (viewportTop + viewportHeight).toFloat(),
       )
       canvas.translate(viewportLeft.toFloat(), viewportTop.toFloat())
-      // 对齐 Web 引擎 isUserScrolling：拖拽中或回弹计时器未到期均视为用户滚动
-      val isUserScrolling = isDragging || scrollResetNano > 0
+      // 对齐 AMLL #617：拖拽中或自动对齐挂起（直到回弹）均视为用户滚动
+      val isUserScrolling = isUserScrolling()
       if (interludeState.isActive) {
         val anchorSpring = lineSprings.getOrNull(interludeState.anchorIndex)?.position
         val interludeY =
@@ -986,6 +1175,7 @@ class MainPlayerLyricOverlayView
       if (lineHitTops.size != lyricLines.size) {
         lineHitTops = FloatArray(lyricLines.size)
         lineHitBottoms = FloatArray(lyricLines.size)
+        lineStuckFrames = IntArray(lyricLines.size)
       }
       lineHitTops.fill(Float.NaN)
       lineHitBottoms.fill(Float.NaN)
@@ -994,10 +1184,31 @@ class MainPlayerLyricOverlayView
 
       // 对齐 AMLL 分组绘制顺序：BG 和声行（bgWrapper z-index -1 语义）先于其主行绘制，
       // 滑入/滑出期间从主行文字背后穿过；其余行保持索引序
+      // 对齐 AMLL #619：亮度层状态机只负责交叉淡入的进度 p，色标沿用对齐之前的
+      // 「激活全亮 / 暗部固定 inactiveAlpha」，行级 lineAlpha 不再直接取静息暗档
+      val brightnessRange = LyricLineBrightness.windowRange(activeState.anchorIndex, activeState.bufferedLineIndices)
+
       fun processLyricLine(index: Int) {
         val layout = lineLayouts.getOrNull(index) ?: return
         val springState = lineSprings.getOrNull(index)
         val springTop = springState?.position?.getCurrentPosition() ?: layout.top
+        // 有界安全网：弹簧没有排队目标、却落后布局超过一屏、连续多帧 → 直接归位。
+        // 健康动画碰不到这个阈值：入场与级联延迟期间队列非空（豁免），排队触发后弹簧
+        // 约 250ms 收敛；只有真正卡住的行会连续命中。拖拽恢复的也是同一类落后，网兜覆盖它。
+        if (springState != null &&
+          viewportHeight > 0f &&
+          abs(springTop - layout.top) > viewportHeight &&
+          springState.position.isQueueEmpty()
+        ) {
+          val stuck = (lineStuckFrames.getOrNull(index) ?: 0) + 1
+          if (index < lineStuckFrames.size) lineStuckFrames[index] = stuck
+          if (stuck > STUCK_SNAP_FRAMES) {
+            springState.position.setPosition(layout.top)
+            if (index < lineStuckFrames.size) lineStuckFrames[index] = 0
+          }
+        } else if (index < lineStuckFrames.size) {
+          lineStuckFrames[index] = 0
+        }
         val line = lyricLines[index]
         var drawTop = springTop
         var drawScale = (springState?.scale?.getCurrentPosition() ?: 100f) / 100f
@@ -1023,10 +1234,10 @@ class MainPlayerLyricOverlayView
         // 旧行时间窗结束即进入退场过渡
         val hotActive = activeState.activeLineIndices.contains(index)
         // 对齐 AMLL resolveIsActive：高亮行（唱完未熄灭）与 [scrollTo, latest) 范围内的
-        // 中间行均视为已呈现，保持 0.85 亮度档与全尺寸
+        // 中间行均视为已呈现（isActive → GRADIENT），保持全尺寸
         val presented = hotActive || activeState.isPresented(index)
-        // 对齐 AMLL resolveBlurLevel：模糊更新先于视口剔除，视口外行目标为最大档位，
-        // 行滚入视口时从模糊渐入，而非清晰突变到模糊；
+        // 对齐 AMLL resolveBlurLevel：模糊更新先于视口剔除，视口外行不施加模糊（#619），
+        // 行滚入视口时直接取自身档位，不再从最大模糊渐入；
         // 距离按主行索引计算（BG 行紧跟主行存储于 index+1，其主行在 index-1），
         // 对齐 AMLL 组级模糊：主行与 BG 行共享同组档位
         val blurDistanceIndex = if (line.isBG && index > 0) index - 1 else index
@@ -1043,13 +1254,27 @@ class MainPlayerLyricOverlayView
             viewportCssPx = currentViewportCssPx,
             deltaMs = deltaMs,
           )
+        // 对齐 AMLL #619：亮度层状态机推进先于视口剔除，窗口外行的亮层积分不因不可见而冻结。
+        // highlighted 取 presented（对齐 resolveIsActive）：AMLL 的 GRADIENT 由 isActive 判定，
+        // 含 highlightedGroups（唱完未熄灭的残留行）与 [scrollTo, latest) 中间行，不只是正在播放行
+        val brightP =
+          lineBrightness.update(
+            index = index,
+            inWindow = index in brightnessRange,
+            highlighted = presented,
+            deltaMs = clampedDeltaMs,
+            nowMs = currentNano / 1_000_000L,
+          )
         if (!inViewport) {
           return
         }
-        // 逐词效果仍活跃期间（retainedWordEffect）不衰减浮动，对齐 Web 引擎旧行动画反向播放的保持语义
+        // 逐词效果仍活跃期间（retainedWordEffect）继续走直绘渲染未播完的强调动画
         val retainedWordEffect = hasRetainedWordEffect(index, line, currentTimeMs)
         val wordEffectActive = hotActive || retainedWordEffect
-        updateLineFloatFade(index, presented || retainedWordEffect, clampedDeltaMs)
+        // 对齐 AMLL setInactive：行一离开「已呈现」集合就立刻反向播放浮动（此处用指数衰减近似）。
+        // 不能按逐词效果窗口保持浮动量——那会把回落推迟到高光结束之后，
+        // 表现为切行时旧行先悬停不动、稍后再整行下沉
+        updateLineFloatFade(index, presented, clampedDeltaMs)
         // 对齐 Web 引擎：用户滚动时抑制已播放行淡出
         val passed =
           hidePassedLines &&
@@ -1057,13 +1282,18 @@ class MainPlayerLyricOverlayView
             !presented &&
             !isUserScrolling &&
             isLinePassed(index, activeState.anchorIndex)
+        val lineAlpha =
+          resolveLineAlpha(
+            line = line,
+            active = hotActive,
+            buffered = presented && !hotActive,
+            passed = passed,
+            inViewport = inViewport,
+          )
         val brightAlpha =
           updateLineBrightAlpha(
             index,
-            line,
-            hotActive,
-            presented && !hotActive,
-            passed,
+            lineBrightness.playedAlpha(lineAlpha, brightP),
             attackFactor,
             releaseFactor,
           )
@@ -1071,6 +1301,16 @@ class MainPlayerLyricOverlayView
         // BG 仅在有效 alpha 接近 0 时跳过绘制，避免不可见行进入绘制路径
         if (line.isBG && brightAlpha * passAlpha <= 0.001f) {
           return
+        }
+        // P0 度量：统计本帧会进 GPU 模糊层的行数及其来源（阈值与 LyricBlurController 的 CLEAR_THRESHOLD_PX 一致）
+        if (tracing && blurRadius > 0.5f) {
+          if (hotActive) {
+            blurRowHotCount++
+          } else if (retainedWordEffect) {
+            blurRowRetainedCount++
+          } else {
+            blurRowFadeCount++
+          }
         }
         drawLine(
           canvas,
@@ -1081,9 +1321,15 @@ class MainPlayerLyricOverlayView
           currentTimeMs,
           brightAlpha * passAlpha,
           wordEffectActive,
+          presented,
           blurRadius,
           index,
         )
+      }
+      if (tracing) {
+        blurRowHotCount = 0
+        blurRowRetainedCount = 0
+        blurRowFadeCount = 0
       }
       var drawCursor = 0
       while (drawCursor < lyricLines.size) {
@@ -1099,7 +1345,13 @@ class MainPlayerLyricOverlayView
         }
       }
 
+      if (tracing) {
+        android.os.Trace.setCounter("Lyric.blurRowHot", blurRowHotCount.toLong())
+        android.os.Trace.setCounter("Lyric.blurRowRetained", blurRowRetainedCount.toLong())
+        android.os.Trace.setCounter("Lyric.blurRowFade", blurRowFadeCount.toLong())
+      }
       canvas.restore()
+      if (tracing) android.os.Trace.endSection()
 
       val frameAnimationActive =
         hasActiveFrameAnimation(activeState, currentTimeMs) || interludeState.isActive
@@ -1120,6 +1372,16 @@ class MainPlayerLyricOverlayView
       }
     }
 
+    /**
+     * 绘制一行：非激活行走位图缓存，其余走直绘（必要时套 GPU 模糊层）。
+     *
+     * @param active - 词效果活跃（hot 行或词效果保留期）：为 true 时走直绘逐词路径，
+     *   以便渲染未播完的高光/强调动画
+     * @param lineActive - 行是否仍处于「已呈现」态（presented，对齐 AMLL resolveIsActive）：
+     *   只有它决定逐词浮动的升降；高光被切行中断后 active 仍为 true 但 lineActive 已为 false，
+     *   浮动必须立即回落
+     * @param blurRadius - 本行当前模糊半径（物理像素），由 [LyricBlurController] 逐帧推进
+     */
     private fun drawLine(
       canvas: Canvas,
       line: NativeLyricLine,
@@ -1129,6 +1391,7 @@ class MainPlayerLyricOverlayView
       currentTimeMs: Long,
       baseAlpha: Float,
       active: Boolean,
+      lineActive: Boolean,
       blurRadius: Float,
       index: Int,
     ) {
@@ -1144,8 +1407,9 @@ class MainPlayerLyricOverlayView
       // 模糊必须走位图缓存：硬件加速 Canvas 对 drawText 的 BlurMaskFilter 不生效，只有
       // Canvas(bitmap) 软件画布能栅格化出模糊。渐变期由起点档与目标档两张位图叠化过渡
       // （近端不用清晰图，避免已模糊行升档时清晰分量闪入），一次渐变最多构建两张图。
-      // 对齐 AMLL 退场动画：逐词浮动衰减期间（lineFloatFadeProgress > 0）也不进入位图缓存，
-      // 让浮动通过直绘平滑落回，衰减完成后才缓存
+      // 对齐 AMLL 退场动画：浮动量未落回（lineFloatFadeProgress > 0）时不进入位图缓存——
+      // 位图缓存只保存静息内容、无法表达浮动，其中也包含仍保持满值 1 的「已呈现」行，
+      // 这些行统一直绘以渲染浮动，归零后才缓存
       val floatFade = lineFloatFadeProgress.getOrNull(index) ?: 0f
       val isFloatFading =
         !active && floatFade > 0.001f && (enableFloatAnimation || enableEmphasizeEffect)
@@ -1159,6 +1423,7 @@ class MainPlayerLyricOverlayView
         } else {
           top + layout.height * 0.5f
         }
+      // 余晖期内强制直绘：唱完的行 played 端增益还在衰减，进静态缓存会一帧掉到暗态（闪的来源）
       if (!active && !isFloatFading) {
         val drawn =
           blurController.drawStaticLine(
@@ -1171,6 +1436,7 @@ class MainPlayerLyricOverlayView
             scaleOriginY = scaleOriginY,
             contentHeight = lineHeightsCache.getOrNull(index) ?: 0f,
             viewportWidth = viewportWidth,
+            ink = staticInk,
           ) { targetCanvas, contentTop, contentBlurRadius ->
             val mainBottom =
               drawMainText(
@@ -1212,7 +1478,7 @@ class MainPlayerLyricOverlayView
       }
       val contentScaleOriginY = if (line.isBG) top else top + layout.height * 0.5f
 
-      // 模糊：API 31+ 硬件加速时把整行录进半分辨率 RenderNode，由 RenderEffect 在 GPU 上模糊整行
+      // 模糊：API 31+ 硬件加速时把整行录进 1/4 分辨率 RenderNode，由 RenderEffect 在 GPU 上模糊整行
       // （对齐 Web 引擎 filter: blur 的整行语义）；不支持时回退原直绘（maskFilter 仅在软件画布生效）
       val blurLayerDrawn =
         blurController.drawGpuLayer(
@@ -1233,6 +1499,7 @@ class MainPlayerLyricOverlayView
             lineAlpha = lineAlpha,
             currentTimeMs = currentTimeMs,
             active = active,
+            lineActive = lineActive,
             isFloatFading = isFloatFading,
             blurRadius = contentBlurRadius,
             contentMetrics = contentMetrics,
@@ -1251,6 +1518,7 @@ class MainPlayerLyricOverlayView
           lineAlpha = lineAlpha,
           currentTimeMs = currentTimeMs,
           active = active,
+          lineActive = lineActive,
           isFloatFading = isFloatFading,
           blurRadius = blurRadius,
           contentMetrics = contentMetrics,
@@ -1270,6 +1538,8 @@ class MainPlayerLyricOverlayView
      * （GPU 模糊层），避免两处重复维护绘制细节。
      *
      * @param active - 词效果活跃行（hot 行或词效果保留期），与浮动衰减态区分
+     * @param lineActive - 行是否仍处于「已呈现」态（对齐 AMLL resolveIsActive）；决定逐词浮动的升降，
+     *   区别于 [active]：高光被切行中断后词效果仍在保留期直绘，但行已失活、浮动必须立即回落
      * @param isFloatFading - 逐词浮动退场衰减中，需要逐词直绘渲染落回过程
      * @param blurRadius - 内容自身模糊半径；由模糊层承担时传 0，避免双重模糊
      */
@@ -1282,6 +1552,7 @@ class MainPlayerLyricOverlayView
       lineAlpha: Float,
       currentTimeMs: Long,
       active: Boolean,
+      lineActive: Boolean,
       isFloatFading: Boolean,
       blurRadius: Float,
       contentMetrics: ContentBlockMetrics,
@@ -1299,9 +1570,9 @@ class MainPlayerLyricOverlayView
           currentTimeMs = currentTimeMs,
           // 对齐 AMLL 退场动画：浮动衰减期间需走逐词直绘路径以渲染衰减中的浮动
           active = active || isFloatFading,
-          // lineActive 区别于 active：isFloatFading 时 active=true（走逐词路径）但
-          // lineActive=false（浮动衰减）
-          lineActive = active,
+          // lineActive 区别于 active：保留期直绘时 active=true（走逐词路径渲染未播完的高光动画）
+          // 但 lineActive=false（行已失活，浮动按 AMLL setInactive 立即反向播放）
+          lineActive = lineActive,
           blurRadius = blurRadius,
           contentMetrics = contentMetrics,
           index = index,
@@ -1319,6 +1590,14 @@ class MainPlayerLyricOverlayView
       )
     }
 
+    /**
+     * 绘制主行文本（含逐词路径、罗马音、注音），返回主行内容底部 Y（供副行排版）。
+     *
+     * @param active - 走逐词高亮路径：hot 行或词效果保留期
+     * @param lineActive - 行是否仍处于「已呈现」态（presented）：决定逐词浮动升降，
+     *   默认跟随 [active] 以兼容静态行（静态行既非词效果活跃也非已呈现）
+     * @param index - 行索引（按行取字体/合成加粗标记；-1 表示用全局字体）
+     */
     private fun drawMainText(
       canvas: Canvas,
       line: NativeLyricLine,
@@ -1339,7 +1618,9 @@ class MainPlayerLyricOverlayView
       // H-4: 行透明度统一烤进 paint,无模糊时不再需要整行离屏层；
       // 启用离屏层时烤全亮，由层 alpha 一次性乘行透明度，避免与 paint alpha 相乘成 alpha²
       val staticLayerEnabled = useStaticAlphaLayer && blurRadius > 0f
-      mainPaint.color = applyAlpha(textColor, if (staticLayerEnabled) 1f else lineAlpha)
+      // 字色与行级层次分离：颜色决定亮度体系（SDR / 宽色域 HDR），层次由 alpha 承载。
+      // 非激活行走静态位图缓存（字色在 staticInk 里），直绘与 GPU 模糊层录制走这里，两条路径同源
+      applyInk(mainPaint, if (staticLayerEnabled) 1f else lineAlpha)
       mainPaint.shader = null
       // 激活行 blurRadius 从非零值衰减到 0，残留值在硬件加速 Canvas 上 BlurMaskFilter 不生效；
       // 阈值 0.5px 以下直接按 0 处理，避免设置无效的 maskFilter
@@ -1380,6 +1661,7 @@ class MainPlayerLyricOverlayView
             currentTimeMs = currentTimeMs,
             lineActive = lineActive,
             index = index,
+            isBG = line.isBG,
           )
         } else {
           for (positioned in contentMetrics.main.positionedWords) {
@@ -1525,17 +1807,54 @@ class MainPlayerLyricOverlayView
       val segmentCapacity =
         positionedWords.sumOf { if (it.word.ruby.isEmpty()) 1 else it.word.rubyCharCount.coerceAtLeast(1) }
       beginMaskSweep(positionedWords.size, segmentCapacity)
-      for (wordIndex in positionedWords.indices) {
+      var wordIndex = 0
+      while (wordIndex < positionedWords.size) {
         val positioned = positionedWords[wordIndex]
-        recordMaskSweepWord(
-          wordIndex = wordIndex,
-          word = positioned.word,
-          wordX = startX + positioned.x,
-          width = positioned.width,
-          startMs = positioned.word.startTime,
-          endMs = positioned.word.endTime,
-          rubySpans = positioned.word.ruby,
-        )
+        // 连字符延音组（"-" 连接的 ≥2 段）整串合并为一段扫光：从组首词左缘匀速扫到组末词右缘，
+        // 不再按音节各自停顿；含注音词的组退回逐词登记，避免与注音子段拆分冲突。
+        // 组内词必在同一子行（连音串是不可断行的 chunk），baselineOffset 作为子行边界兜底
+        var groupEnd = wordIndex
+        if (positioned.sustainGroupId >= 0 && positioned.word.ruby.isEmpty()) {
+          while (groupEnd + 1 < positionedWords.size &&
+            positionedWords[groupEnd + 1].sustainGroupId == positioned.sustainGroupId &&
+            positionedWords[groupEnd + 1].baselineOffset == positioned.baselineOffset &&
+            positionedWords[groupEnd + 1].word.ruby.isEmpty()
+          ) {
+            groupEnd++
+          }
+        }
+        if (groupEnd > wordIndex) {
+          val last = positionedWords[groupEnd]
+          val groupX = startX + positioned.x
+          var groupStartMs = positioned.word.startTime
+          var groupEndMs = positioned.word.endTime
+          for (k in wordIndex..groupEnd) {
+            groupStartMs = min(groupStartMs, positionedWords[k].word.startTime)
+            groupEndMs = max(groupEndMs, positionedWords[k].word.endTime)
+          }
+          val segIndex =
+            appendSweepSegment(
+              groupX,
+              startX + last.x + last.width - groupX,
+              groupStartMs,
+              groupEndMs,
+            )
+          for (k in wordIndex..groupEnd) {
+            sweepWordSegIndex[k] = segIndex
+            sweepWordSegLast[k] = segIndex
+          }
+        } else {
+          recordMaskSweepWord(
+            wordIndex = wordIndex,
+            word = positioned.word,
+            wordX = startX + positioned.x,
+            width = positioned.width,
+            startMs = positioned.word.startTime,
+            endMs = positioned.word.endTime,
+            rubySpans = positioned.word.ruby,
+          )
+        }
+        wordIndex = groupEnd + 1
       }
       return LineWordLayout(
         chunkMergedStartMs = chunkMergedStartMs,
@@ -1622,16 +1941,51 @@ class MainPlayerLyricOverlayView
 
       val segmentCapacity = displayWords.sumOf { if (it.word.ruby.isEmpty()) 1 else it.word.rubyCharCount.coerceAtLeast(1) }
       beginMaskSweep(displayWords.size, segmentCapacity)
-      for (i in displayWords.indices) {
-        recordMaskSweepWord(
-          i,
-          displayWords[i].word,
-          wordXPositions[i],
-          widths[i],
-          displayWords[i].word.startTime,
-          displayWords[i].word.endTime,
-          displayWords[i].word.ruby,
-        )
+      var index = 0
+      while (index < displayWords.size) {
+        val displayWord = displayWords[index]
+        // 连字符延音组（"-" 连接的 ≥2 段）整串合并为一段扫光：从组首词左缘匀速扫到组末词右缘，
+        // 不再按音节各自停顿；含注音词的组退回逐词登记，避免与注音子段拆分冲突
+        var groupEnd = index
+        if (displayWord.sustainGroupId >= 0 && displayWord.word.ruby.isEmpty()) {
+          while (groupEnd + 1 < displayWords.size &&
+            displayWords[groupEnd + 1].sustainGroupId == displayWord.sustainGroupId &&
+            displayWords[groupEnd + 1].word.ruby.isEmpty()
+          ) {
+            groupEnd++
+          }
+        }
+        if (groupEnd > index) {
+          val groupX = wordXPositions[index]
+          var groupStartMs = displayWord.word.startTime
+          var groupEndMs = displayWord.word.endTime
+          for (k in index..groupEnd) {
+            groupStartMs = min(groupStartMs, displayWords[k].word.startTime)
+            groupEndMs = max(groupEndMs, displayWords[k].word.endTime)
+          }
+          val segIndex =
+            appendSweepSegment(
+              groupX,
+              wordXPositions[groupEnd] + widths[groupEnd] - groupX,
+              groupStartMs,
+              groupEndMs,
+            )
+          for (k in index..groupEnd) {
+            sweepWordSegIndex[k] = segIndex
+            sweepWordSegLast[k] = segIndex
+          }
+        } else {
+          recordMaskSweepWord(
+            index,
+            displayWord.word,
+            wordXPositions[index],
+            widths[index],
+            displayWord.word.startTime,
+            displayWord.word.endTime,
+            displayWord.word.ruby,
+          )
+        }
+        index = groupEnd + 1
       }
 
       return LineWordLayout(
@@ -1660,11 +2014,18 @@ class MainPlayerLyricOverlayView
       currentTimeMs: Long,
       lineActive: Boolean = true,
       index: Int = -1,
+      isBG: Boolean = false,
     ) {
-      // 对齐 engine/index.ts：最终可见透明度 = 行亮度 × 单词 mask alpha
-      // 亮部使用 lineAlpha，暗部固定使用 inactiveAlpha，避免已播区域被额外压暗成灰
+      // 沿用对齐 AMLL 之前的色标：亮部取行包络，暗部固定为未激活档（inactiveAlpha × lineAlpha）
       val playedColor = applyAlpha(textColor, lineAlpha)
-      val unplayedColor = applyAlpha(textColor, (inactiveAlpha * lineAlpha).coerceAtMost(1f))
+      val unplayedColor = applyAlpha(textColor, lineBrightness.unplayedAlpha(lineAlpha))
+      // HDR 色标：扫光两端用同一增益——明暗关系全部由色标里的 alpha 承载（已播 1.0 / 未播 inactiveAlpha），
+      // 「已唱 vs 未唱」的对比因此与非 HDR 模式一致，未播放端也落在宽色域里而不是 SDR 白
+      // 只在 HDR 真正生效时计算：关闭时字段不会被读取，算了就是白付两次 ColorSpace 往返
+      if (hdrController.isHdrActive) {
+        playedColorHdr = hdrController.hdrColor(playedColor, hdrController.highlightGain)
+        unplayedColorHdr = hdrController.hdrColor(unplayedColor, hdrController.highlightGain)
+      }
       // 对齐 Web 引擎：fadeWidth = clientHeight × fadeRatio，clientHeight 含行高（约 fontSize × 1.2）
       // Kotlin 使用 fontMetrics 的 descent - ascent 作为实际文本高度，等价于 CSS 的 contentHeight
       val fm = mainFontMetrics()
@@ -1688,10 +2049,13 @@ class MainPlayerLyricOverlayView
       val chunkCharCursorBase = layout.chunkCharCursorBase
 
       // 对齐 AMLL 遮罩关键帧：扫光段逐词独立时间窗推进（computeSegmentTravel），
-      // 行内时窗乱序、重叠的词互不干扰；长音/拖腔不做整行或整 chunk 合并，
-      // 每个词元各在自己的时窗内匀速扫过自身宽度，词间隙自然停顿
+      // 行内时窗乱序、重叠的词互不干扰；每个词元各在自己的时窗内匀速扫过自身宽度，
+      // 词间隙自然停顿。例外：连字符延音组（"-" 连接的 ≥2 段）整串合并为一段，
+      // 从组首词左缘连续扫到组末词右缘
       val lineStartMs = lyricLines.getOrNull(index)?.startTime ?: 0L
 
+      // 逐词强调段的 tracing 门控：同一个开关值同时守住 begin 与 end，避免中途开关翻转导致栈失衡
+      val tracing = android.os.Trace.isEnabled()
       for ((wordIndex, positioned) in positionedWords.withIndex()) {
         val word = positioned.word
         val progress =
@@ -1735,6 +2099,9 @@ class MainPlayerLyricOverlayView
         if (enableFloatAnimation || enableEmphasizeEffect) {
           val cid = positioned.chunkId
           val chunkStartMs = if (chunkMergedStartMs[cid] == -1L) word.startTime else chunkMergedStartMs[cid]
+          // P0 度量埋点：逐字强调（缩放/辉光/正弦浮动/逐字遮罩）的耗时,
+          // 用于判定播放态 1.5ms 绘制里「逐词强调」与「模糊层重录」各占多少
+          if (tracing) android.os.Trace.beginSection("Lyric.emphasis")
           drawEmphasizeWord(
             canvas = canvas,
             word = word,
@@ -1753,12 +2120,13 @@ class MainPlayerLyricOverlayView
             chunkCharIndexBase = chunkCharCursorBase[wordIndex],
             chunkCharCount = chunkCharCounts[cid].coerceAtLeast(1),
             isLastChunk = cid == lastChunkId,
-            isBG = false,
+            isBG = isBG,
             lineActive = lineActive,
             forceCharEmphasis = positioned.chunkShouldEmphasize,
             lineIndex = index,
             highlightShader = shader,
           )
+          if (tracing) android.os.Trace.endSection()
         } else {
           // 复用 shader 的 base 平移已带扫光位置，不能 setLocalMatrix(null)；仅 solid shader 才清矩阵
           if (shader !== reusableWordShader) shader.setLocalMatrix(null)
@@ -1827,10 +2195,16 @@ class MainPlayerLyricOverlayView
 
       val lastChunkId = displayWords.lastOrNull()?.chunkId
 
-      // 对齐 engine/index.ts：最终可见透明度 = 行亮度 × 单词 mask alpha
-      // 亮部使用 lineAlpha，暗部固定使用 inactiveAlpha，避免已播区域被额外压暗成灰
+      // 沿用对齐 AMLL 之前的色标：亮部取行包络，暗部固定为未激活档（inactiveAlpha × lineAlpha）
       val playedColor = applyAlpha(textColor, lineAlpha)
-      val unplayedColor = applyAlpha(textColor, (inactiveAlpha * lineAlpha).coerceAtMost(1f))
+      val unplayedColor = applyAlpha(textColor, lineBrightness.unplayedAlpha(lineAlpha))
+      // HDR 色标：扫光两端用同一增益——明暗关系全部由色标里的 alpha 承载（已播 1.0 / 未播 inactiveAlpha），
+      // 「已唱 vs 未唱」的对比因此与非 HDR 模式一致，未播放端也落在宽色域里而不是 SDR 白
+      // 只在 HDR 真正生效时计算：关闭时字段不会被读取，算了就是白付两次 ColorSpace 往返
+      if (hdrController.isHdrActive) {
+        playedColorHdr = hdrController.hdrColor(playedColor, hdrController.highlightGain)
+        unplayedColorHdr = hdrController.hdrColor(unplayedColor, hdrController.highlightGain)
+      }
       // 对齐 Web 引擎：fadeWidth = clientHeight × fadeRatio，clientHeight 含行高（约 fontSize × 1.2）
       // Kotlin 使用 fontMetrics 的 descent - ascent 作为实际文本高度，等价于 CSS 的 contentHeight
       val fm = mainFontMetrics()
@@ -2002,7 +2376,7 @@ class MainPlayerLyricOverlayView
     /**
      * 把一个词登记为独立扫光段：对齐 AMLL generateWebAnimationBasedMaskImage，
      * 遮罩主时间线按歌词文件词逐词推进（每段用词自己的时窗与宽度，渐变带在词间按各自速度衔接），
-     * chunk 只作用于强调时序，不合并扫光段。
+     * chunk 只作用于强调时序，不合并扫光段（连字符延音组由调用方合并整串成段）。
      * 含注音的词对齐 AMLL ruby 分支：拆成逐字符子段，每字符独立推进遮罩。
      *
      * @param wordIndex - 词在行内的序号
@@ -2175,7 +2549,9 @@ class MainPlayerLyricOverlayView
 
       canvas.save()
       canvas.scale(scale, scale, originX, originY)
-      dotsPaint.color = textColor
+      // 圆点也属于同一个亮度体系：HDR 下用宽色域白，逐点呼吸透明度仍由 alpha 承载，
+      // 观感与非 HDR 一致（SDR 分支等价于原来的 dotsPaint.color = textColor）
+      applyInk(dotsPaint, 1f)
       for (i in 0 until 3) {
         val delay = activeDuration / 3f * i
         val dotOpacity =
@@ -2261,7 +2637,14 @@ class MainPlayerLyricOverlayView
             }
         }
       val romanEndPadding = mainTextSize * 0.15f
-      val romanX = x + wordWidth / 2f - (romanWidth + romanEndPadding) / 2f
+      // 对齐 AMLL #614：wordBody 移除 align-items:center 后，有 Ruby 时逐字音译居左而非居中
+      val hasRuby = wordKey?.ruby?.isNotEmpty() == true
+      val romanX =
+        if (hasRuby) {
+          x
+        } else {
+          x + wordWidth / 2f - (romanWidth + romanEndPadding) / 2f
+        }
       val romanY = mainBaseline + mainFontMetrics().descent - subFontMetrics().ascent
       val shader =
         highlightShader
@@ -2329,47 +2712,90 @@ class MainPlayerLyricOverlayView
       fadeWidth: Float,
       playedColor: Int,
       unplayedColor: Int,
-    ): LinearGradient =
-      when {
+    ): LinearGradient {
+      // HDR 生效时改用 extended-sRGB 色标（分量可 >1.0）构造渐变。
+      // 位图是 ALPHA_8 掩码，渐变色 × 字形 alpha 一次 SrcOver 即完成，无需额外的加法 pass
+      // （加法混合的输出会被钳在 1.0，HDR 高光根本出不来）。
+      if (hdrController.isHdrActive) {
+        return when {
+          gradientStartX + fadeWidth <= wordX -> getHdrSolidWordShader(unplayedColor, false)
+          gradientStartX >= wordX + wordWidth -> getHdrSolidWordShader(playedColor, true)
+          else -> getReusableWordGradient(gradientStartX, fadeWidth, playedColor, unplayedColor, true)
+        }
+      }
+      return when {
         gradientStartX + fadeWidth <= wordX -> getSolidWordShader(unplayedColor)
         gradientStartX >= wordX + wordWidth -> getSolidWordShader(playedColor)
-        else -> getReusableWordGradient(gradientStartX, fadeWidth, playedColor, unplayedColor)
+        else -> getReusableWordGradient(gradientStartX, fadeWidth, playedColor, unplayedColor, false)
       }
+    }
 
     /**
      * 复用一个固定 played→unplayed 渐变实例：仅在 fadeWidth/颜色变化时重建（同一行内恒定）， 每帧只更新 localMatrix 把渐变窗口平移到
      * gradientStartX。原实现每帧每词新建 LinearGradient， 是激活行逐词高亮时的主要 GC 来源。
+     *
+     * HDR 变体必须继续占用同一槽位——char-emphasis 路径用 `shader === reusableWordShader`
+     * 身份判断来叠加 canvas 逆矩阵，换槽位会让扫光平移丢失并引入行内亚像素抖动。
      */
     private fun getReusableWordGradient(
       gradientStartX: Float,
       fadeWidth: Float,
       playedColor: Int,
       unplayedColor: Int,
+      hdr: Boolean,
     ): LinearGradient {
       val shader = reusableWordShader
       if (shader == null ||
         reusableFadeWidth != fadeWidth ||
         reusableFadePlayedColor != playedColor ||
-        reusableFadeUnplayedColor != unplayedColor
+        reusableFadeUnplayedColor != unplayedColor ||
+        reusableFadeHdr != hdr
       ) {
         reusableWordShader =
-          LinearGradient(
-            0f,
-            0f,
-            fadeWidth,
-            0f,
-            playedColor,
-            unplayedColor,
-            Shader.TileMode.CLAMP,
-          )
+          if (hdr) {
+            hdrController.hdrWordGradient(fadeWidth, playedColorHdr, unplayedColorHdr)
+          } else {
+            LinearGradient(
+              0f,
+              0f,
+              fadeWidth,
+              0f,
+              playedColor,
+              unplayedColor,
+              Shader.TileMode.CLAMP,
+            )
+          }
         reusableFadeWidth = fadeWidth
         reusableFadePlayedColor = playedColor
         reusableFadeUnplayedColor = unplayedColor
+        reusableFadeHdr = hdr
       }
       reusableWordShaderMatrix.reset()
       reusableWordShaderMatrix.setTranslate(gradientStartX, 0f)
       reusableWordShader!!.setLocalMatrix(reusableWordShaderMatrix)
       return reusableWordShader!!
+    }
+
+    /**
+     * HDR 单色渐变缓存。
+     *
+     * 按语义拆成亮端/暗端两份：亮暗两端的色标 alpha 不同（已播 1.0 / 未播 inactiveAlpha），
+     * 拆开后互不挤占同一条 LRU，命中也更稳。两端用同一增益（[LyricHdrController.highlightGain]）：
+     * 明暗关系由色标 alpha 承载，层次因此与非 HDR 模式一致。
+     * 键取量化 alpha 的色标，且渐变按同一份量化色构造：行亮度逐帧交叉淡入时整色每帧都不同，
+     * 不量化会让缓存恒定 miss、逐词新建渐变；量化后档位有限，且同档内色差肉眼不可见。
+     */
+    private fun getHdrSolidWordShader(
+      color: Int,
+      bright: Boolean,
+    ): LinearGradient {
+      val cache = if (bright) solidWordShaderCacheHdrBright else solidWordShaderCacheHdrDim
+      val gain = hdrController.highlightGain
+      val key = hdrController.quantizeAlpha(color)
+      return cache.get(key)
+        ?: hdrController
+          .hdrSolidShader(hdrController.hdrColor(key, gain))
+          .also { cache.put(key, it) }
     }
 
     private fun getSolidWordShader(color: Int): LinearGradient =
@@ -2438,6 +2864,59 @@ class MainPlayerLyricOverlayView
       rubyPaint.shader = null
     }
 
+    /**
+     * 画强调流体 halo：发光体晕染 + 气体流动感。
+     *
+     * 以字形辉光位图（已预模糊的不规则 alpha 掩码）为发光体，连画三层：每层按不同频率/相位
+     * 绕字形做椭圆漂移、透明度各自呼吸，三层错峰叠加后边缘不再是均匀圆盘，而是互相干涉的
+     * 连续气团；相邻字符的气团连成一片，自然把词组包裹起来。时间源取 chunk 播放时钟
+     * （暂停即冻结），全是确定性三角函数，同一时刻每次绘制位置一致，不闪烁；绘制路径零分配。
+     * 颜色走扫光 shader（调用方已设好 localMatrix，本函数绘制在同一字符变换空间内，直接复用），
+     * 所以 HDR 分量由 shader 携带，paint 只设 WHITE + alpha。
+     *
+     * @param charLeft 发光位图左上相对当前 canvas 原点的 x（已含 glowPad 外扩，下同）
+     * @param charTop 发光位图左上相对当前 canvas 原点的 y
+     * @param timeSec chunk 播放时钟（秒），驱动漂移与呼吸
+     */
+    private fun drawEmphasisFluidHalo(
+      canvas: Canvas,
+      glyph: AlphaGlyphBitmap,
+      shader: LinearGradient,
+      charLeft: Float,
+      charTop: Float,
+      textSize: Float,
+      timeSec: Float,
+      level: Float,
+      seed: Int,
+    ) {
+      val glowBmp = glyph.glowBitmap
+      if (glowBmp == null || glowBmp.isRecycled) return
+      if (level <= 0.01f) return
+      fluidHaloPaint.shader = shader
+      fluidHaloPaint.color = Color.WHITE
+      val drift = FLUID_HALO_DRIFT_EM * textSize * (0.5f + 0.5f * level)
+      var layer = 0
+      while (layer < FLUID_HALO_LAYERS) {
+        val phase = seed * 0.9f + layer * 2.1f
+        val wobbleX = kotlin.math.sin(timeSec * (1.1f + layer * 0.35f) + phase)
+        val wobbleY = kotlin.math.cos(timeSec * (0.8f + layer * 0.3f) + phase * 1.3f)
+        val breathe = 0.75f + 0.25f * kotlin.math.sin(timeSec * 0.6f + phase * 2f)
+        val alpha = (level * FLUID_HALO_ALPHA * breathe * (1f - layer * 0.28f)).toInt().coerceIn(0, 255)
+        if (alpha > 0) {
+          fluidHaloPaint.alpha = alpha
+          canvas.drawBitmap(
+            glowBmp,
+            charLeft - glyph.glowPad + wobbleX * drift,
+            charTop - glyph.glowPad + wobbleY * drift,
+            fluidHaloPaint,
+          )
+        }
+        layer++
+      }
+      fluidHaloPaint.alpha = 255
+      fluidHaloPaint.shader = null
+    }
+
     private fun drawEmphasizeWord(
       canvas: Canvas,
       word: NativeLyricWord,
@@ -2466,13 +2945,19 @@ class MainPlayerLyricOverlayView
       val elapsedFloat = elapsed.toFloat()
       // 对齐 Web 引擎 createFloatAnimation 的 ease-out 缓动 (cubic-bezier(0,0,0.58,1))：
       // 前段斜率更缓、整体减速更均匀，避免 ease-out-cubic 前段过陡导致的「窜起后停顿」不顺滑观感
-      // 对齐 AMLL 退场动画：行退场时浮动不 snap 到 0，而是按 lineFloatFadeProgress 指数衰减平滑落回
+      // 对齐 AMLL setInactive：行退场时浮动相关动画（整词抬升 float-word 与逐字正弦 emphasize-word-float-only）
+      // 一起反向播放，此处统一用 lineFloatFadeProgress 指数衰减近似
+      val floatFade =
+        if (lineActive) {
+          1f
+        } else {
+          lineFloatFadeProgress.getOrNull(lineIndex) ?: 0f
+        }
       val rawFloatProgress =
         if (!lineActive) {
           // 退场期间：用衰减进度乘以当前词已达到的浮动量
-          val fadeProgress = lineFloatFadeProgress.getOrNull(lineIndex) ?: 0f
           val t = normalize(0f, activeDuration, elapsedFloat)
-          AndroidLyricEasing.easeOut58(t) * fadeProgress
+          AndroidLyricEasing.easeOut58(t) * floatFade
         } else {
           val t = normalize(0f, activeDuration, elapsedFloat)
           AndroidLyricEasing.easeOut58(t)
@@ -2625,7 +3110,9 @@ class MainPlayerLyricOverlayView
         val sinY = Math.sin((floatProgress * Math.PI).toDouble()).toFloat()
         // 用户偏好：浮动高度系数保持 0.07/0.14（比 AMLL 基准 0.05/0.1 再轻微大一点）
         val floatAmplitude = if (isBG) 0.14f else 0.07f
-        val floatLift = sinY * floatAmplitude * mainPaint.textSize
+        // 正弦浮动同样乘退场衰减：只衰减整词抬升的话，旧行在高光被切断后仍会持续上下浮动，
+        // 切行时表现为字面细微抖动（AMLL 会把 emphasize-word-float-only 一并反向播放）
+        val floatLift = sinY * floatAmplitude * mainPaint.textSize * floatFade
         val offsetY = -baseFloatLift + glowOffsetY - floatLift
 
         canvas.save()
@@ -2655,6 +3142,7 @@ class MainPlayerLyricOverlayView
             inverseMatrix
           }
         shader.setLocalMatrix(composedLocal)
+
         val glyph = metrics.glyphs[i]
         if (glyph != null && !glyph.bitmap.isRecycled) {
           // 字符锚点在原点（字符中心 + baseline），glyph 位图内字符从 (leftPad, baselineY) 起：
@@ -2662,17 +3150,36 @@ class MainPlayerLyricOverlayView
           val charLeft = -cWidth / 2f - glyph.leftPad
           val charTop = -glyph.baselineY
 
-          // 1. 辉光层：drawBitmap(glyph.glowBitmap) + 纯色 paint
-          //    预模糊的 ALPHA_8 alpha 掩码（buildAlphaGlyph 时软件 BlurMaskFilter 栅格化）× paint.color
+          // 0. 流体 halo（最底层）：三层辉光位图错峰漂移叠加，画在字形辉光与主字形之下，不盖字。
+          // 时间源取 chunk 播放时钟，与辉光同节奏冻结；多个字符的气团叠加后把词组包裹成连续整体。
+          val haloLevel = (glowLevel / EMPHASIS_BLUR_MAX).coerceIn(0f, 1f)
+          if (haloLevel > 0.01f && charProgress > 0f) {
+            drawEmphasisFluidHalo(
+              canvas,
+              glyph,
+              shader,
+              charLeft,
+              charTop,
+              mainPaint.textSize,
+              chunkElapsedFloat / 1000f,
+              haloLevel,
+              globalCharIndex,
+            )
+          }
+
+          // 1. 辉光层：drawBitmap(glyph.glowBitmap) + 扫光 shader
+          //    预模糊的 ALPHA_8 alpha 掩码（buildGlowAlphaGlyph 中软件 BlurMaskFilter 栅格化）× shader 颜色
           //    = 白色辉光晕色。硬件 Canvas 直接画，绕开 setShadowLayer 对 drawBitmap 的 API 限制（API 29+ 才生效）
           //    glowBitmap 已外扩 glowPad：位图左上 = 字符位图左上 - (glowPad, glowPad)
-          // alpha 由 glowLevel × 当前行 alpha 控制，对齐 AMLL textShadow 的 rgba(255,255,255,glow) alpha
+          // 辉光必须与主字形共用同一扫光 shader：AMLL 的 text-shadow 位于字符元素内部，
+          // 会连同文字一起被逐词遮罩（已播放端 1 / 未播放端 inactiveAlpha）衰减；
+          // 若辉光不带遮罩，尚未扫到的字符会以全强度发光，形成「高光提前波及未激活字符」的错误观感。
+          // 行级 alpha 已由 shader 颜色 alpha 承担，故 paint alpha 只乘 glowLevel
           val glowBmp = glyph.glowBitmap
           if (glowLevel > 0.01f && glowBmp != null && !glowBmp.isRecycled) {
-            val currentLineAlpha = Color.alpha(playedColor) / 255f
-            val glowAlpha = (glowLevel * currentLineAlpha * 255).toInt().coerceIn(0, 255)
+            val glowAlpha = (glowLevel * 255).toInt().coerceIn(0, 255)
             if (glowAlpha > 0) {
-              alphaGlyphPaint.shader = null
+              alphaGlyphPaint.shader = shader
               alphaGlyphPaint.color = Color.WHITE
               alphaGlyphPaint.alpha = glowAlpha
               canvas.drawBitmap(
@@ -2759,7 +3266,7 @@ class MainPlayerLyricOverlayView
       subPaint.typeface = subTypeface
       subPaint.isFakeBoldText = subSyntheticBold
       // 对齐 Web 引擎 .lp-sub: opacity = pass × 0.3，随 passAlpha 淡出
-      subPaint.color = applyAlpha(textColor, lineAlpha * 0.3f)
+      applyInk(subPaint, lineAlpha * 0.3f)
       subPaint.shader = null
       // 同 drawMainText：阈值 0.5px 以下不设置 BlurMaskFilter；
       // σ 与主行一致：GPU 模糊层对整行统一模糊（对齐 Web filter: blur 的整行语义），
@@ -2994,7 +3501,16 @@ class MainPlayerLyricOverlayView
             end += Character.charCount(text.codePointAt(end))
           }
           val segment = text.substring(index, end)
-          units += StaticBreakUnit(segment, paint.measureText(segment), isSpace = false)
+          // 连字符延音串（如 whoa-ah-oh-oh）整段无空格，竖屏下超宽且无法断行：
+          // 按连字符拆成多个单元（连字符保留在行尾），对齐浏览器在连字符处换行的行为
+          var partStart = 0
+          while (partStart < segment.length) {
+            val hyphen = segment.indexOf('-', partStart)
+            val partEnd = if (hyphen < 0) segment.length else hyphen + 1
+            val part = segment.substring(partStart, partEnd)
+            units += StaticBreakUnit(part, paint.measureText(part), isSpace = false)
+            partStart = partEnd
+          }
           index = end
         }
       }
@@ -3081,6 +3597,14 @@ class MainPlayerLyricOverlayView
         val nextChunkId = displayWords.getOrNull(i + 1)?.chunkId
         if (nextChunkId != null && nextChunkId != displayWords[i].chunkId) {
           chunkStarts += i + 1
+        } else if (
+          nextChunkId != null &&
+          displayWords[i].word.word.endsWith('-') &&
+          displayWords[i + 1].leadingSpace.not()
+        ) {
+          // 连字符延音串被合并为同一 chunk 后竖屏下整行溢出：
+          // 允许在 chunk 内部的连字符后断行（只影响排版，chunkId 与强调时序不变）
+          chunkStarts += i + 1
         }
       }
 
@@ -3104,6 +3628,7 @@ class MainPlayerLyricOverlayView
               baselineOffset = rubyGap - fm.ascent,
               chunkId = displayWords[i].chunkId,
               chunkShouldEmphasize = displayWords[i].chunkShouldEmphasize,
+              sustainGroupId = displayWords[i].sustainGroupId,
             )
           x += wordWidths[i]
         }
@@ -3154,6 +3679,8 @@ class MainPlayerLyricOverlayView
             breakCost =
               when {
                 punctuationRe.containsMatchIn(prevText) -> -punctuationReward
+                // 连字符后断行（如 whoa-｜ah）：与空格同等奖励，对齐浏览器换行行为
+                prevText.endsWith('-') -> -spaceReward
                 displayWords[breakWordIndex].leadingSpace -> -spaceReward
                 AndroidLyricWordSegmentation.isCjkText(
                   displayWords[breakWordIndex].word.word,
@@ -3192,6 +3719,7 @@ class MainPlayerLyricOverlayView
               baselineOffset = baselineOffset,
               chunkId = displayWords[i].chunkId,
               chunkShouldEmphasize = displayWords[i].chunkShouldEmphasize,
+              sustainGroupId = displayWords[i].sustainGroupId,
             )
           x += wordWidths[i]
         }
@@ -3259,10 +3787,13 @@ class MainPlayerLyricOverlayView
       val interlude = cachedInterludeInfo
       if (!playing) {
         // 暂停时词级效果与间奏进度均随播放时间冻结：
-        // 仅实时驱动的动画(浮动衰减/行弹簧/模糊渐变/滚动惯性)或布局变化(seek/切行/暂停缩放)需要帧，
-        // 跳过相同像素的空转重绘
+        // 仅实时驱动的动画(浮动退场/行弹簧/模糊渐变/滚动惯性)或布局变化(seek/切行/暂停缩放)需要帧，
+        // 跳过相同像素的空转重绘。
+        // 判据用 hasRetreatingFloatFade 而非 hasActiveFloatFade：已呈现行(hot 或 isPresented)的
+        // lineFloatFadeProgress 恒为 1 的静息值，其浮动相位随播放时间冻结，不能据此判定"仍在动画"，
+        // 否则暂停后会永久逐帧空转（实测暂停态仍 34 次/秒重绘、2.4 次模糊重录/帧）
         return isLayoutStateChanged(activeState, interlude) ||
-          hasActiveFloatFade() ||
+          hasRetreatingFloatFade(activeState) ||
           lineSpringsActive() ||
           blurController.isAnimating() ||
           kotlin.math.abs(userScrollOffset) > 0.5f ||
@@ -3347,41 +3878,45 @@ class MainPlayerLyricOverlayView
     private fun snapVisualState(activeState: ActiveState) {
       ensureLineVisualStateCapacity()
       val activeIdx = activeState.anchorIndex
-      val isUserScrolling = isDragging || scrollResetNano > 0
+      val isUserScrolling = isUserScrolling()
       for (i in lyricLines.indices) {
         val line = lyricLines[i]
         // 对齐 Web 引擎 activeLineSet：仅当前时间窗行（含 BG 配对）视为激活
         val isActive = activeState.activeLineIndices.contains(i)
-        // 对齐 AMLL resolveIsActive：呈现中（高亮未熄灭 + 范围内中间行）保持 0.85 档；
-        // BG 行同 updateLineBrightAlpha：仅激活可见，归零分支排在 bufferedTier 之前（避免被其拦截）
-        val bufferedTier = !isActive && activeState.isPresented(i)
+        // 对齐 AMLL resolveIsActive：isActive（GRADIENT 判定）含唱完未熄灭的高亮行
+        // 与 [scrollTo, latest) 范围内的中间行
+        val presented = isActive || activeState.isPresented(i)
         val passed =
           hidePassedLines &&
             playing &&
             !isActive &&
-            !bufferedTier &&
+            !presented &&
             !isUserScrolling &&
             isLinePassed(i, activeIdx)
-        val targetBright =
-          when {
-            passed -> 0.0001f
-            line.isBG && isActive -> 0.4f
-            isActive -> 1f
-            line.isBG -> 0.0001f
-            bufferedTier -> 0.85f
-            else -> inactiveAlpha
-          }
-        lineBrightAlphas[i] = targetBright
+        val lineAlpha =
+          resolveLineAlpha(
+            line = line,
+            active = isActive,
+            buffered = presented && !isActive,
+            passed = passed,
+            inViewport = true,
+          )
+        // 对齐 AMLL 冷同步语义：不开启保留期，仅恢复/冻结后的首次布局瞬移。
+        // 瞬移后亮层进度只可能落在 0（未呈现）或 1（呈现），包络取 played 端即 lineAlpha 或其 0.2 静息档，
+        // 待后续 update 正常重新淡入
+        lineBrightness.snap(i, presented)
+        lineBrightAlphas[i] = lineBrightness.playedAlpha(lineAlpha, if (presented) 1f else 0f)
         linePassAlphas[i] = if (passed) 0.0001f else 1f
-        lineFloatFadeProgress[i] = if (isActive || bufferedTier) 1f else 0f
+        lineFloatFadeProgress[i] = if (presented) 1f else 0f
       }
     }
 
     /**
-     * 更新逐词浮动衰减进度（对齐 Web 引擎旧行动画反向播放的语义）
+     * 更新逐词浮动衰减进度（对齐 AMLL setInactive 的浮动反向播放语义）
      *
-     * - 行激活（或逐词效果仍活跃）时浮动量恢复满值
-     * - 行失活后 lineFloatFadeProgress 从 1 指数衰减到 0，让逐词浮动平滑落回而非 snap
+     * - 行仍处于「已呈现」态（presented，对齐 resolveIsActive）时浮动量保持满值
+     * - 行失活后 lineFloatFadeProgress 从 1 指数衰减到 0，让逐词浮动平滑落回而非 snap；
+     *   不按逐词效果保留期保持，否则回落会被推迟到高光结束之后
      */
     private fun updateLineFloatFade(
       index: Int,
@@ -3401,46 +3936,64 @@ class MainPlayerLyricOverlayView
         if (currentFade < 0.001f) 0f else currentFade + (0f - currentFade) * fadeFactor
     }
 
-    private fun updateLineBrightAlpha(
-      index: Int,
+    /**
+     * 行级透明度（沿用对齐 AMLL 之前的色标）。
+     *
+     * 视口外剔除（0）、已播淡出（1e-4）、激活行全亮（1）、呈现中（1）与其余行（1）。
+     * 静息暗档不再由行级承担，交由亮暗合成公式的暗层（inactiveAlpha）提供。
+     * BG 行保持既有关闭残影的例外：仅激活时可见 0.4，其余归零（对齐 bgWrapper 滑出即淡出）。
+     *
+     * @param active - 行是否正在演唱（hot）
+     * @param buffered - 行是否处于呈现中的保留档（唱完未熄灭与滚动范围内中间行）
+     */
+    private fun resolveLineAlpha(
       line: NativeLyricLine,
       active: Boolean,
       buffered: Boolean,
       passed: Boolean,
+      inViewport: Boolean,
+    ): Float =
+      when {
+        !inViewport -> 0f
+        passed -> 0.0001f
+        line.isBG && active -> 0.4f
+        line.isBG -> 0.0001f
+        active -> 1f
+        buffered -> 0.85f
+        else -> 1f
+      }
+
+    /**
+     * 把行包络平滑到目标亮度（对齐 AMLL 行级 opacity 的 CSS 过渡曲线观感）。
+     *
+     * 目标为 [LyricLineBrightness.playedAlpha]，即 played 端绝对 alpha：
+     * 静息行（p = 0）收敛到 inactiveAlpha，高亮行（p = 1）收敛到行级 lineAlpha。
+     * 静态行、单词行等无遮罩路径直接消费本包络作为整行透明度。
+     *
+     * @param targetAlpha - 目标包络值（已含 played 端与 pass 的合成）
+     */
+    private fun updateLineBrightAlpha(
+      index: Int,
+      targetAlpha: Float,
       attackFactor: Float,
       releaseFactor: Float,
     ): Float {
       ensureLineVisualStateCapacity()
-      // 对齐 AMLL resolveIsActive/resolveOpacity：激活行全亮、呈现中（唱完未熄灭与
-      // 范围内中间行）保持 0.85 档，其余非激活行回落 inactiveAlpha。
-      // BG 行例外：仅激活时可见（0.4）；其归零分支必须排在 buffered 之前，否则 buffered
-      // 档会先命中让 BG 行保持可见——BG 行退出激活即滑向 ±80% 隐藏位，折叠后不占布局、
-      // 恰压在主行翻译/下一行上，保持可见会留半透明残影；对齐 AMLL bgWrapper 滑出即淡出
-      val target =
-        when {
-          passed -> 0.0001f
-          line.isBG && active -> 0.4f
-          active -> 1f
-          line.isBG -> 0.0001f
-          buffered -> 0.85f
-          else -> inactiveAlpha
-        }
       val current = lineBrightAlphas[index]
       // 对齐 Web 引擎：低于半非激活亮度的升亮走 release 速度，其余按目标方向选 attack/release
       val halfInactive = inactiveAlpha * 0.5f
+      val rising = targetAlpha > current
       val effectiveFactor =
-        if (!passed && current < halfInactive) {
-          releaseFactor
-        } else if (target > current) {
+        if (rising && current >= halfInactive) {
           attackFactor
         } else {
           releaseFactor
         }
       val next =
-        if (abs(target - current) < 0.001f) {
-          target
+        if (abs(targetAlpha - current) < 0.001f) {
+          targetAlpha
         } else {
-          current + (target - current) * effectiveFactor
+          current + (targetAlpha - current) * effectiveFactor
         }
       lineBrightAlphas[index] = next
       return next
@@ -3475,12 +4028,15 @@ class MainPlayerLyricOverlayView
     }
 
     private fun resetLineVisualStates() {
+      // 初始包络取非高亮行的静息值 playedAlpha(lineAlpha = 1f, p = 0) = inactiveAlpha，
+      // 与首个 update 帧的目标一致，避免启动/切歌时全屏先亮后暗；BG 行仍按隐藏档初始化
       lineBrightAlphas =
         FloatArray(lyricLines.size) { index ->
           if (lyricLines.getOrNull(index)?.isBG == true) 0.0001f else inactiveAlpha
         }
       linePassAlphas = FloatArray(lyricLines.size) { 1f }
       blurController.reset(lyricLines.size)
+      lineBrightness.reset(lyricLines.size)
       lineFloatFadeProgress = FloatArray(lyricLines.size)
     }
 
@@ -3694,12 +4250,88 @@ class MainPlayerLyricOverlayView
       return cachedActiveState
     }
 
+    /**
+     * 用户滚动态：手势确认滑动意图（[isGestureScrollConfirmed]，位移超过拖动阈值）期间为真，
+     * 松手后由 [isAutoAlignSuspended] 维持，直到条件式 [maybeResetScroll] 回弹发生才清除，
+     * 期间抑制淡出、模糊与自动对齐。
+     *
+     * 按下不动与轻点都不进入该状态（对齐 AMLL：touch 路径的 startInteraction 仅在位移超过 10px
+     * 确认意图后触发，才置 isTouchScrolled）；跟手位移仍从按下点起算，与滚动态判定无关。
+     */
+    private fun isUserScrolling(): Boolean = isGestureScrollConfirmed || isAutoAlignSuspended
+
+    /** 对齐 AMLL canResumeAutoAlign：滚动静止满 500ms 才允许回弹 */
+    private fun canResumeAutoAlign(nowNano: Long): Boolean =
+      scrollEndNano > 0L &&
+        nowNano - scrollEndNano >= AUTO_ALIGN_RESUME_DELAY_NS
+
+    /** 对齐 AMLL resetScroll：清空手势滚动状态（含意图确认标记）并恢复自动对齐 */
+    private fun resetScrollState() {
+      userScrollOffset = 0f
+      inertialVelocity = 0f
+      scrollEndNano = 0L
+      isAutoAlignSuspended = false
+      // 对齐 AMLL resetScroll 里 touchState.isIntentConfirmed = false 的语义
+      isGestureScrollConfirmed = false
+    }
+
+    /**
+     * 条件式滚动重置（对齐 AMLL #617）。
+     *
+     * 六重门控同时成立才回弹：scrollTo 变更或刚离开间奏、当前未聚焦间奏、
+     * 焦点行正在播放、自动对齐被挂起、滚动静止满 500ms、焦点行在真实视口内。
+     * 用户滚动态持续到回弹发生为止。
+     *
+     * 另设兜底超时：挂起满 [AUTO_ALIGN_FORCE_RESET_NS] 且惯性已停便无条件回正，
+     * 补齐上游 beginScrollHandler 的 5s 定时器。门控在长句间空隙或无换行时可能长期
+     * 不成立，歌词会一直挂在偏移位置不回正。
+     */
+    private fun maybeResetScroll(
+      activeState: ActiveState,
+      nowNano: Long,
+    ) {
+      val scrollToViewIndex = activeState.anchorIndex
+      val scrollToChanged = scrollToViewIndex != prevScrollToViewIndex
+      val justLeftInterlude = prevFocusOnInterlude && !interludeState.isActive
+      // 对齐 AMLL base/index.ts 的条件式回弹：只认正在播放行（playingGroups.has(scrollToIndex)），
+      // 不含「唱完未熄灭」的高亮行——句间空隙期不触发回弹，等下一行开始播放才归位
+      val focusPlaying = activeState.activeLineIndices.contains(scrollToViewIndex)
+      val focusInViewport = isLineInRealViewport(scrollToViewIndex)
+      val shouldReset =
+        (scrollToChanged || justLeftInterlude) &&
+          !interludeState.isActive &&
+          focusPlaying &&
+          isAutoAlignSuspended &&
+          canResumeAutoAlign(nowNano) &&
+          focusInViewport
+      // 兜底超时：与 canResumeAutoAlign 同前提（惯性停摆满 500ms），此时手势已结束
+      val forcedReset =
+        isAutoAlignSuspended &&
+          canResumeAutoAlign(nowNano) &&
+          nowNano - scrollEndNano >= AUTO_ALIGN_FORCE_RESET_NS
+      prevScrollToViewIndex = scrollToViewIndex
+      prevFocusOnInterlude = interludeState.isActive
+      if (shouldReset || forcedReset) resetScrollState()
+    }
+
+    /** 焦点行是否落在真实视口内（不含 overscan/模糊外扩，对齐 isInRenderRange(false)） */
+    private fun isLineInRealViewport(index: Int): Boolean {
+      val top = lineHitTops.getOrNull(index) ?: return false
+      val bottom = lineHitBottoms.getOrNull(index) ?: return false
+      if (top.isNaN() || bottom.isNaN()) {
+        val layout = lineLayouts.getOrNull(index) ?: return false
+        val springTop = lineSprings.getOrNull(index)?.position?.getCurrentPosition() ?: layout.top
+        return springTop + layout.height >= 0f && springTop <= viewportHeight
+      }
+      return max(top, bottom) >= 0f && min(top, bottom) <= viewportHeight
+    }
+
     private fun handleProgressJump() {
       // 对齐 Web 引擎 handleSeek：清滚动状态 + 重建激活集合 + calculateLayout(false, noCascade=true)，
       // 所有 seek（点击行、进度条、程序跳转）统一弹簧过渡、全员无级联
-      userScrollOffset = 0f
-      inertialVelocity = 0f
-      scrollResetNano = 0L
+      resetScrollState()
+      prevScrollToViewIndex = -1
+      prevFocusOnInterlude = false
       resetTimelineState()
       noCascadeNextLayout = true
       invalidateCommittedLayoutState()
@@ -4191,6 +4823,12 @@ class MainPlayerLyricOverlayView
      */
     private fun playEntranceAnimation() {
       if (viewportHeight <= 0 || lyricLines.isEmpty()) return
+      // 布局缺失行时不能逐行 continue 跳过：被跳过的行既拿不到目标也不进活跃集，
+      // position 弹簧会一直停在 offScreenPosition()（视口下方）直到下一次布局重算才被救回，
+      // 期间该行被 !inViewport 剔除，表现为歌词整片空白。布局不完整就整体放弃入场动画；
+      // 下一帧 applyLineSpringTargets 会把仍停在哨兵位的行直接落位（见该函数的 sentinel 判定），
+      // 不依赖 viewportChanged——setLyrics 末尾已 commitViewportState，下一帧它其实是 false。
+      if (lineLayouts.size < lyricLines.size) return
       val offset = viewportHeight * 0.6f
       val activeState = resolveActiveState(baseTimeMs)
       for (i in lineSprings.indices) {
@@ -4349,6 +4987,32 @@ class MainPlayerLyricOverlayView
       return false
     }
 
+    /**
+     * 暂停态：是否还有「非呈现行」的浮动正在退场。
+     *
+     * 已呈现行（当前演唱行或 isPresented 行）的 lineFloatFadeProgress 被钉在 1 作为静息值，
+     * 其浮动相位由播放时间驱动、暂停时一并冻结，因此它们不需要帧；
+     * 只有已离开呈现集合、正在指数衰减回落的行才需要连续帧把退场动画走完。
+     */
+    private fun hasRetreatingFloatFade(activeState: ActiveState): Boolean {
+      for (i in lineFloatFadeProgress.indices) {
+        if (lineFloatFadeProgress[i] > 0.001f &&
+          !activeState.activeLineIndices.contains(i) &&
+          !activeState.isPresented(i)
+        ) {
+          return true
+        }
+      }
+      return false
+    }
+
+    // P0 度量：本帧进入 GPU 模糊层的行数按来源计数（当前演唱行 / 词效果保留期 / 浮动退场）。
+    // 绘制前清零、绘制后整体发布为 Perfetto counter：只有累计值读不出比例，而正是比例决定
+    // 0.94ms/帧 里有多少是可省的
+    private var blurRowHotCount = 0
+    private var blurRowRetainedCount = 0
+    private var blurRowFadeCount = 0
+
     private fun hasActiveFrameAnimation(
       activeState: ActiveState,
       currentTimeMs: Long,
@@ -4376,14 +5040,29 @@ class MainPlayerLyricOverlayView
      * positionSpring 驱动行内容坐标 Y，scaleSpring 驱动行缩放：
      * - 激活行 100，非激活主行 97，非激活 BG 行 75
      * - 位置级联延迟让远离激活行的行依次过渡，产生波浪效果；
-     *   缩放对齐 AMLL 无级联延迟，所有行同步回弹
+     *   缩放无级联延迟且永不瞬移，所有行同步回弹
+     *
+     * @param hardSnap - 与滚动无关的硬瞬移（冻结恢复/可见性恢复/视口变化）：位置与 BG 滑动直接落位
+     * @param scrollDelta - 本帧滚动偏移增量，先瞬时平移再设目标（连续滚动跟手用）；0 表示本帧无滚动分量
+     * @param noCascade - seek 等场景关闭级联延迟
      */
     private fun applyLineSpringTargets(
       layouts: List<LineLayout>,
       activeState: ActiveState,
-      syncImmediate: Boolean,
+      hardSnap: Boolean,
+      scrollDelta: Float,
       noCascade: Boolean,
     ) {
+      // 先把滚动分量瞬时落到各行位置上，再由下面的目标设置把「换行分量」交给弹簧：
+      // - 纯滚动帧里平移后的位置与布局目标一致，setTargetPosition 走零延迟同目标早退，跟手严格 1:1；
+      // - 换行帧里滚动分量已被吃掉，新锚点目标保留完整的弹簧行程与缩放缓动；
+      // - 正在飞行的行必须用 translateBy 平移（保持位置与速度连续），不能换成 setPosition：
+      //   那会每帧把它的弹簧打回静止，换行过渡被拖慢数倍（SpringTest 有对照用例）
+      if (scrollDelta != 0f) {
+        for (i in lineSprings.indices) {
+          lineSprings[i].position.translateBy(scrollDelta)
+        }
+      }
       // 对齐 Web 引擎 calculateLayout/setTransform：
       // - 激活判定仅用正在演唱行集合（hot），不高亮残留与滚动中间行
       // - 缩放目标：激活行 100，非激活主行 97、非激活 BG 行 75（暂停时全 100）
@@ -4391,11 +5070,18 @@ class MainPlayerLyricOverlayView
       // - 级联延迟让远离激活行的行依次过渡，产生波浪效果；noCascade（seek）时全员同步
       val hotSet = activeState.activeLineIndices
       val anchorIdx = activeState.anchorIndex
-      val isUserScrolling = isDragging || scrollResetNano > 0L
+      val isUserScrolling = isUserScrolling()
       var cascadeDelayMs = 0f
-      var baseDelayMs = if (syncImmediate || noCascade) 0f else 50f
+      // 本帧存在滚动分量时不叠加波浪延迟：语义对齐 AMLL ContinuousScroll 的 disableStagger，
+      // 同时把「连续滚动帧 lineDelay 必须为 0」从巧合变成结构保证（见下方位置分支的注释）
+      var baseDelayMs = if (hardSnap || noCascade || scrollDelta != 0f) 0f else 50f
       // 上一行实际使用的级联延迟；置顶背景行复用其主行的延迟以同步运动
       var prevDelayMs = 0f
+      // 入场哨兵位：弹簧停在这里说明它从未拿到过真实目标（布局缺失时的初值）。
+      // 这种行若按级联延迟排队，就会在延迟到期前既不在视口内（被 !inViewport 剔除、
+      // 表现为「当前行之后的未来行整片不可见」）、也等不到自愈——只有布局状态再变一次
+      // 或用户滚动才会重新设目标。因此仍在哨兵位的行直接落位，不吃级联延迟。
+      val sentinel = offScreenPosition()
       for (i in layouts.indices) {
         val line = lyricLines.getOrNull(i) ?: continue
         val lineSpring = lineSprings.getOrNull(i) ?: continue
@@ -4404,17 +5090,26 @@ class MainPlayerLyricOverlayView
         val targetTop = layouts[i].top
         // 置顶背景行位于主行上方，但索引在主行之后；复用主行延迟，避免主行先行上移造成视觉重叠
         val lineDelay = if (line.isBG && isBgAbove(i)) prevDelayMs else cascadeDelayMs
-        // 对齐 Web 引擎 group.setTransform + lyric-line.setTransform：
-        // posY/bgSlide/scale 在 immediate（拖拽/视口变化/恢复）时瞬移，其余带级联延迟走弹簧
-        if (syncImmediate) {
+        // 位置与 BG 滑动：硬瞬移分支直接落位，其余带级联延迟走弹簧
+        if (hardSnap || abs(lineSpring.position.getCurrentPosition() - sentinel) < 1f) {
           lineSpring.position.setPosition(targetTop)
           lineSpring.bgSlide?.setPosition(bgSlideTarget(i, isActive))
-          lineSpring.scale.setPosition(targetScale)
         } else {
+          // 不变式：本分支的 lineDelay 必须恒为 0 或小于单帧时长。Spring 的延迟队列是
+          // 「每次调用整体替换 + update() 逐帧扣减」（Spring.setTargetPosition / update），
+          // 若连续滚动帧反复以大于帧时长的 delay 重挂目标，队列每帧被替换，
+          // 远离锚点的行弹簧会永不启动、冻结在中途（SpringTest 有用例钉住该语义）。
+          // 由 baseDelayMs 的 scrollDelta 项显式保证：任何带滚动分量的帧（含手指已按下但
+          // 未过拖动阈值、isUserScrolling() 尚为假的那段窗口）baseDelayMs 都为 0，
+          // 级联累加因此不再增长，lineDelay 恒为 0
+
           lineSpring.position.setTargetPosition(targetTop, lineDelay / 1000f)
           lineSpring.bgSlide?.setTargetPosition(bgSlideTarget(i, isActive), lineDelay / 1000f)
-          lineSpring.scale.setTargetPosition(targetScale, lineDelay / 1000f)
         }
+        // 缩放永不瞬移（弹簧被显式停用时才落位）：对齐 AMLL dom/lyric-line.ts:622-626，
+        // 只要 getEnableSpring() 就 setTargetPosition(scale)，与 snapPosY 无关；
+        // 同时不吃级联延迟（不传 delay）——瞬移会让换行的 97↔100 变成硬切
+        lineSpring.scale.setTargetPosition(targetScale)
         activeLineSpringIndices.add(i)
         prevDelayMs = lineDelay
         // 对齐 Web 引擎：级联延迟看的是当前布局推进后的游标，而不是行 top。
@@ -4464,8 +5159,12 @@ class MainPlayerLyricOverlayView
       // 置顶背景行延后到下一轮迭代摆放，记录其槽位（对齐 Web 引擎 pendingBg）
       var pendingBgIdx = -1
       var pendingBgY = 0f
-      val tops = FloatArray(lyricLines.size)
-      val flowBottoms = FloatArray(lyricLines.size)
+      if (frameLayoutTops.size < lyricLines.size) {
+        frameLayoutTops = FloatArray(lyricLines.size)
+        frameLayoutFlowBottoms = FloatArray(lyricLines.size)
+      }
+      val tops = frameLayoutTops
+      val flowBottoms = frameLayoutFlowBottoms
 
       for (index in lyricLines.indices) {
         val line = lyricLines[index]
@@ -4602,7 +5301,48 @@ class MainPlayerLyricOverlayView
       return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
     }
 
+    /**
+     * 给画笔上字色：HDR 生效时用宽色域字色（[staticInk] 的 [LyricBlurController.StaticInk.hdrColor]），
+     * SDR 用原色。
+     *
+     * 「颜色 = 亮度体系、alpha = 层次」是这一轮改动的核心：静息行（0.2）、呈现中（0.85）、
+     * 激活行（1.0）的比例在 SDR 与 HDR 下完全一致，HDR 只是把承载颜色的白抬进宽色域，
+     * 于是未来行、已播放行、模糊行与当前行同属一个 HDR 效果，而彼此的明暗关系不变。
+     *
+     * 非激活行的位图缓存路径字色在 [staticInk] 里，与这里同源；直绘与 GPU 模糊层录制走这里。
+     */
+    private fun applyInk(
+      paint: Paint,
+      alpha: Float,
+    ) {
+      val a = alpha.coerceIn(0f, 1f)
+      if (staticInk.hdrColor != 0L) {
+        paint.setColor(staticInk.hdrColor)
+        paint.alpha = (a * 255f).roundToInt()
+      } else {
+        paint.color = applyAlpha(textColor, a)
+      }
+    }
+
     companion object {
+      /**
+       * 流体 halo 的叠加层数。三层不同频率/相位漂移，互相干涉形成不规则气团边缘；
+       * 层数加倍前先看真机帧率（每层每字符一次 drawBitmap）。
+       */
+      private const val FLUID_HALO_LAYERS = 3
+
+      /** 流体 halo 的漂移半径（相对字号 textSize），再按扩散进度缩放；气团铺开包裹词组，不蔓延整行 */
+      private const val FLUID_HALO_DRIFT_EM = 0.18f
+
+      /** 流体 halo 首层峰值不透明度（再乘扩散进度与呼吸），三层权重 1 / 0.72 / 0.44 递减 */
+      private const val FLUID_HALO_ALPHA = 70f
+
+      /**
+       * 强调模糊量上限。drawEmphasizeWord 内 blur 被 clamp 到该值，扩散进度按它归一化到 0~1，
+       * 保证半径与不透明度同步涨落（长音 = blur 大 = 光爆更大更亮）。
+       */
+      private const val EMPHASIS_BLUR_MAX = 0.8f
+
       fun parseLyricLines(json: String): List<NativeLyricLine> {
         if (json.isBlank()) return emptyList()
         return try {
@@ -4667,5 +5407,15 @@ class MainPlayerLyricOverlayView
           null
         }
       }
+
+      // 对齐 AMLL AUTO_ALIGN_RESUME_DELAY_MS：滚动静止 500ms 后才允许条件式回弹
+      private const val AUTO_ALIGN_RESUME_DELAY_NS = 500_000_000L
+
+      // 对齐 AMLL beginScrollHandler 的 5s 无条件定时器：条件式门控迟迟不成立时的回正兜底
+      private const val AUTO_ALIGN_FORCE_RESET_NS = 5_000_000_000L
+
+      // 卡住归位安全网：无排队目标且落后布局超一屏的连续帧数阈值（约 0.5s），
+      // 健康收敛远快于此，只有卡死的行会命中
+      private const val STUCK_SNAP_FRAMES = 30
     }
   }

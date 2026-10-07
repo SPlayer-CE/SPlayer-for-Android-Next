@@ -1120,9 +1120,6 @@ const lyricPageToggleAction = computed<"open" | "close">(() => {
   return currentPageType.value === "lyric" ? "close" : "open";
 });
 
-/** Android 上歌词渲染字重 = 设置字重 × 2（上限 1000，即 CSS font-weight 有效区间上限，超出会使声明无效回落到 400），补偿 WebView 字重视觉偏细 */
-const lyricRenderWeight = computed(() => Math.min(settings.lyric.fontWeight * 2, 1000));
-
 watch(
   () => [
     settings.lyric.fontSize,
@@ -1225,7 +1222,7 @@ watch(
           data-stagger="lyric"
           :style="{
             fontSize: `${settings.lyric.fontSizeLandscape}px`,
-            fontWeight: String(lyricRenderWeight),
+            fontWeight: String(settings.lyric.fontWeight),
             fontFamily: settings.lyric.fontFamily || undefined,
           }"
         >
@@ -1264,6 +1261,7 @@ watch(
             :enable-emphasize-effect="settings.lyric.enableEmphasizeEffect"
             :show-translation="settings.lyric.showTranslation"
             :show-romanization="settings.lyric.showRomanization"
+            :enable-hdr="settings.lyric.enableHdr"
             :unlock-fps-limit="settings.system.androidLyric.unlockFpsLimit"
             :render-mode="androidLyricRenderMode"
             :bottom-exclusion-height-px="0"
@@ -1521,7 +1519,7 @@ watch(
             fontSize: settings.lyric.adaptiveFontSize
               ? `calc(${settings.lyric.fontSize} / 430 * 100vmin)`
               : `${settings.lyric.fontSize}px`,
-            fontWeight: String(lyricRenderWeight),
+            fontWeight: String(settings.lyric.fontWeight),
             fontFamily: settings.lyric.fontFamily || undefined,
           }"
           @pointerdown="onLyricPointerDown"
@@ -1564,6 +1562,7 @@ watch(
             :enable-word-block-segmentation="enableWordBlockSegmentation"
             :show-translation="settings.lyric.showTranslation"
             :show-romanization="settings.lyric.showRomanization"
+            :enable-hdr="settings.lyric.enableHdr"
             :unlock-fps-limit="settings.system.androidLyric.unlockFpsLimit"
             :render-mode="androidLyricRenderMode"
             :bottom-exclusion-height-px="kotlinBottomExclusionPx"

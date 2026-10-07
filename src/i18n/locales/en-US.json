@@ -1325,6 +1325,10 @@
       "label": "Hide Passed Lines",
       "description": "Auto-hide lyrics lines that have been played"
     },
+    "enableHdr": {
+      "label": "Lyrics HDR Highlight",
+      "description": "Render the playing line's sweep highlight in HDR brightness. Requires Android 13+ and an HDR-capable display"
+    },
     "springPreset": {
       "label": "Spring Preset",
       "description": "Physics preset for lyric scroll spring animation",

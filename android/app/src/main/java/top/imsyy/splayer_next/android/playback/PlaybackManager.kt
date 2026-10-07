@@ -520,6 +520,8 @@ class PlaybackManager private constructor(
   /** 插件生命周期上报 WebView 前后台；隐藏期间高频事件静默，避免唤醒冻结中的 WebView 渲染。 */
   fun setWebViewVisible(visible: Boolean) {
     webViewVisible = visible
+    // 后台隐藏时摘除 FFT 监听避免音频线程空算，前台恢复时按需重新挂载
+    updateFftListenerAttachment()
   }
 
   fun load(
@@ -2551,7 +2553,8 @@ class PlaybackManager private constructor(
   }
 
   private fun updateFftListenerAttachment() {
-    if (visualizerRequested) {
+    // 隐藏期间不挂载监听，FftAudioProcessor 在无监听时直接早退跳过 FFT 计算
+    if (visualizerRequested && webViewVisible) {
       fftAudioProcessor.setListener(this::onFftData)
     } else {
       fftAudioProcessor.setListener(null)

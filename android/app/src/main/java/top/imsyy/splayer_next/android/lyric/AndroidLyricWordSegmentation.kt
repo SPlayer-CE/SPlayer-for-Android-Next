@@ -10,6 +10,8 @@ data class SegmentedDisplayWord(
   val leadingSpace: Boolean,
   val chunkId: Int,
   val chunkShouldEmphasize: Boolean,
+  /** 连字符延音组 ID（"-" 连接的 ≥2 段，如 "whoa-ah-oh-oh"），-1 表示不属于延音组 */
+  val sustainGroupId: Int = -1,
 )
 
 internal object AndroidLyricWordSegmentation {
@@ -19,16 +21,21 @@ internal object AndroidLyricWordSegmentation {
   private val WHITESPACE_RE = Regex("\\s")
   private val TOKEN_RE = Regex("\\s+|\\S+")
 
+  /** 连字符延音（"-" 连接的 ≥2 段）触发强调发光的合并时长门槛，对齐长音判定 1000ms */
+  private const val HYPHEN_SUSTAIN_MIN_DURATION_MS = 1000L
+  private const val HYPHEN_CHAR = '-'
+
   fun buildDisplayWords(words: List<NativeLyricWord>): List<SegmentedDisplayWord> {
     val atoms = splitToAtoms(words)
     if (atoms.isEmpty()) return emptyList()
 
     // 对齐 PC 端 Intl.Segmenter：用 BreakIterator 按词边界重新分组，
     // 使 CJK 多字词（如"光芒"）能合并为同一 chunk，触发整体 emphasize 高光
-    val chunks = mergeByWordBoundary(atoms)
+    val chunks = mergeHyphenLinkedChunks(mergeByWordBoundary(atoms))
 
     val result = mutableListOf<SegmentedDisplayWord>()
     var chunkId = 0
+    var sustainGroupId = 0
     var pendingSpace = false
 
     for (chunk in chunks) {
@@ -55,6 +62,9 @@ internal object AndroidLyricWordSegmentation {
 
       val chunkShouldEmphasize = shouldChunkEmphasize(trimmedWords)
       val hasLeadingSpace = pendingSpace || rawText != rawText.trimStart()
+      // 连字符延音串（如 "whoa-ah-oh-oh-ah-oh-oh"）以整串为一个词组：
+      // 强调按合并时长走长音判定，扫光整串连续推进，不再按音节停顿
+      val groupId = if (isHyphenSustainText(rawText.trim())) sustainGroupId++ else -1
 
       // 对齐 AMLL：高光扫光逐源词进行，未演唱到的源词保持暗部；chunk 只作强调动画
       // 的时序单位（merged 时长 + 跨词全局 charDelay），不合并扫光单位
@@ -65,6 +75,7 @@ internal object AndroidLyricWordSegmentation {
             leadingSpace = if (idx == 0) hasLeadingSpace else false,
             chunkId = chunkId,
             chunkShouldEmphasize = chunkShouldEmphasize,
+            sustainGroupId = groupId,
           )
       }
       chunkId += 1
@@ -267,15 +278,68 @@ internal object AndroidLyricWordSegmentation {
     return result
   }
 
+  /**
+   * 把被 "-" 连接（中间无空白）的相邻 chunk 粘合为同一词组。
+   *
+   * BreakIterator 的词边界数据随 ICU 版本漂移：同一串 "whoa-ah-oh-oh" 可能整体成词，
+   * 也可能在每个 "-" 处断开。这里显式收敛该差异，保证连字符延音串始终是同一个词组，
+   * 强调判定（合并时长）与整串连续扫光才能稳定生效
+   */
+  private fun mergeHyphenLinkedChunks(chunks: List<List<Atom>>): List<List<Atom>> {
+    if (chunks.size <= 1) return chunks
+    val result = mutableListOf<MutableList<Atom>>()
+    for (chunk in chunks) {
+      val prev = result.lastOrNull()
+      if (prev != null && isHyphenLinkedChunks(prev, chunk)) {
+        prev += chunk
+      } else {
+        result += chunk.toMutableList()
+      }
+    }
+    return result
+  }
+
+  private fun isHyphenLinkedChunks(
+    prev: List<Atom>,
+    next: List<Atom>,
+  ): Boolean {
+    val prevText = prev.joinToString("") { it.word.word }
+    val nextText = next.joinToString("") { it.word.word }
+    if (prevText.isEmpty() || nextText.isEmpty()) return false
+    // chunk 边界处有空白即为词界，不粘合
+    if (prevText.last().isWhitespace() || nextText.first().isWhitespace()) return false
+    return prevText.last() == HYPHEN_CHAR || nextText.first() == HYPHEN_CHAR
+  }
+
+  /**
+   * 判断文本是否为「连字符延音」：存在 "-" 且其两侧均为非空白字符（由 ≥2 段连接），
+   * 如 "whoa-ah-oh-oh"；"-" 仅位于词首/词尾（如 "whoa-"）只有单段，不算延音串
+   */
+  internal fun isHyphenSustainText(text: String): Boolean {
+    if (text.length < 3) return false
+    for (i in 1 until text.length - 1) {
+      if (text[i] != HYPHEN_CHAR) continue
+      if (!text[i - 1].isWhitespace() && !text[i + 1].isWhitespace()) return true
+    }
+    return false
+  }
+
   private fun shouldChunkEmphasize(words: List<NativeLyricWord>): Boolean {
     if (words.any { it.shouldEmphasize }) return true
-    if (words.size <= 1) return false
     val mergedWord =
       NativeLyricWord(
         word = words.joinToString("") { it.word },
         startTime = words.minOf { it.startTime },
         endTime = words.maxOf { it.endTime },
       )
+    // 连字符延音串按合并时长走长音发光，不受非 CJK 词 2~7 字符的长度限制：
+    // 整串（如 "whoa-ah-oh-oh-ah-oh-oh"）远超 7 字符，逐段拆分后每段时长又都不足
+    if (mergedWord.endTime - mergedWord.startTime >= HYPHEN_SUSTAIN_MIN_DURATION_MS &&
+      isHyphenSustainText(mergedWord.word)
+    ) {
+      return true
+    }
+    if (words.size <= 1) return false
     return !isCjkText(mergedWord.word) && mergedWord.shouldEmphasize
   }
 

@@ -96,7 +96,7 @@ internal object AndroidLyricTimeline {
   /**
    * 歌词行模糊档位策略（对齐 AMLL resolveBlurLevel + renderStyles 的 min(5, blur)）
    *
-   * 视口外直接给到最大档位，行滚入视口时从模糊渐入；
+   * 对齐 AMLL #619：视口外不施加模糊，行滚入视口时不再从最大模糊渐入；
    * 用户触摸滚动期间与焦点行不施加模糊；
    * 焦点之前的行距离额外 +1（唱完的行比未唱的行更模糊），焦点之后按距最新高亮行计算；
    * 档位为 1+距离，窄视口（CSS 宽 ≤1024）整体 0.8 折，上限 5
@@ -122,7 +122,7 @@ internal object AndroidLyricTimeline {
     isNarrowViewport: Boolean,
   ): Float {
     if (!enableBlur) return 0f
-    if (!inViewport) return BLUR_MAX_LEVEL
+    if (!inViewport) return 0f
     if (isUserScrolling || isFocused) return 0f
     val distance =
       if (index < scrollToIndex) {
@@ -183,7 +183,9 @@ internal object AndroidLyricTimeline {
 
   /**
    * 对齐 AMLL ruby 遮罩分支：注音词第 j 个字符取 rubySegment[min(j, last)] 的时间窗，
-   * clamp 进词区间并强制单调递增（后段开始不早于前段结束），
+   * clamp 进词区间，并保证各段结束时间单调不减（后段结束不早于前段结束）；
+   * 段开始只压到不晚于前段结束，span 自身时窗更早时允许与前段重叠
+   * （段行程按自身时窗独立推进，重叠不会互相干扰）。
    * 供逐段独立遮罩行程（computeSegmentTravel）按序消费
    *
    * @param rubySpans - 词的注音分段
@@ -287,6 +289,8 @@ internal object AndroidLyricTimeline {
             j >= count -> 0f
             punctuationRe.containsMatchIn(previous.text) -> -punctuationReward
             previous.isSpace -> -spaceReward
+            // 连字符后断行（如 whoa-｜ah）：与空格同等奖励，对齐浏览器换行行为
+            previous.text.endsWith('-') -> -spaceReward
             j < count && AndroidLyricWordSegmentation.isCjkText(units[j].text) -> cjkPenalty
             else -> normalPenalty
           }
@@ -386,11 +390,15 @@ internal class TimelineSnapshot {
  * 而不需要遍历或比对全量状态。列表字段同样是复用的内部缓冲，必须在同一帧内消费完毕。
  */
 internal class TimelineDiff {
-  /** 当前帧是否有任何实质性变更（播放行更替、高亮增删、间奏/焦点/滚动目标切换或跳转） */
+  /**
+   * 当前帧是否有任何实质性变更：跳转、播放行增删、高亮行增删、
+   * 间奏/焦点/滚动目标切换，或曲末状态（isPastLastLine）翻转
+   */
   var hasChanged: Boolean = false
 
   /**
-   * 本次同步是否发生了跳转：显式跳转（sync 的 forceSeek）或时间倒退 / 停滞时为 `true`
+   * 本次同步是否发生了跳转：显式跳转（sync 的 forceSeek）或时间倒退时为 `true`
+   * （对齐 AMLL #611：重复推送同一时间的进度停滞不视为跳转）
    * 例如跳转时使用更缓慢的弹簧参数，以及在非触摸状态下重置滚动坐标系
    */
   var isTimeJumped: Boolean = false
@@ -527,13 +535,12 @@ internal class AndroidLyricTimelineController {
     val prevScrollToIndex = snapshot.scrollToIndex
     val prevEndOfSong = snapshot.isEndOfSong
 
-    // 时间不再前进时一律按跳转处理，这里有两个各自独立的理由：
-    // 倒退是机制上的必需：performPlayback 会保存上次扫描停止的位置，若时间倒退，
-    // 倒退到的行可能位于扫描位置之前，只能重新推导；
-    // 停滞则是语义上的约定：正常播放不会让进度停在原地，推送同一个时间表达的是把
-    // 逐字遮罩这类自行推进的动画重新对齐到该时间的意图，因此也走跳转路径
-    val isTimeNotAdvancing = timeMs <= snapshot.currentTime
-    val isJump = forceSeek || isTimeNotAdvancing
+    // 时间倒退时一律按跳转处理：performPlayback 会保存上次扫描停止的位置，
+    // 下次从该位置继续扫描以提高性能，若时间倒退，倒退到的行可能位于扫描位置之前，
+    // 只能重新推导。对齐 AMLL #611：进度停滞（重复推送同一时间）不视为跳转，
+    // 避免 resume/seek 后几帧重复推送同一时间导致的误判
+    val isTimeRetreating = timeMs < snapshot.currentTime
+    val isJump = forceSeek || isTimeRetreating
 
     // 间奏命中情况需要先于歌词状态确定
     // Seek 时要按同样的规则决定是否保留已经唱完的行，需要提前知道结果

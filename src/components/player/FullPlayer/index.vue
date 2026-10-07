@@ -65,11 +65,6 @@ const lyricRef = ref<LyricController | null>(null);
 const lyricMounted = ref(false);
 const initialLyricTimeMs = ref(0);
 
-/** 歌词容器渲染字重：Android 上 = 设置字重 × 2（上限 1000，即 CSS font-weight 有效区间上限，超出会使声明无效回落到 400），补偿 WebView 字重视觉偏细；桌面端用原值 */
-const containerLyricWeight = computed(() =>
-  isAndroid ? Math.min(settings.lyric.fontWeight * 2, 1000) : settings.lyric.fontWeight,
-);
-
 /** 字号/字重/字体变化后重排歌词，重新测量断行与布局 */
 watch(
   () => [settings.lyric.fontSize, settings.lyric.fontWeight, settings.lyric.fontFamily],
@@ -561,7 +556,7 @@ const showComments = (): void => {
                       ? `calc(${settings.lyric.fontSize} / 430 * 100vmin)`
                       : `calc(${settings.lyric.fontSize} / 1080 * 100vmin)`
                     : `${settings.lyric.fontSize}px`,
-                  fontWeight: String(containerLyricWeight),
+                  fontWeight: String(settings.lyric.fontWeight),
                   fontFamily: settings.lyric.fontFamily || undefined,
                   '--lyric-font-zh': settings.lyric.fontFamilyChinese || undefined,
                   '--lyric-font-ja': settings.lyric.fontFamilyJapanese || undefined,
@@ -622,6 +617,7 @@ const showComments = (): void => {
                   :enable-word-block-segmentation="false"
                   :show-translation="settings.lyric.showTranslation"
                   :show-romanization="settings.lyric.showRomanization"
+                  :enable-hdr="settings.lyric.enableHdr"
                   :render-mode="androidLyricRenderMode"
                   :bottom-exclusion-height-px="0"
                   :interactive="androidLyricInteractive"
@@ -726,7 +722,7 @@ const showComments = (): void => {
               class="lyric-area relative flex-1 min-h-0"
               :style="{
                 fontSize: lyricFontSize,
-                fontWeight: String(containerLyricWeight),
+                fontWeight: String(settings.lyric.fontWeight),
                 fontFamily: settings.lyric.fontFamily || undefined,
                 '--lyric-font-zh': settings.lyric.fontFamilyChinese || undefined,
                 '--lyric-font-ja': settings.lyric.fontFamilyJapanese || undefined,

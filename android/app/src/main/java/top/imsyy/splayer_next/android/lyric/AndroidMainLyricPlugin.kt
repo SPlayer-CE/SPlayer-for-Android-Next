@@ -2,6 +2,8 @@ package top.imsyy.splayer_next.android.lyric
 
 import android.app.Activity
 import android.graphics.RectF
+import android.os.Build
+import android.view.Display
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.getcapacitor.JSArray
@@ -139,6 +141,8 @@ class AndroidMainLyricPlugin : Plugin() {
   @PluginMethod
   fun setConfig(call: PluginCall) {
     val fontSizePx = call.getFloat("fontSizePx", 34f) ?: 34f
+    // 前端下发的是设置字重原值（见 AndroidMainLyricHost.vue，已不再 ×2 放大），
+    // 缺省值取设置默认值 700，避免缺键时与前端默认观感不一致
     val fontWeight = call.getInt("fontWeight", 700) ?: 700
     val fontFamily = call.getString("fontFamily")
     val fontFamilyChinese = call.getString("fontFamilyChinese")
@@ -162,6 +166,7 @@ class AndroidMainLyricPlugin : Plugin() {
     val springDamping = call.getFloat("springDamping")
     val springStiffness = call.getFloat("springStiffness")
     val alwaysPostpositionBackground = call.getBoolean("alwaysPostpositionBackground", false) ?: false
+    val enableHdr = call.getBoolean("enableHdr", false) ?: false
 
     runOnMainThread(call) {
       ensureOverlayView().setConfig(
@@ -188,6 +193,7 @@ class AndroidMainLyricPlugin : Plugin() {
         springDamping = springDamping,
         springStiffness = springStiffness,
         alwaysPostpositionBackground = alwaysPostpositionBackground,
+        enableHdr = enableHdr,
       )
       call.resolve()
     }
@@ -241,6 +247,32 @@ class AndroidMainLyricPlugin : Plugin() {
     runOnMainThread(call) {
       overlayView?.suppressTapSeek()
       call.resolve()
+    }
+  }
+
+  /**
+   * 供设置页判断 HDR 开关是否可用：能力判定与歌词层内部共用 LyricHdrSupport，
+   * 不依赖歌词层是否已创建，避免玩家未打开时查不到能力。
+   */
+  @PluginMethod
+  fun isHdrSupported(call: PluginCall) {
+    val capability =
+      LyricHdrSupport.resolve(Build.VERSION.SDK_INT) {
+        LyricHdrSupport.readSupportedHdrTypes(currentDisplay())
+      }
+    val result = JSObject()
+    result.put("supported", capability.isSupported)
+    result.put("reason", LyricHdrSupport.reasonOf(capability))
+    call.resolve(result)
+  }
+
+  private fun currentDisplay(): Display? {
+    val currentActivity = activity ?: return null
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      currentActivity.display
+    } else {
+      @Suppress("DEPRECATION")
+      currentActivity.windowManager.defaultDisplay
     }
   }
 

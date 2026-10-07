@@ -135,7 +135,8 @@ class AndroidLyricTimelineTest {
 
   @Test
   fun clampsRubySweepWindowsIntoWordRangeMonotonically() {
-    // 段时间越出词区间时 clamp 进 [wordStart, wordEnd]，并保证后段开始不早于前段结束
+    // 段时间越出词区间时 clamp 进 [wordStart, wordEnd]：段结束单调不减（后段结束不早于前段结束），
+    // 段开始只压到不晚于前段结束
     val rubySpans =
       listOf(
         NativeLyricSpan("a", 500L, 900L),
@@ -352,12 +353,13 @@ class AndroidLyricTimelineTest {
   }
 
   @Test
-  fun stalledOrBackwardTimeTreatedAsSeek() {
+  fun stalledTimeIsNotTreatedAsSeekButBackwardIs() {
     val controller = newController(1000L to 2000L, 3000L to 4000L)
 
     assertEquals(false, controller.sync(1500L).isTimeJumped)
-    // 停滞（重复推送同一时间）与倒退都按跳转处理，重新对齐逐字遮罩动画
-    assertEquals(true, controller.sync(1500L).isTimeJumped)
+    // 对齐 AMLL #611：停滞（重复推送同一时间）不视为跳转，避免 resume/seek 后误判
+    assertEquals(false, controller.sync(1500L).isTimeJumped)
+    // 倒退仍按跳转处理，重新对齐逐字遮罩动画
     assertEquals(true, controller.sync(1400L).isTimeJumped)
   }
 

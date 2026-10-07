@@ -35,6 +35,11 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // 纯 JVM 单测里 android.jar 的方法体是 Stub，直接抛 not-mocked；
+    // 打开默认值返回才能对 Log / Display 这类能力探测做分支断言
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
     buildTypes {
         // debug 包用 .debug 后缀与正式包并存、签名独立（走 AGP 默认 debug keystore）
         debug {

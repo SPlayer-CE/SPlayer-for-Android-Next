@@ -13,6 +13,7 @@ import type { SpringParams } from "@/components/player/Lyrics/engine/spring";
 import { isAndroidNative } from "@/services/bridge";
 import {
   AndroidMainLyric,
+  loadHdrCapability,
   type AndroidMainLyricTouchExclusionRect,
 } from "@/plugins/androidMainLyric";
 import Lyrics from "@/components/player/Lyrics/index.vue";
@@ -38,6 +39,7 @@ const props = withDefaults(
     enableWordBlockSegmentation?: boolean;
     showTranslation?: boolean;
     showRomanization?: boolean;
+    enableHdr?: boolean;
     renderMode?: AndroidLyricRenderMode;
     unlockFpsLimit?: boolean;
     bottomExclusionHeightPx?: number;
@@ -63,6 +65,7 @@ const props = withDefaults(
     enableWordBlockSegmentation: false,
     showTranslation: true,
     showRomanization: true,
+    enableHdr: false,
     renderMode: "legacy",
     unlockFpsLimit: undefined,
     bottomExclusionHeightPx: 0,
@@ -93,13 +96,6 @@ const lyricLinesJson = computed(() => JSON.stringify(preparedLyricLines.value));
 const activeRenderer = computed<"legacy" | "kotlin">(() =>
   props.renderMode === "kotlin" && isAndroidNative ? "kotlin" : "legacy",
 );
-
-/**
- * Android 渲染字重 = 设置字重 × 2（上限 1000，即 CSS font-weight 有效区间上限，超出会使声明无效回落到 400）
- * Android 端 WebView / 原生渲染对同值字重的视觉粗细明显弱于桌面端，
- * 在渲染入口统一放大，legacy 与 kotlin 两条渲染路径保持一致
- */
-const scaledFontWeight = computed(() => Math.min((props.fontWeight ?? 700) * 2, 1000));
 
 let seekListener: PluginListenerHandle | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -402,7 +398,11 @@ const syncKotlinConfig = async (): Promise<void> => {
 
   await AndroidMainLyric.setConfig({
     fontSizePx,
-    fontWeight: scaledFontWeight.value,
+    // 字重原样下发：原生侧按「≥600 且超过字体族可提供档位」判定合成加粗，系统族以 Bold(700) 为上限
+    // （详见 LyricTypefaceResolver.SYSTEM_FAMILY_MAX_WEIGHT），只有超过 Bold 的请求才会补合成。
+    // 此前这里把字重 ×2 恒下发 1000，等于对任何字体都强制合成加粗——既有真 Bold 被再描一圈边
+    // （大字号 CJK 密笔画字粘连），又掩盖了族内档位不足的问题，故改为原样下发
+    fontWeight: props.fontWeight,
     fontFamily: props.fontFamily,
     // 分语种歌词字体：与 Web 端 :lang(zh/ja/ko/und-Latn) 同源的 CSS 变量，继承自歌词容器
     fontFamilyChinese: style.getPropertyValue("--lyric-font-zh").trim() || undefined,
@@ -421,6 +421,7 @@ const syncKotlinConfig = async (): Promise<void> => {
     enableWordBlockSegmentation: props.enableWordBlockSegmentation ?? false,
     showTranslation: props.showTranslation ?? true,
     showRomanization: props.showRomanization ?? true,
+    enableHdr: props.enableHdr ?? false,
     springMass: props.springConfig?.mass,
     springDamping: props.springConfig?.damping,
     springStiffness: props.springConfig?.stiffness,
@@ -633,6 +634,7 @@ watch(
     props.enableWordBlockSegmentation,
     props.showTranslation,
     props.showRomanization,
+    props.enableHdr,
     props.bottomExclusionHeightPx,
     props.springConfig?.mass,
     props.springConfig?.damping,
@@ -668,6 +670,7 @@ watch(
 
 onMounted(async () => {
   if (isAndroidNative) {
+    loadHdrCapability();
     seekListener = await AndroidMainLyric.addListener("seek", (event) => {
       if (activeRenderer.value !== "kotlin") return;
       const timeMs = Number(event.timeMs ?? 0);
@@ -756,7 +759,7 @@ onBeforeUnmount(async () => {
     :lyric-lines="props.lyricLines"
     :initial-time="props.initialTime"
     :playing="props.playing"
-    :font-weight="scaledFontWeight"
+    :font-weight="props.fontWeight"
     :font-family="props.fontFamily"
     :align-position="props.alignPosition"
     :word-fade-width="props.wordFadeWidth"

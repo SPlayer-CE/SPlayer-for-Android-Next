@@ -4,7 +4,7 @@ package top.imsyy.splayer_next.android.lyric
  * 主播放器歌词数据模型。
  *
  * 对齐 AMLL LyricLine/Word 数据结构；原为 MainPlayerLyricOverlayView 的嵌套类，
- * 提升为顶层后 Timeline/分词/插件可直接引用，View 内保留同名别名兼容。
+ * 提升为顶层后时间线/分词/插件与 View 共同直接引用（View 内不再保留嵌套别名）。
  */
 data class NativeLyricSpan(
   val word: String,

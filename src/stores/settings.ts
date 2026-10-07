@@ -202,6 +202,7 @@ export const useSettingsStore = defineStore(
       enableEmphasizeEffect: true,
       enableBlur: false,
       hidePassedLines: false,
+      enableHdr: false,
       springPreset: "default",
       springMass: 0.9,
       springDamping: 15,

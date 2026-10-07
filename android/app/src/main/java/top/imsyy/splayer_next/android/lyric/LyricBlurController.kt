@@ -21,7 +21,7 @@ import kotlin.math.roundToInt
  * 渲染：静态行（非激活且非浮动衰减）走位图缓存，内容逐帧变化的行走 API 31+ 的 GPU 模糊层。
  *
  * 功耗优化：模糊是低通滤波，模糊图与 GPU 层统一按 [DOWNSCALE] 降采样栅格化再放大，
- * 视觉近无损而软件模糊与 GPU 模糊开销约降至 1/8；档位渐变期用「渐变起点档 + 目标档」
+ * 视觉近无损而软件模糊与 GPU 模糊的像素处理量约降至 1/16（0.25²）；档位渐变期用「渐变起点档 + 目标档」
  * 双位图叠化替代逐档重建，一次渐变最多构建两张图。叠化近端必须是起点档模糊图而非
  * 清晰图：已模糊行随锚点推进升档时，清晰图分量会在渐变期闪入造成视觉残留。
  */
@@ -40,6 +40,27 @@ internal class LyricBlurController(
     CROSSFADE,
   }
 
+  /**
+   * 静态行位图的字色。
+   *
+   * 位图是 [Bitmap.Config.ALPHA_8] 掩码，只存文字覆盖度、不存颜色：字色与行级层次都在
+   * 绘制时由 paint 施加。这样同一份位图既能用于 SDR 也能用于 HDR（宽色域字色），
+   * 而且「层次关系」与「亮度体系」解耦——alpha 比例在两种模式下完全一致，
+   * HDR 只是把颜色整体抬到 [hdrColor] 的宽色域白，非激活行不会因为是 SDR 白而显得消失。
+   *
+   * @param sdrColor - SDR 字色（int，alpha 会被 paint 的行级 alpha 覆盖）
+   * @param hdrColor - 宽色域字色（必须是 [android.graphics.Color.pack] 的结果，0 表示当前不走 HDR）
+   *
+   * 上色方式：字色交给 [android.graphics.Paint.setColor]（SDR 用 int 重载、HDR 用 long 重载），
+   * 行级层次交给 [android.graphics.Paint.setAlpha]。两者都不会破坏宽色域色：
+   * `setAlpha` 内部按 `mColor` 的颜色空间重新打包（framework 源码 Paint.setAlpha），
+   * 因此 HDR 下 alpha 分层与 SDR 完全同构。
+   */
+  data class StaticInk(
+    val sdrColor: Int,
+    val hdrColor: Long,
+  )
+
   var enableBlur = false
 
   // 每行模糊当前值/目标值（AMLL 档位语义，×1.5×density 换算物理像素）与收敛标记
@@ -49,6 +70,13 @@ internal class LyricBlurController(
   // 每行渐变起点档位：目标变化瞬间的当前值，叠化近端用起点档模糊图
   private var starts = FloatArray(0)
   private var settled = BooleanArray(0)
+
+  // 行位图是否已因转入活跃态而释放：行进入逐帧直绘态后缓存不再被读取，
+  // 只需在转入的那一帧整体释放一次，避免逐帧 snapshot() 复制整张缓存表（数百条目）造成 GC 抖动
+  private var cacheReleased = BooleanArray(0)
+
+  // 行位图重建总次数：以 Perfetto counter 呈现（P0 指标：命中率与播放期重建频率）
+  private var lineBitmapBuilds = 0L
 
   private var lastDeltaMs = -1f
   private var lastExpFactor = 0f
@@ -88,12 +116,12 @@ internal class LyricBlurController(
 
   // 直绘路径的 GPU 模糊层（API 31+）：退场期（逐词浮动衰减）的行必须逐帧直绘、无法进入位图缓存，
   // 而硬件加速 Canvas 对 drawText 的 BlurMaskFilter 不生效：这些行的模糊会整段缺失，
-  // 直到衰减结束切回位图缓存时突变出现。这里把整行录进半分辨率 RenderNode，由 RenderEffect
-  // 在 GPU 上模糊（对齐 Web 引擎 filter: blur 的整行语义）。
+  // 直到衰减结束切回位图缓存时突变出现。这里把整行录进 1/4 分辨率（[DOWNSCALE]）的 RenderNode，
+  // 由 RenderEffect 在 GPU 上模糊（对齐 Web 引擎 filter: blur 的整行语义）。
   // 低版本（API 29/30）无 RenderEffect，退场期维持原有的"无模糊"行为。
   private val blurLayerNodes = LinkedHashMap<Int, RenderNode>(4)
 
-  // 每行 RenderNode 上已设置的模糊档位（半分辨率坐标系量化到 1px），避免渐变期逐帧重建 RenderEffect
+  // 每行 RenderNode 上已设置的模糊档位（按设备像素量化，见 drawGpuLayer），避免渐变期逐帧重建 RenderEffect
   private val blurLayerSigmaKeys = HashMap<Int, Int>(4)
 
   // RenderNode 是 native 资源：只为同时处于退场直绘态的行（通常 1~2 行）保留少量实例
@@ -112,8 +140,8 @@ internal class LyricBlurController(
    * @param latestHighlightIndex - 最靠后的高亮行索引
    * @param active - 行是否为焦点行（对齐 AMLL resolveIsActive 判定）
    * @param isUserScrolling - 用户是否正在触摸滚动
-   * @param inViewport - 行是否在视口内（视口外目标直接为最大档位，滚入时从模糊渐入）
-   * @param viewportCssPx - 视口宽（CSS 像素，窄视口判定用）
+   * @param inViewport - 行是否在视口内（对齐 AMLL #619：视口外不施加模糊）
+   * @param viewportCssPx - 视口宽（CSS 像素，窄视口判定用，对齐 AMLL #619 改为 size[0]）
    * @param deltaMs - 帧间隔（毫秒）
    * @returns 当前帧模糊半径（物理像素）
    */
@@ -189,7 +217,8 @@ internal class LyricBlurController(
    *
    * @param lineScale - 行缩放（对齐 Web 引擎 transform-origin，由调用方算好原点）
    * @param contentHeight - 行内容高（物理像素）
-   * @param drawContent - 行内容绘制回调：参数依次为目标画布、位图内 top（含 pad）、位图坐标系 σ
+   * @param ink - 字色（SDR int / HDR 宽色域 long），位图本身不携带颜色
+   * @param drawContent - 行内容绘制回调：参数依次为目标画布、位图内 top（含 pad）、全分辨率高斯 σ
    * @returns true 表示已用位图缓存绘制完成；false 表示缓存构建失败，调用方回退直绘
    */
   fun drawStaticLine(
@@ -202,6 +231,7 @@ internal class LyricBlurController(
     scaleOriginY: Float,
     contentHeight: Float,
     viewportWidth: Int,
+    ink: StaticInk,
     drawContent: (Canvas, Float, Float) -> Unit,
   ): Boolean {
     val currentPx = levelToPx(values.getOrNull(index) ?: 0f)
@@ -211,13 +241,13 @@ internal class LyricBlurController(
         val clear =
           getOrBuildLineBitmap(index, 0f, viewportWidth, contentHeight, drawContent)
             ?: return false
-        drawCachedLine(canvas, clear, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY)
+        drawCachedLine(canvas, clear, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY, ink)
       }
       StaticDrawPlan.SINGLE_BLUR -> {
         val blur =
           getOrBuildLineBitmap(index, targetPx, viewportWidth, contentHeight, drawContent)
             ?: return false
-        drawCachedLine(canvas, blur, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY)
+        drawCachedLine(canvas, blur, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY, ink)
       }
       StaticDrawPlan.CROSSFADE -> {
         val fromPx = levelToPx(starts.getOrNull(index) ?: 0f)
@@ -231,14 +261,23 @@ internal class LyricBlurController(
         if (from.bitmap.isRecycled || to.bitmap.isRecycled) return false
         // 避免量化到同档位时重复绘制相同位图导致半透明区域（如光晕/抗锯齿边缘）重叠变深
         if (from === to) {
-          drawCachedLine(canvas, to, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY)
+          drawCachedLine(canvas, to, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY, ink)
           return true
         }
         val progress = crossfadeProgress(currentPx, fromPx, targetPx)
         // 底层起点档全量绘制、顶层目标档按进度盖入：两张半透明图叠画的总不透明度
         // 只有 1-p+p²（中途整体变淡），底层全量 + 顶层渐变才是线性叠化
-        drawCachedLine(canvas, from, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY)
-        drawCachedLine(canvas, to, top, lineAlpha * progress, lineScale, scaleOriginX, scaleOriginY)
+        drawCachedLine(canvas, from, top, lineAlpha, lineScale, scaleOriginX, scaleOriginY, ink)
+        drawCachedLine(
+          canvas,
+          to,
+          top,
+          lineAlpha * progress,
+          lineScale,
+          scaleOriginX,
+          scaleOriginY,
+          ink,
+        )
       }
     }
     return true
@@ -247,8 +286,8 @@ internal class LyricBlurController(
   /**
    * 直绘路径的 GPU 模糊层（API 31+ 且硬件加速时启用）。
    *
-   * 把整行录进半分辨率 RenderNode，由 RenderEffect 对整行做高斯模糊（对齐 Web 引擎
-   * filter: blur 语义），层内绘制不再单独设置模糊；绘制时放大回全分辨率。
+   * 把整行录进 1/4 分辨率（[DOWNSCALE]）的 RenderNode，由 RenderEffect 对整行做高斯模糊
+   * （对齐 Web 引擎 filter: blur 语义），层内绘制不再单独设置模糊；绘制时放大回全分辨率。
    *
    * @param drawContent - 行内容录制回调：参数依次为目标画布、行 top、内容自身模糊半径（恒 0）
    * @returns true 表示已用模糊层绘制完成；false 表示当前环境不支持，调用方回退原直绘
@@ -270,7 +309,10 @@ internal class LyricBlurController(
       return false
     }
     val node = acquireBlurLayerNode(index) ?: return false
-    val padFull = blurRadiusPx * 1.5f + 8f * density
+    // pad 必须覆盖高斯光晕的可见范围（约 3σ），并与位图缓存路径 getOrBuildLineBitmap 取同一口径：
+    // 1.5σ 在大 σ（高模糊档）下只剩约 2.2σ，光晕被 DECAL 裁掉、文字芯显得更锐利，
+    // 行在模糊层与位图缓存之间切换时会出现「模糊突然变浓 / 变清晰」的跳变
+    val padFull = blurRadiusPx * 3f + 8f * density
     val layerTopFull = floor(top - padFull)
     val layerBottomFull = ceil(top + layoutHeight + padFull)
     if (viewportWidth <= 0 || layerBottomFull <= layerTopFull) return false
@@ -278,19 +320,33 @@ internal class LyricBlurController(
     val layerBottomHalf = ceil(layerBottomFull * DOWNSCALE).toInt()
     val layerRightHalf = ceil(viewportWidth * DOWNSCALE).toInt()
     if (layerBottomHalf <= layerTopHalf || layerRightHalf <= 0) return false
+    // P0 度量埋点：模糊层显示列表的录制（内容重绘），不含层渲染本身
+    // （渲染由 RenderThread 承担，其耗时体现在主线程的同步等待里）
+    android.os.Trace.beginSection("Lyric.blurLayer")
     node.setPosition(0, layerTopHalf, layerRightHalf, layerBottomHalf)
     // 层位置已取整，层内用 translate 保留行的浮点位置：亚像素位移不被层边界吃掉，
-    // 弹簧/浮动动画期间不会出现整像素抖动
+    // 弹簧/浮动动画期间不会出现整像素抖动。
+    // 平移量必须取层原点在设备空间的真实位置 layerTopHalf / DOWNSCALE，而不能再按 layerTopFull 平移：
+    // 层原点在降采样空间取整后落回设备空间是 1/DOWNSCALE 的整数倍，与 layerTopFull 相差
+    // residual = layerTopFull - layerTopHalf / DOWNSCALE（0 ~ 3px，恒为向上偏移）。
+    // 行位置逐帧变化时该残差以 4px 为周期在 [0, 3] 间跳变（行内亚像素抖动），
+    // 而行离开模糊层（模糊收敛到 0、或浮动衰减结束转入位图缓存）时残差消失，
+    // 整行会瞬间下沉 residual 像素——位图缓存路径（drawCachedLine 只做 1/DOWNSCALE 缩放，无取整）不存在该偏差。
     val recording = node.beginRecording()
     recording.scale(DOWNSCALE, DOWNSCALE)
-    recording.translate(0f, -layerTopFull)
+    recording.translate(0f, -(layerTopHalf / DOWNSCALE))
     drawContent(recording, top, 0f)
     node.endRecording()
+    android.os.Trace.endSection()
     // σ 直接取 blurRadius：Web 引擎的逐行模糊是 filter: blur(blurCurrent * 1.5px)，
     // 而 CSS blur() 的参数即高斯标准差；blurRadius = 档位 * 1.5 * density 正是同一 σ 的物理像素值。
-    // RenderEffect 在半分辨率层坐标系内模糊，σ 同步减半，放大回全分辨率后观感与 Web 基准一致
+    // RenderEffect 在降采样层坐标系内模糊（层内 1 单位 = 1/DOWNSCALE 设备像素），
+    // 放大回全分辨率后观感与 Web 基准一致
     val sigma = blurRadiusPx * DOWNSCALE
-    val sigmaKey = sigma.roundToInt().coerceAtLeast(1)
+    // 档位 key 按设备像素量化：直接在降采样坐标上 roundToInt 会产生 1/DOWNSCALE 设备像素的台阶，
+    // 聚焦行模糊收敛（或旧行模糊升起）时整行会一格一格地跳清晰，形成抢视线的高频突变；
+    // 位图缓存路径的模糊 σ 精度是 0.1px，两条路径的量化口径必须一致
+    val sigmaKey = blurRadiusPx.roundToInt().coerceAtLeast(1)
     if (blurLayerSigmaKeys[index] != sigmaKey) {
       node.setRenderEffect(RenderEffect.createBlurEffect(sigma, sigma, Shader.TileMode.DECAL))
       blurLayerSigmaKeys[index] = sigmaKey
@@ -308,8 +364,8 @@ internal class LyricBlurController(
    *
    * 入参是全分辨率高斯 σ（与 GPU 模糊层 RenderEffect 的 sigma 同语义），原样透传：
    * minSdk 29 起的 Skia 把 BlurMaskFilter 入参直接当作 σ，且 σ 随画布 CTM 缩放
-   * （computeXformedSigma → mapRadius）——半分辨率位图画布（scale 0.5）内实际模糊 σ/2，
-   * 绘制放大 2 倍后等效全分辨率 σ，位图与 GPU 层两条路径强度一致。此前先乘 0.5 再
+   * （computeXformedSigma → mapRadius）——1/4 分辨率位图画布（scale = [DOWNSCALE]）内实际模糊
+   * σ/4，绘制放大 4 倍后等效全分辨率 σ，位图与 GPU 层两条路径强度一致。此前先乘 0.5 再
    * 反解旧版 radius 的写法会让位图路径比 GPU 层浅一档，行切入缓存时整行突然变清晰。
    */
   fun blurMaskFilter(sigmaPx: Float): BlurMaskFilter {
@@ -330,10 +386,21 @@ internal class LyricBlurController(
       blurLayerSigmaKeys.clear()
     }
     lineBitmapCache.evictAll()
+    cacheReleased.fill(false)
   }
 
-  /** 行内容转活跃（逐帧变化）时释放其全部档位的位图缓存 */
+  /**
+   * 行内容转活跃（逐帧变化）时释放其全部档位的位图缓存。
+   *
+   * 同一活跃期内只释放一次：行进入直绘态后该行缓存不再被读取，重复释放只会让
+   * [LruCache.snapshot] 逐帧复制整张缓存表（数百条目）产生无谓的 GC 压力。
+   * 行重新建图（回到静态位图路径）时清除标记，下次转入活跃态仍会释放。
+   */
   fun invalidateLine(index: Int) {
+    // 越界直接忽略：正常路径下 drawLine 前同一帧已先走 updateLine(lineCount = 歌词行数)
+    // 完成扩容，但越界在这里是数组越界崩溃，不值得为省一次判定把跨类调用顺序当成不变量
+    if (index !in cacheReleased.indices || cacheReleased[index]) return
+    cacheReleased[index] = true
     for (key in lineBitmapCache.snapshot().keys) {
       if (key / CACHE_KEY_SLOT_STRIDE == index) lineBitmapCache.remove(key)
     }
@@ -345,6 +412,7 @@ internal class LyricBlurController(
     targets = FloatArray(lineCount)
     starts = FloatArray(lineCount)
     settled = BooleanArray(lineCount) { true }
+    cacheReleased = BooleanArray(lineCount)
   }
 
   private fun ensureCapacity(lineCount: Int) {
@@ -358,6 +426,9 @@ internal class LyricBlurController(
    * 模糊图按 [DOWNSCALE] 降采样栅格化：传给 drawContent 的 σ 保持全分辨率值，
    * Skia 会按位图画布的 CTM 缩放（mapRadius）把模糊折算到位图像素空间，
    * 绘制放大后视觉等效全分辨率。
+   *
+   * 位图是 [Bitmap.Config.ALPHA_8] 覆盖度掩码：字色不烘进位图，改由绘制时的 paint 施加。
+   * 这样 HDR 与 SDR 共用同一份缓存（8-bit 也装不下 >1.0 的宽色域分量），且同预算下能多装 4 倍条目。
    */
   private fun getOrBuildLineBitmap(
     index: Int,
@@ -372,31 +443,40 @@ internal class LyricBlurController(
       if (it.blurKey == blurKey) return it
     }
     if (viewportWidth <= 0 || contentHeight <= 0f) return null
+    // 走到这里说明缓存未命中、即将整行重新栅格化：累计次数以 Perfetto counter 呈现，
+    // setCounter 仍要过 JNI，与 View 里的埋点一样用 isEnabled() 门控
+    lineBitmapBuilds++
+    if (android.os.Trace.isEnabled()) {
+      android.os.Trace.setCounter("Lyric.lineBitmapBuilds", lineBitmapBuilds)
+    }
     // 降采样仅用于模糊图：清晰图直接全分辨率栅格化，避免放大后文字发虚
     val downscaled = blurRadiusPx > CLEAR_THRESHOLD_PX
     val scale = if (downscaled) DOWNSCALE else 1f
-    // pad 必须覆盖高斯光晕的可见范围（约 3σ），且按全分辨率计量、随位图降采样减半：
-    // 取 σ+2 时半分辨率位图里只剩约 0.6σ，光晕在约 1σ 处被硬裁切，行从 GPU 模糊层
-    // （pad 1.5σ+8density ≈ 3.3σ，光晕完整）切入位图缓存时光晕塌陷、文字芯显得锐利，
-    // 看起来像「从模糊变成清晰」
+    // pad 必须覆盖高斯光晕的可见范围（约 3σ），按全分辨率计量、随位图降采样同步缩小（÷1/DOWNSCALE）：
+    // 此前取 σ+2 时，折算到位图空间后只剩约 0.6σ，光晕在约 1σ 处被硬裁切，
+    // 行切入位图缓存时光晕塌陷、文字芯显得锐利，看起来像「从模糊变成清晰」。
+    // GPU 模糊层（drawGpuLayer）取同一口径的 3σ + 8dp，两条路径的光晕范围因此一致
     val padFull = (ceil(blurRadiusPx * 3f).toInt() + 2).coerceAtLeast(0)
     val bmpWidth = (viewportWidth * scale).roundToInt().coerceAtLeast(1)
     val bmpHeight = ((contentHeight + padFull * 2f) * scale).roundToInt().coerceAtLeast(1)
-    val bitmapKb = ((bmpWidth.toLong() * bmpHeight.toLong() * 4L) / 1024L).coerceAtLeast(1L)
+    // ALPHA_8：1 字节/像素，遮罩预算按此计（原先 ARGB_8888 的 4 字节已无必要——颜色不烘进位图）
+    val bitmapKb = ((bmpWidth.toLong() * bmpHeight.toLong()) / 1024L).coerceAtLeast(1L)
     if (bitmapKb > lineBitmapCacheMaxKb / 3L) return null
     val bitmap =
       try {
-        Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
+        Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ALPHA_8)
       } catch (e: OutOfMemoryError) {
         return null
       }
     val bmpCanvas = Canvas(bitmap)
     bmpCanvas.scale(scale, scale)
     // σ 保持全分辨率值传入：BlurMaskFilter 的模糊随画布 CTM 缩放折算（mapRadius），
-    // 乘 scale 会让模糊被 0.5 折算两次，位图路径比 GPU 模糊层浅一档（行切入缓存时变清晰）
+    // 乘 scale 会让模糊被 0.25 折算两次，位图路径比 GPU 模糊层浅一档（行切入缓存时变清晰）
     drawContent(bmpCanvas, padFull.toFloat(), blurRadiusPx)
     val cache = LineBitmap(bitmap = bitmap, padFull = padFull, blurKey = blurKey, downscaled = downscaled)
     lineBitmapCache.put(key, cache)
+    // 该行重新持有缓存图，下次转入活跃直绘态时需要再释放一次
+    if (index in cacheReleased.indices) cacheReleased[index] = false
     if (lineBitmapCache.get(key) !== cache) return null
     return cache
   }
@@ -409,10 +489,21 @@ internal class LyricBlurController(
     lineScale: Float,
     scaleOriginX: Float,
     scaleOriginY: Float,
+    ink: StaticInk,
   ) {
     canvas.save()
     if (lineScale != 1f) {
       canvas.scale(lineScale, lineScale, scaleOriginX, scaleOriginY)
+    }
+    // 掩码位图上色：字色承载亮度体系（SDR 白 / 宽色域 HDR 白），paint alpha 承载行级层次，
+    // 两者解耦后 HDR 只需换字色，层次比例与非 HDR 完全一致。
+    // SDR 必须走 setColor(int)：它内部会 Color.pack(int) 成合法 ColorLong（ARGB 在高 32 位、
+    // 颜色空间索引在低 6 位）；自己拼 long 会因布局不符让 Color.colorSpace() 解析失败并抛异常。
+    // Paint 内部两种 setter 都写同一个 mColor（ColorLong），不存在两套表示互相残留的问题。
+    if (ink.hdrColor != 0L) {
+      bitmapPaint.setColor(ink.hdrColor)
+    } else {
+      bitmapPaint.color = ink.sdrColor
     }
     bitmapPaint.alpha = (alpha.coerceIn(0f, 1f) * 255f).roundToInt()
     // 位图顶部留了 padFull 像素吸收模糊溢出，绘制时把 Y 上推同等距离让正文落在 top

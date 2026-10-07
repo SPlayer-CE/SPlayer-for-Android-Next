@@ -156,6 +156,40 @@ class LyricBlurControllerTest {
   }
 
   @Test
+  fun updateLineSkipsBlurOutsideViewport() {
+    val controller = LyricBlurController(density = 2f)
+    controller.enableBlur = true
+    val radius =
+      controller.updateLine(
+        index = 5,
+        distanceIndex = 5,
+        lineCount = 10,
+        anchorIndex = 2,
+        latestHighlightIndex = 2,
+        active = false,
+        isUserScrolling = false,
+        inViewport = false,
+        viewportCssPx = 400f,
+        deltaMs = 16f,
+      )
+    // 对齐 AMLL #619：视口外不施加模糊（此前为最大档位），行滚入视口时不再从模糊渐入
+    assertEquals(0f, radius, 0.001f)
+  }
+
+  @Test
+  fun invalidateLineIgnoresOutOfRangeIndex() {
+    val controller = LyricBlurController(density = 2f)
+    // 容量为 0 时任何索引都越界
+    controller.invalidateLine(0)
+    controller.reset(10)
+    // 合法索引原本只由「drawLine 前先 updateLine」这条跨类调用顺序保证；
+    // 改成方法内判定后，越界不再是崩溃面
+    controller.invalidateLine(-1)
+    controller.invalidateLine(10)
+    controller.invalidateLine(999)
+  }
+
+  @Test
   fun updateLineTargetsZeroWhileUserScrolling() {
     val controller = LyricBlurController(density = 2f)
     controller.enableBlur = true
