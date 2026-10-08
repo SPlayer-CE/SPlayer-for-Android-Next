@@ -222,6 +222,9 @@ class PlaybackManager private constructor(
   /** FM 续池护栏：每次成功播曲只允许触发一次续池，防止解析全失败的无限续池循环。 */
   private var fmRefillGuard = false
 
+  /** 僵死自救标记：每首歌只允许重建播放链一次，避免僵死循环。 */
+  private var stuckRebuildDone = false
+
   /** 延迟歌曲缓存下载的调度句柄，切歌时取消。 */
   private var pendingSongCacheRunnable: Runnable? = null
 
@@ -396,6 +399,50 @@ class PlaybackManager private constructor(
       }
     }
 
+  /**
+   * BUFFERING 看门狗：涓流/半死连接下 ExoPlayer 永不报错会永久缓冲，这里限时兜底。
+   * 超时先重建播放器管道（不断流时最有效的自救），仍无恢复则上抛 error 走既有恢复链。
+   */
+  private var bufferingRecoveries = 0
+  private val bufferingWatchdogRunnable =
+    object : Runnable {
+      override fun run() {
+        val p = player
+        if (p == null || p.playbackState != Player.STATE_BUFFERING) return
+        if (bufferingRecoveries >= BUFFERING_MAX_RECOVERIES) {
+          cancelBufferingWatchdog()
+          Log.w(TAG, "buffering watchdog exhausted, emit error")
+          emitError(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, "buffering timeout")
+          updateNotification()
+          return
+        }
+        bufferingRecoveries++
+        Log.w(TAG, "buffering watchdog timeout, re-prepare attempt=$bufferingRecoveries")
+        // 自救前先清场：整曲下载 / 离线缓存下载的连接会与重建后的播放流继续抢占
+        cancelPromotion()
+        AudioCacheProvider.cancelFullDownload()
+        cancelSongCacheDownload()
+        try {
+          p.prepare()
+          p.play()
+        } catch (e: Exception) {
+          Log.w(TAG, "buffering watchdog re-prepare failed", e)
+        }
+        updateNotification()
+        emitPlaybackState(true)
+        playbackHandler.postDelayed(this, BUFFERING_WATCHDOG_TIMEOUT_MS)
+      }
+    }
+
+  private fun startBufferingWatchdog() {
+    playbackHandler.removeCallbacks(bufferingWatchdogRunnable)
+    playbackHandler.postDelayed(bufferingWatchdogRunnable, BUFFERING_WATCHDOG_TIMEOUT_MS)
+  }
+
+  private fun cancelBufferingWatchdog() {
+    playbackHandler.removeCallbacks(bufferingWatchdogRunnable)
+  }
+
   init {
     AudioCacheProvider.setDiagnosticListener { tag, message ->
       playbackHandler.post { emitDiagnosticLog(tag, message) }
@@ -418,6 +465,12 @@ class PlaybackManager private constructor(
     private const val CONTENT_MIME_CACHE_MAX_SIZE = 1024
     private const val PROMOTE_AFTER_MS = 10_000L
     private const val NATIVE_ERROR_RECOVERY_MAX_ATTEMPTS = 2
+
+    /** 连续 BUFFERING 超过此时长视为 stall，先轻量重建播放器管道自救。 */
+    private const val BUFFERING_WATCHDOG_TIMEOUT_MS = 20_000L
+
+    /** 看门狗连续自救上限；耗尽后上抛 error，由前端复位加载态并提示。 */
+    private const val BUFFERING_MAX_RECOVERIES = 2
 
     /** 预加载下一曲开头的时长（微秒；PreloadStatus 参数单位为 us）。 */
     private const val PRELOAD_RANGE_US = 10_000_000L
@@ -522,6 +575,8 @@ class PlaybackManager private constructor(
     webViewVisible = visible
     // 后台隐藏时摘除 FFT 监听避免音频线程空算，前台恢复时按需重新挂载
     updateFftListenerAttachment()
+    // 前台恢复时补推一次状态：隐藏期间的状态事件可能被冻结的 WebView 丢弃
+    if (visible) runOnPlaybackThread { emitPlaybackState(true) }
   }
 
   fun load(
@@ -545,13 +600,16 @@ class PlaybackManager private constructor(
     currentMetadata.url = currentSource
 
     cancelPromotion()
+    // 切歌即停掉上一首的整曲下载：旧连接会与新播放流抢占，且单线程下载器会被旧任务占住
+    AudioCacheProvider.cancelFullDownload()
 
     if (currentSource.isNotEmpty()) {
       try {
         val parsed = Uri.parse(currentSource)
         val scheme = parsed.scheme
         if (scheme == "http" || scheme == "https") {
-          val cacheKey = AudioCacheProvider.resolveCacheKey(parsed, currentMetadata.songId)
+          // 与播放读链 / 预载写入统一用无 songId 键，否则 isPromoted 恒 false 导致每播必重下整曲
+          val cacheKey = AudioCacheProvider.resolveCacheKey(parsed)
           val sourceSnapshot = currentSource
           val ttlIndex = AudioPrefetchTtlIndex.getInstance(appContext)
           ttlIndex.markAccess(cacheKey)
@@ -642,6 +700,11 @@ class PlaybackManager private constructor(
           if (pendingPromotionRunnable === holder[0]) pendingPromotionRunnable = null
           return@Runnable
         }
+        if (p != null && p.playbackState == Player.STATE_BUFFERING) {
+          // 缓冲中不起第二连接：整曲下载会与播放流抢占，把 stall 越拖越久
+          if (pendingPromotionRunnable === holder[0]) pendingPromotionRunnable = null
+          return@Runnable
+        }
         if (pendingPromotionRunnable === holder[0]) pendingPromotionRunnable = null
         AudioCacheProvider.prefetchUrlFull(appContext, urlSnapshot)
         Log.d(TAG, "promotion scheduled (download starts): $cacheKey")
@@ -725,6 +788,9 @@ class PlaybackManager private constructor(
   private fun seekInternal(positionMs: Long): JSObject {
     ensureInitialized()
     val safePositionMs = max(0L, positionMs)
+    // seek 后播放侧要重新填缓冲：先摘掉下一曲预载避免其与播放侧争加载资源，
+    // 缓冲补齐（READY）后由 onPlaybackStateChanged 重建
+    releaseNextTrackPreload()
     beginPendingSeek(safePositionMs)
     remoteMode = false
 
@@ -1296,13 +1362,22 @@ class PlaybackManager private constructor(
         override fun onPlaybackStateChanged(playbackState: Int) {
           if (playbackState == Player.STATE_ENDED) {
             stopProgressUpdates()
+            cancelBufferingWatchdog()
             // 注意：handleAutoAdvanceOnEnded 如果返回了 true，意味着 Java 层已经发起了自动下一曲的解析或切换
             if (!handleAutoAdvanceOnEnded()) {
               emitEnded()
             }
           } else if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
             startProgressUpdates()
-            if (playbackState == Player.STATE_READY) calibrateDurationFromPlayer()
+            if (playbackState == Player.STATE_READY) {
+              bufferingRecoveries = 0
+              cancelBufferingWatchdog()
+              calibrateDurationFromPlayer()
+              // seek 收敛期间摘下的下一曲预载在缓冲补齐后重建（内部按 URL 判重，无变化即返回）
+              scheduleNextTrackPreload()
+            } else {
+              startBufferingWatchdog()
+            }
           }
           updateNotification()
           emitPlaybackState(true)
@@ -1339,6 +1414,7 @@ class PlaybackManager private constructor(
 
         override fun onPlayerError(error: PlaybackException) {
           if (tryHandleUrlExpireRetry(error)) return
+          if (rebuildAfterStuckBuffering(error)) return
           if (recoverCurrentTrackAfterError(error)) return
           emitError(error.errorCode, error.message)
           updateNotification()
@@ -1576,6 +1652,9 @@ class PlaybackManager private constructor(
         requestFmRefill(source)
       } else {
         Log.w(TAG, "resolveAndPlayAsync terminal: no playable track, source=$source")
+        // 终局无曲可播必须上抛 error：前端可能仍在等 trackChanged，trackLoading 只能靠事件复位
+        emitError(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, "no playable track: $source")
+        updateNotification()
       }
       return
     }
@@ -1663,6 +1742,14 @@ class PlaybackManager private constructor(
     }
   }
 
+  /** 摘除下一曲预载（seek 收敛 / 错误自救共用）；后续由 READY 分支重建，避免预载与播放侧争加载资源。 */
+  private fun releaseNextTrackPreload() {
+    val item = preloadedNextItem ?: return
+    preloadManager?.remove(item)
+    preloadedNextItem = null
+    preloadedNextUrl = null
+  }
+
   private fun playFromQueue(
     track: PlaybackQueue.Track?,
     source: String,
@@ -1670,6 +1757,10 @@ class PlaybackManager private constructor(
     if (track == null || !track.playable()) return
     resolveTokenCounter.incrementAndGet()
     fmRefillGuard = false
+    // 新曲开播：旧缓冲计数与僵死自救标记作废，看门狗由后续 READY/BUFFERING 状态重建
+    bufferingRecoveries = 0
+    cancelBufferingWatchdog()
+    stuckRebuildDone = false
     nativeRecoverySongId = 0L
     nativeRecoveryAttempts = 0
     // 切歌重置过期重试状态，下一首可重新获得 Exactly 一次机会；同时递增 generation 废弃旧重试回调
@@ -1826,6 +1917,10 @@ class PlaybackManager private constructor(
     val songId = track.songId
     val r =
       Runnable {
+        if (player?.playbackState == Player.STATE_BUFFERING) {
+          Log.d(TAG, "song cache download skipped (buffering) songId=$songId")
+          return@Runnable
+        }
         Log.d(TAG, "song cache download start songId=$songId")
         songCacheExecutor.execute {
           SongCacheFetcher.download(appContext, cacheKey, url)
@@ -2040,6 +2135,56 @@ class PlaybackManager private constructor(
       code == PlaybackException.ERROR_CODE_IO_NO_PERMISSION ||
       code == PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED ||
       code == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE
+  }
+
+  /**
+   * 识别 ExoPlayer 的僵死断言（BUFFERING 且加载已停）。
+   * 该断言被包装成未预期运行时异常，错误码不在 [isRecoverablePlaybackError] 白名单里，
+   * 只按错误码判断会直接静默上抛，播放器再也不恢复。
+   */
+  private fun isStuckBufferingError(error: PlaybackException): Boolean {
+    var cause: Throwable? = error
+    while (cause != null) {
+      if (cause is IllegalStateException && cause.message?.contains("stuck buffering") == true) {
+        return true
+      }
+      cause = cause.cause
+    }
+    return false
+  }
+
+  /**
+   * 僵死自救：就地按当前 URL 重建播放链并回到原位置。
+   * 不依赖 songId 重新解析（本地 / FM 曲目同样适用），每首歌只重建一次防止僵死循环。
+   */
+  private fun rebuildAfterStuckBuffering(error: PlaybackException): Boolean {
+    if (!isStuckBufferingError(error)) return false
+    if (stuckRebuildDone) return false
+    val p = player ?: return false
+    if (currentSource.isEmpty()) return false
+    stuckRebuildDone = true
+    val positionMs = max(0L, getPositionMs())
+    // 重建前清掉全部次要加载通道：僵死大概率由它们与播放侧抢占导致
+    cancelPromotion()
+    AudioCacheProvider.cancelFullDownload()
+    cancelSongCacheDownload()
+    releaseNextTrackPreload()
+    try {
+      p.setMediaItem(buildMediaItem(currentSource, currentMetadata))
+      p.prepare()
+      if (positionMs > 0) {
+        p.seekTo(positionMs)
+        beginPendingSeek(positionMs)
+      }
+      p.play()
+    } catch (e: Exception) {
+      Log.e(TAG, "stuck buffering rebuild failed", e)
+      return false
+    }
+    updateNotification()
+    emitPlaybackState(true)
+    emitProgressChanged()
+    return true
   }
 
   private fun trackToMetadata(track: PlaybackQueue.Track): TrackMetadata {
