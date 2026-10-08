@@ -63,8 +63,9 @@ export const handleEvent = async (event: PlayerEvent): Promise<void> => {
   const status = useStatusStore();
   switch (event.type) {
     case "status":
-      // 歌曲加载中或 loading 事件不更新 UI，保持当前封面/进度/播放状态平滑过渡
-      if (event.data.state === "loading" || status.trackLoading) break;
+      // 切歌加载中不更新 UI，保持当前封面/进度/播放状态平滑过渡；
+      // 播一半的缓冲态（loading）要透出，否则用户看到的是进度冻住而非转圈
+      if (status.trackLoading) break;
       status.state = event.data.state;
       // seek 期间不从 status 事件更新 position，避免回跳；position 更新统一由 position 事件负责
       if (!isSeeking()) {

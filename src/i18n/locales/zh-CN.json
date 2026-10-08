@@ -1324,6 +1324,10 @@
       "label": "隐藏已播放行",
       "description": "播放过的歌词行自动隐藏"
     },
+    "enableHdr": {
+      "label": "歌词 HDR 高亮",
+      "description": "让当前播放行的扫光高亮以 HDR 亮度输出，需要 Android 13 及以上且屏幕支持 HDR"
+    },
     "springPreset": {
       "label": "弹簧预设",
       "description": "歌词滚动动画的弹簧物理参数预设",

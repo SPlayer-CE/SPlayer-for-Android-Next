@@ -446,6 +446,18 @@ class CacheStorage private constructor(
     return ok
   }
 
+  /**
+   * 直接删除 exo 目录文件（SimpleCache 未初始化时的清缓存路径）。调用方必须保证没有活跃
+   * SimpleCache 实例（冷启动早期天然满足；播放中调用会招致索引/磁盘不一致）。
+   */
+  fun clearAudioDiskCache(): Boolean {
+    val dir = typeDir(TYPE_AUDIO)
+    val ok = deleteRecursive(dir)
+    ensureTypeDir(TYPE_AUDIO)
+    perTypeBytes[TYPE_AUDIO]?.set(0L)
+    return ok
+  }
+
   /** 清空所有类型。 */
   fun clearAll(): Boolean {
     var allOk = true

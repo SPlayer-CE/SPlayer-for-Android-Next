@@ -1628,6 +1628,9 @@ const CLIPBOARD_CALL_TIMEOUT_MS = 10_000;
 /** Android 原生保存文件插件调用超时（毫秒），本地写入足够宽裕 */
 const SAVE_FILE_CALL_TIMEOUT_MS = 30_000;
 
+/** Android 播放链路插件调用超时（毫秒）：播放线程阻塞时桥 Promise 永不 settle，用超时兜底 */
+const PLAYBACK_CALL_TIMEOUT_MS = 15_000;
+
 /**
  * Android 插件调用超时兜底：Capacitor 桥在插件方法抛异常或跨桥大载荷失败时
  * 不会 reject Promise，前端 await 将永久挂起；超时转为 reject 保证有明确结果
@@ -1801,11 +1804,15 @@ const bridge = {
     load: async (source: string, options?: LoadOptions): Promise<IpcResponse<LoadResult>> => {
       if (isAndroidPreview) return loadPreviewAudio(source, options);
       if (!isAndroid) return electronApi().player.load(source, options);
-      const result = await getPlaybackPlugin().load({
-        url: source,
-        positionMs: 0,
-        autoPlay: options?.autoPlay ?? true,
-      });
+      const result = await withBridgeTimeout(
+        getPlaybackPlugin().load({
+          url: source,
+          positionMs: 0,
+          autoPlay: options?.autoPlay ?? true,
+        }),
+        PLAYBACK_CALL_TIMEOUT_MS,
+        "load",
+      );
       if (result && typeof result === "object" && "success" in result) {
         return result as IpcResponse<LoadResult>;
       }
@@ -1850,11 +1857,15 @@ const bridge = {
       isAndroidPreview
         ? Promise.resolve(seekPreviewAudio(positionMs))
         : isAndroid
-          ? getPlaybackPlugin()
-              .seek({ positionMs })
-              .then((res) =>
-                res && typeof res === "object" && "success" in res ? res : { success: true },
-              )
+          ? withBridgeTimeout(
+              getPlaybackPlugin()
+                .seek({ positionMs })
+                .then((res) =>
+                  res && typeof res === "object" && "success" in res ? res : { success: true },
+                ),
+              PLAYBACK_CALL_TIMEOUT_MS,
+              "seek",
+            )
           : electronApi().player.seek(positionMs),
     setVolume: (volume: number): Promise<IpcResponse> =>
       isAndroidPreview
@@ -2181,7 +2192,11 @@ const bridge = {
     /** 原生播放指定索引曲目（原生解析并开播；positionMs 为起播进度） */
     playIndex: (index: number, positionMs = 0): Promise<IpcResponse> =>
       isAndroidNative
-        ? getPlaybackPlugin().playIndex({ index, positionMs })
+        ? withBridgeTimeout(
+            getPlaybackPlugin().playIndex({ index, positionMs }),
+            PLAYBACK_CALL_TIMEOUT_MS,
+            "playIndex",
+          )
         : Promise.resolve({ success: true } as IpcResponse),
     /** JS 驱动播放时推送状态到原生通知栏 */
     syncRemoteState: (payload: Record<string, unknown>): Promise<void> =>

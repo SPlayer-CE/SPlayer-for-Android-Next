@@ -2,6 +2,7 @@ import type { SettingCategory } from "@/types/settings-schema";
 import { ALL_PLATFORMS } from "@shared/types/platform";
 import { useSettingsStore } from "@/stores/settings";
 import { isAndroid } from "@/services/bridge";
+import { lyricHdrSupported, loadHdrCapability } from "@/plugins/androidMainLyric";
 import AmllDbServerConfig from "@/components/settings/custom/AmllDbServerConfig.vue";
 import LocalLyricRepoConfig from "@/components/settings/custom/LocalLyricRepoConfig.vue";
 import LyricSourceOrderConfig from "@/components/settings/custom/LyricSourceOrderConfig.vue";
@@ -332,6 +333,20 @@ const lyricCategory: SettingCategory = {
           type: "switch",
           binding: { store: "settings", path: "lyric.hidePassedLines" },
           defaultValue: false,
+        },
+        {
+          key: "enableHdr",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.enableHdr" },
+          defaultValue: false,
+          // 仅原生 Kotlin 渲染器支持 HDR 输出；其它引擎下开关无法下发到原生层，隐藏避免无效项
+          visible: () => lyricEngine() === "kotlin",
+          platform: "android",
+          // 能力未知时先放行（多数设备可用），查到明确不支持才置灰
+          disabled: () => {
+            loadHdrCapability();
+            return lyricHdrSupported.value === false;
+          },
         },
       ],
     },

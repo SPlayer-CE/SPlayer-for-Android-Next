@@ -432,11 +432,16 @@ class MediaSessionManager {
 
     if (playListIndex < 0 || playListIndex >= list.length) {
       console.warn("[MediaSession] applyNativeTrackChanged: playListIndex 越界", { playListIndex });
+      // 终局无曲可跟：原生不会再发事件，这里复位否则前端永久转圈
+      status.trackLoading = false;
       return;
     }
 
     const nextTrack = list[playListIndex];
-    if (!nextTrack) return;
+    if (!nextTrack) {
+      status.trackLoading = false;
+      return;
+    }
 
     // 同步 playIndex
     status.playIndex = playListIndex;

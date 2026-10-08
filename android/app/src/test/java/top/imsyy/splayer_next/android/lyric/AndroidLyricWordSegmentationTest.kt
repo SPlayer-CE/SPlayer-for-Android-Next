@@ -147,6 +147,103 @@ class AndroidLyricWordSegmentationTest {
   }
 
   @Test
+  fun groupsHyphenLinkedSustainAsSingleChunkAndEmphasizes() {
+    // "-" 连接的延音串（如 "whoa-ah-oh-oh"）：整串归为同一词组，
+    // 合并时长 ≥ 1s 时按长音触发强调发光，忽略非 CJK 词 2~7 字符的长音长度限制
+    val words =
+      listOf(
+        NativeLyricWord("whoa-", 0L, 400L),
+        NativeLyricWord("ah-", 400L, 800L),
+        NativeLyricWord("oh-", 800L, 1200L),
+        NativeLyricWord("oh", 1200L, 2000L),
+      )
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertEquals(listOf("whoa-", "ah-", "oh-", "oh"), result.map { it.word.word })
+    assertEquals(1, result.map { it.chunkId }.distinct().size)
+    assertEquals(1, result.map { it.sustainGroupId }.distinct().size)
+    assertTrue(result[0].sustainGroupId >= 0)
+    assertTrue(result.all { it.chunkShouldEmphasize })
+  }
+
+  @Test
+  fun groupsHyphenSplitTokensSeparatedAsIndependentWords() {
+    // 不同 ICU 版本可能把连字符串拆成 "whoa"、"-"、"ah" 等独立词元：
+    // 显式粘合保证仍归为同一延音词组，扫光合并与长音判定稳定生效
+    val words =
+      listOf(
+        NativeLyricWord("whoa", 0L, 500L),
+        NativeLyricWord("-", 500L, 600L),
+        NativeLyricWord("ah", 600L, 1000L),
+        NativeLyricWord("-", 1000L, 1100L),
+        NativeLyricWord("oh", 1100L, 2000L),
+      )
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertEquals(listOf("whoa", "-", "ah", "-", "oh"), result.map { it.word.word })
+    assertEquals(1, result.map { it.chunkId }.distinct().size)
+    assertEquals(1, result.map { it.sustainGroupId }.distinct().size)
+    assertTrue(result.all { it.chunkShouldEmphasize })
+  }
+
+  @Test
+  fun emphasizesWholeLineHyphenSustainSpan() {
+    // TTML 单 span 整串（如 "whoa-ah-oh-oh-ah-oh-oh"）：时长达到长音门槛即发光，
+    // 22 字符长度不再阻断强调
+    val words = listOf(NativeLyricWord("whoa-ah-oh-oh-ah-oh-oh", 1000L, 4000L))
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertEquals(listOf("whoa-ah-oh-oh-ah-oh-oh"), result.map { it.word.word })
+    assertTrue(result[0].sustainGroupId >= 0)
+    assertTrue(result[0].chunkShouldEmphasize)
+  }
+
+  @Test
+  fun keepsShortHyphenSustainOutOfEmphasis() {
+    // 合并时长不足 1s：仍归为同一延音组用于扫光合并，但不按长音发光
+    val words = listOf(NativeLyricWord("whoa-ah", 0L, 800L))
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertTrue(result[0].sustainGroupId >= 0)
+    assertFalse(result[0].chunkShouldEmphasize)
+  }
+
+  @Test
+  fun keepsTrailingHyphenWordOutOfSustainGroup() {
+    // "-" 仅位于词尾（单段，如 "whoa-"）：不构成延音串，保持普通逐词处理
+    val words =
+      listOf(
+        NativeLyricWord("whoa-", 0L, 400L),
+        NativeLyricWord(" hello", 400L, 800L),
+      )
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertEquals(listOf("whoa-", "hello"), result.map { it.word.word })
+    assertTrue(result.all { it.sustainGroupId == -1 })
+  }
+
+  @Test
+  fun keepsSpaceSeparatedHyphenTokensInSeparateChunks() {
+    // 连字符两侧存在空格（"whoa- ah"）即为词界：不粘合为同一词组
+    val words =
+      listOf(
+        NativeLyricWord("whoa- ", 0L, 600L),
+        NativeLyricWord("ah", 600L, 2200L),
+      )
+
+    val result = AndroidLyricWordSegmentation.buildDisplayWords(words)
+
+    assertEquals(listOf("whoa-", "ah"), result.map { it.word.word })
+    assertTrue(result.all { it.sustainGroupId == -1 })
+    assertEquals(2, result.map { it.chunkId }.distinct().size)
+  }
+
+  @Test
   fun normalizesDisorderedWindowsToMonotonicSpatialOrder() {
     // 少数语种自动对齐音节的脏数据形态：时窗乱序（后段先唱）、重叠、倒挂，
     // 规整后每个词的开始不早于前一个词的结束，时长保留，扫光按空间序推进

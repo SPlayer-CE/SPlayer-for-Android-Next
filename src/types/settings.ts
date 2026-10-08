@@ -168,6 +168,8 @@ export interface LyricSettings {
   enableBlur: boolean;
   /** 隐藏已播放行 */
   hidePassedLines: boolean;
+  /** 激活行 HDR 显示（仅 Android 13+ 且面板支持时生效） */
+  enableHdr: boolean;
   /** 弹簧动画预设 */
   springPreset: SpringPreset;
   /** 弹簧质量 */

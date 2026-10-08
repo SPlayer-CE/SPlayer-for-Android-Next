@@ -12,7 +12,9 @@ import java.io.File
  * 原生绘制没有这两条能力，不补齐就会静默落回系统默认字体（表现为字形与字重和 Web 端不一致）：
  * 1. 解析字体链（剥引号、按逗号切分）后按顺序回退：App 私有字体目录 → 系统字体族 → 默认字体
  * 2. 导入字体文件只能用 [Typeface.createFromFile] 加载，原生侧没有任何注册入口
- * 3. 对齐 Blink 的 font-synthesis：单字重字体在请求字重 ≥ 600 时标记为需要合成加粗
+ * 3. 对齐 Blink 的 font-synthesis: weight：请求字重 ≥ 600 且超过字体族能真实提供的档位时合成加粗
+ *    （WebView 侧由 .lyrics-container 的 font-synthesis 承担，原生侧必须用
+ *    [android.graphics.Paint.setFakeBoldText] 自行补齐，详见 [resolveSyntheticBold]）
  *
  * @param context - 用于定位 App 私有字体目录
  */
@@ -78,13 +80,19 @@ class LyricTypefaceResolver(
   ): ResolvedTypeface? {
     for (name in parseFontChain(chain)) {
       loadImportedTypeface(name)?.let { imported ->
-        // 单字重字体无法通过 create 变粗（族内无更粗档位），对齐 Blink 的合成条件
-        val syntheticBold = weight >= SYNTHETIC_BOLD_MIN_WEIGHT && imported.weight < BOLD_FACE_WEIGHT
-        return ResolvedTypeface(Typeface.create(imported, weight, false), syntheticBold)
+        // 导入字体：文件自身字重即族内唯一档位，create 无法凭空变粗，请求更粗时才合成
+        return ResolvedTypeface(
+          Typeface.create(imported, weight, false),
+          resolveSyntheticBold(weight, imported.weight),
+        )
       }
       systemTypeface(name)?.let { system ->
-        // 系统字体族由 create 完成族内字重匹配，不再叠加合成加粗
-        return ResolvedTypeface(Typeface.create(system, weight, false), false)
+        // 系统字体族：create 只在族内取最近档位，请求超出 [SYSTEM_FAMILY_MAX_WEIGHT] 时补合成加粗，
+        // 否则同一份设置下会比 WebView 细一截（WebView 有 font-synthesis: weight）
+        return ResolvedTypeface(
+          Typeface.create(system, weight, false),
+          resolveSyntheticBold(weight, SYSTEM_FAMILY_MAX_WEIGHT),
+        )
       }
     }
     return null
@@ -133,7 +141,12 @@ class LyricTypefaceResolver(
     return typeface.takeIf { it != missingProbe }
   }
 
-  private fun fallback(weight: Int): ResolvedTypeface = ResolvedTypeface(Typeface.create(Typeface.DEFAULT, weight, false), false)
+  /** 字体链为空或全部候选未命中时回退默认字体族；合成加粗判定与系统字体族一致 */
+  private fun fallback(weight: Int): ResolvedTypeface =
+    ResolvedTypeface(
+      Typeface.create(Typeface.DEFAULT, weight, false),
+      resolveSyntheticBold(weight, SYSTEM_FAMILY_MAX_WEIGHT),
+    )
 
   /**
    * 解析 CSS 字体链：剥掉引号、按逗号切分，保留原始顺序
@@ -174,7 +187,37 @@ class LyricTypefaceResolver(
     // Blink BoldThreshold：请求字重达到该值即期望粗体
     private const val SYNTHETIC_BOLD_MIN_WEIGHT = 600
 
-    // SkTypeface.isBold() 的判定线：字体文件自身达到该字重时视为已有粗体
-    private const val BOLD_FACE_WEIGHT = 700
+    // 系统字体族按 Bold(700) 视为族内可提供的上限：600/700 的请求交给真 Bold 字形，
+    // 只有超过 Bold 的请求（800 及以上）才由渲染层合成加粗。
+    //
+    // 「族内到底有哪几档」没有任何公开 API 可查（[Typeface.getWeight] 返回的是创建时写入的请求值
+    // 而非命中档位），因此只能在两种失败模式里选一侧：
+    // - 按 700 记（当前口径）：中日韩族有真 Bold 的机型完全正确；只有 Regular 的机型，600/700
+    //   会取到 Regular 且不合成，表现为比 WebView 细一档（WebView 侧有 font-synthesis）。偏差单向、
+    //   文字清晰可读，退化方向是“细”而不是“糊”。
+    // - 按 400 记（曾用口径，恒合成）：只有 Regular 的机型上与 WebView 一致，但在有真 Bold 的机型上
+    //   等于“真 Bold 再描一圈边”——中大字号下密笔画字（囊/曦）会粘连糊成一团，且正好命中 600/700
+    //   这个最常用的设置区间，属不可接受的观感缺陷。
+    // 取 700 即“宁可偏细，不可糊”。若真机核实某机型的中日韩回退确实只有 Regular、且偏细不可接受
+    // （`adb shell cat /system/etc/fonts.xml` 查 zh-Hans 族有无 weight="700" 条目），把这个常量改回
+    // 400 即可恢复恒合成：前端已按原样下发设置字重，口径只由这一个常量决定。
+    private const val SYSTEM_FAMILY_MAX_WEIGHT = 700
+
+    /**
+     * 对齐 Blink 的 font-synthesis: weight —— 是否需要由渲染层合成加粗。
+     *
+     * Blink 的规则是「请求字重达到粗体阈值且命中的字形比请求更细时合成」；
+     * Android 侧 [Typeface.getWeight] 返回的是创建时写入的请求值而非命中档位，
+     * 没有任何公开 API 能反查字体族可用字重，因此可用字重由调用方给出：
+     * 导入字体用文件自身字重（精确），系统字体族与默认字体用 [SYSTEM_FAMILY_MAX_WEIGHT]。
+     *
+     * @param weight - 请求字重（App 直接下发设置字重，与桌面 WebView 一致，不再做放大）
+     * @param availableWeight - 该字体族能真实提供的字重
+     * @returns true 表示需要合成加粗
+     */
+    internal fun resolveSyntheticBold(
+      weight: Int,
+      availableWeight: Int,
+    ): Boolean = weight >= SYNTHETIC_BOLD_MIN_WEIGHT && availableWeight < weight
   }
 }

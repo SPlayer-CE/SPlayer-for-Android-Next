@@ -93,6 +93,8 @@ let consecutiveFailures = 0;
 const MAX_CONSECUTIVE_FAILURES = 5;
 /** 失败后跳下一首的节流延迟（毫秒） */
 const SKIP_ON_ERROR_DELAY_MS = 1000;
+/** Android 原生起播终局等待上限（毫秒）：trackChanged / error 迟迟不到时复位加载态 */
+const NATIVE_LOAD_TIMEOUT_MS = 20_000;
 
 /**
  * 单曲级失败兜? * 达到连续失败上限 / 队列长度则交 onQueueEnded 停下
@@ -364,7 +366,17 @@ const loadTrack = async (track: Track | null, context?: PlaybackContext): Promis
     } catch (error) {
       console.warn("[player] android native load failed", error);
       if (myToken === trackToken) status.trackLoading = false;
+      return;
     }
+    // playIndex 只代表"已受理"，开播终局由原生 trackChanged / error 给出；
+    // 事件可能因播放线程阻塞或解析卡住而不到，起表兜底复位加载态
+    window.setTimeout(() => {
+      if (myToken === trackToken && status.trackLoading) {
+        console.warn("[player] android native load timed out, reset loading state");
+        status.trackLoading = false;
+        status.state = "idle";
+      }
+    }, NATIVE_LOAD_TIMEOUT_MS);
     return;
   }
   // 消费预载结果

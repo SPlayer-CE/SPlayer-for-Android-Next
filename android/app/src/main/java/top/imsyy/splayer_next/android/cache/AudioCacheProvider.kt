@@ -510,6 +510,15 @@ object AudioCacheProvider {
     }
   }
 
+  /**
+   * 取消进行中的整曲下载。切歌 / 看门狗自救时调用，避免下载连接与播放流抢占
+   * （部分音源限制并发连接，第二连接会直接拖慢或掐断播放流）。
+   */
+  @JvmStatic
+  fun cancelFullDownload() {
+    currentFullCancelFlag?.set(true)
+  }
+
   @JvmStatic
   fun cancelAllPrefetch() {
     prefetchGeneration++
@@ -532,6 +541,13 @@ object AudioCacheProvider {
         } catch (e: Throwable) {
           Log.w(TAG, "removeResource failed: $key", e)
         }
+      }
+    } else {
+      // SimpleCache 尚未初始化（如刚启动就清缓存）：资源不在内存索引里，直接删 exo 目录
+      try {
+        CacheStorage.getInstance(appContext).clearAudioDiskCache()
+      } catch (e: Throwable) {
+        Log.w(TAG, "clearAudioDiskCache failed", e)
       }
     }
     AudioPrefetchTtlIndex.getInstance(appContext).clearAllPromoted()

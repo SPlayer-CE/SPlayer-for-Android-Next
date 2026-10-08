@@ -3,6 +3,7 @@ package top.imsyy.splayer_next.android.lyric
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -31,10 +32,10 @@ private data class QueuedUpdate<T>(
 private class SpringSolution private constructor(
   /** 静止解标记:position 恒为 to,velocity/acceleration 恒为 0 */
   private val constant: Boolean,
-  /** 构建时起始位置,负时间分支(delay 语义)使用 */
-  private val from: Float,
-  /** 目标位置 */
-  private val to: Float,
+  /** 构建时起始位置,负时间分支(delay 语义)使用;静止解需原地平移,故为可变 */
+  private var from: Float,
+  /** 目标位置;静止解需原地平移,故为可变 */
+  private var to: Float,
   /** true 为欠阻尼,false 为临界阻尼/soft */
   private val underDamped: Boolean,
   // 临界阻尼/soft 系数: x(t)=to-(delta+t*leftover)*e^{at}
@@ -93,6 +94,21 @@ private class SpringSolution private constructor(
     return -e * angularFreq * (criticalLeftover + u)
   }
 
+  /** 是否为静止解(常数曲线)：静止解可原地平移而不必重建，见 [translate] */
+  val isConstant: Boolean get() = constant
+
+  /**
+   * 静止解原地平移：常数曲线只有目标值参与求值(position 恒返回 to，速度与加速度恒为 0)，
+   * 平移后仍是同一条曲线整体位移，只需同步移动 from/to，无需重建对象。
+   *
+   * 仅静止解可调用：非静止解的闭式解依赖 delta 与 v0，平移后必须由
+   * [Spring.buildSpringSolution] 重建。
+   */
+  fun translate(delta: Float) {
+    from += delta
+    to += delta
+  }
+
   companion object {
     /** 静止解:位置恒为目标位置,速度与加速度恒为 0 */
     fun constant(target: Float): SpringSolution = SpringSolution(true, target, target, false, 0f, 0f, 0f, 0f, 0f)
@@ -137,6 +153,9 @@ class Spring(
 
   /** 是否已稳定(对齐 AMLL settled 字段) */
   private var settled = true
+
+  /** 位置延迟队列是否为空（卡住归位安全网用：排队中的行豁免） */
+  fun isQueueEmpty(): Boolean = queuePosition == null
 
   /**
    * 根据当前参数一次性构建解析解曲线。
@@ -197,6 +216,10 @@ class Spring(
     if (isSettled) {
       settled = true
       currentPosition = targetPosition
+      // 收敛后归一到常数解：位置恒等于目标（等价于旧解在 t→∞ 的极限，被丢弃的残余速度/加速度
+      // 已由上面的判据限制在 0.01 以内，远低于一个像素），且后续滚动帧的 translateBy 能走
+      // 原地平移快路径；不归一的话非常数解会迫使每帧重建解析解
+      solution = SpringSolution.constant(targetPosition)
     }
     return isSettled
   }
@@ -220,6 +243,10 @@ class Spring(
    *
    * 对齐 AMLL:无延迟且目标与当前目标相差不足 0.001 时,仅丢弃排队中的位置更新并直接返回,
    * 不重启求解器,避免相同目标反复 resetSolver 打断弹簧运动的连续性
+   *
+   * 不变式:带延迟的重复排队**不得推迟**待触发时刻。同值沿用原倒计时,异值沿用更早的到期时刻,
+   * 使队列到期时间单调不增。调用方可以任意频繁地重发目标(布局重算),最迟仍在首次排定的那次
+   * 延迟内生效;否则级联延迟会被无限续期,行位置冻结在过期目标上并逐次累积滞后
    */
   fun setTargetPosition(
     targetPosition: Float,
@@ -230,13 +257,64 @@ class Spring(
       return
     }
     if (delay > 0f) {
-      queuePosition = QueuedUpdate(targetPosition, delay)
+      // 延迟队列的 time 是逐帧扣减的倒计时,重新挂载会把它拉回满值。布局重算(锚点前移、
+      // 活跃行集合变化)会为全部下游行重发目标,若每次都按满 delay 重挂,级联延迟(几何累加,
+      // 饱和上限约 1s)永远归不了零,该行的 targetPosition 就此冻结在过期值上,位置逐次累积
+      // 滞后直到掉出视口裁剪区——表现就是「未来的行整片消失」。
+      //
+      // 两个收口:
+      // - 目标相同:直接沿用原倒计时,重发不推迟;
+      // - 目标不同:沿用更早的那个到期时刻,使待触发时刻单调不增,保证最迟在首次排定的那次
+      //   延迟内必定生效,与重算次数无关。
+      val pending = queuePosition
+      if (pending != null) {
+        if (abs(pending.value - targetPosition) < 0.001f) return
+        queuePosition = QueuedUpdate(targetPosition, min(pending.time, delay))
+      } else {
+        queuePosition = QueuedUpdate(targetPosition, delay)
+      }
       settled = false
     } else {
       queuePosition = null
       this.targetPosition = targetPosition
       resetSolver()
     }
+  }
+
+  /**
+   * 平移当前位置与目标位置,保持「位置与速度」连续,不打断正在进行的弹簧运动
+   *
+   * 用于外部增量平移,例如滚动跟手时把本帧的偏移增量瞬时加到所有行上。
+   * 不能用 [setPosition] 代替:它会重建常数解并清空速度与排队目标,逐帧调用等于每帧从静止
+   * 重新起跑,过渡时间被拉长数倍(SpringTest 有与不受扰对照的用例)。
+   *
+   * 实现要点,改动前先读:
+   * - 飞行中(非静止解)必须重建曲线:平移后「当前值 → 目标」的距离与 v0 都变了,旧的闭式解不再适用;
+   * - 重建必须同时把 [currentTime] 归零:解曲线按"相对构建起点的时间"求值
+   *   (SpringSolution.position 内 elapsed = t),只重建不归零会让新曲线被当成已经走了
+   *   currentTime 那么久,位置瞬间冲出(SpringTest 有相位连续用例钉住);
+   * - 不改动 [settled]:已收敛行平移后 delta 与 v0 均为 0,重建出的曲线恒等于目标值,
+   *   settled 保持 true 才能继续短路 [update],纯滚动帧的零延迟同目标早退也才成立;
+   * - 静止解走原地平移快路径:纯滚动帧全表弹簧都处于静止态,逐行重建会在每帧产生与行数
+   *   同量的 SpringSolution 分配(数百行歌词可达每秒上万次),原地平移与其数值等价。
+   *
+   * @param delta - 平移量(正负均可),0 时不产生任何副作用
+   */
+  fun translateBy(delta: Float) {
+    if (delta == 0f) return
+    currentPosition += delta
+    targetPosition += delta
+    if (solution.isConstant) {
+      // 常数曲线平移后形状不变,直接同步 from/to 即为重建结果(delta 与 v0 均为 0)
+      solution.translate(delta)
+    } else {
+      // buildSpringSolution 以「当前字段 + 旧解在 currentTime 的速度」为参数重建闭式解,
+      // 因此必须先平移字段、再重建;重建后时钟归零,新曲线以此刻为原点
+      solution = buildSpringSolution()
+    }
+    currentTime = 0f
+    // 排队的延迟目标同样是绝对位置,必须一并平移,否则到点生效时会把行拉回 delta
+    queuePosition = queuePosition?.let { QueuedUpdate(it.value + delta, it.time) }
   }
 
   /**
