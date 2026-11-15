@@ -1750,6 +1750,52 @@ class PlaybackManager private constructor(
     preloadedNextUrl = null
   }
 
+  /**
+   * 只把曲目装载进原生播放器并定位到 positionMs，保持暂停态。
+   *
+   * 冷启动且未开启自动播放时用：若什么都不装，用户点播放键时 play() 作用于空播放器，
+   * 表现为「进去后播不了当前歌，得切一下歌」。装好之后点播放即可直接出声。
+   */
+  private fun preloadFromQueue(
+    track: PlaybackQueue.Track?,
+    source: String,
+    positionMs: Long,
+  ) {
+    if (track == null || !track.playable()) return
+    resolveTokenCounter.incrementAndGet()
+    fmRefillGuard = false
+    bufferingRecoveries = 0
+    cancelBufferingWatchdog()
+    stuckRebuildDone = false
+    nativeRecoverySongId = 0L
+    nativeRecoveryAttempts = 0
+    urlExpireRetryGeneration.incrementAndGet()
+    urlExpireRetried = false
+    urlExpireRetriedSongId = 0L
+
+    val metadata = trackToMetadata(track)
+    startTrackFromState(track.url, metadata, track.liked, true, autoPlay = false)
+    if (positionMs > 0) restoreSeekAfterStart(positionMs)
+    loadCoverBitmapAsync(metadata.coverUrl)
+
+    plugin?.let {
+      val payload = JSObject()
+      payload.put("action", "trackChanged")
+      payload.put("success", true)
+      payload.put("songId", track.songId)
+      payload.put("playListIndex", track.playListIndex)
+      payload.put("source", source)
+      payload.put("liked", track.liked)
+      payload.put("url", track.url)
+      payload.put("title", track.title)
+      payload.put("artist", track.artist)
+      payload.put("album", track.album)
+      payload.put("coverUrl", track.coverUrl)
+      payload.put("durationMs", track.durationMs)
+      it.emitEvent("customAction", payload, true)
+    }
+  }
+
   private fun playFromQueue(
     track: PlaybackQueue.Track?,
     source: String,
@@ -1803,16 +1849,18 @@ class PlaybackManager private constructor(
   fun playIndexAt(
     index: Int,
     positionMs: Long,
-  ) = onPlaybackThread { playIndexAtInternal(index, positionMs) }
+    preloadOnly: Boolean = false,
+  ) = onPlaybackThread { playIndexAtInternal(index, positionMs, preloadOnly) }
 
   @Synchronized
   private fun playIndexAtInternal(
     index: Int,
     positionMs: Long,
+    preloadOnly: Boolean = false,
   ) {
     ensureInitialized()
     ensureServiceRunning()
-    Log.d(TAG, "playIndexAt index=$index positionMs=$positionMs fm=$personalFmMode")
+    Log.d(TAG, "playIndexAt index=$index positionMs=$positionMs fm=$personalFmMode preload=$preloadOnly")
     val track = playbackQueue.trackAt(index)
     if (track == null) {
       // 越界必须上抛 error：插件调用仍会正常 resolve，JS 只能靠该事件复位 trackLoading
@@ -1823,8 +1871,12 @@ class PlaybackManager private constructor(
     // 锚定游标到点击曲目：否则解析失败跳曲、后续 next/prev、预取 upcoming 都仍以旧曲目为基准
     if (!personalFmMode) playbackQueue.setCurrentIndex(index)
     if (track.playable()) {
-      playFromQueue(track, "index")
-      restoreSeekAfterStart(positionMs)
+      if (preloadOnly) {
+        preloadFromQueue(track, "index", positionMs)
+      } else {
+        playFromQueue(track, "index")
+        restoreSeekAfterStart(positionMs)
+      }
       prefetchUpcomingUrls()
       return
     }
@@ -1840,8 +1892,12 @@ class PlaybackManager private constructor(
         }
         track.url = url
         playbackQueue.updateTrackUrl(track, url)
-        playFromQueue(track, "index")
-        restoreSeekAfterStart(positionMs)
+        if (preloadOnly) {
+          preloadFromQueue(track, "index", positionMs)
+        } else {
+          playFromQueue(track, "index")
+          restoreSeekAfterStart(positionMs)
+        }
         prefetchUpcomingUrls()
       }
     }
@@ -2218,6 +2274,7 @@ class PlaybackManager private constructor(
     metadata: TrackMetadata?,
     likedState: Boolean,
     emitProgressImmediately: Boolean,
+    autoPlay: Boolean = true,
   ) {
     if (player == null) return
     currentSource = source ?: ""
@@ -2244,7 +2301,8 @@ class PlaybackManager private constructor(
       }
       player?.prepare()
       player?.seekTo(0L)
-      player?.play()
+      // 预载场景（冷启动恢复且未开自动播放）只装载不发声
+      if (autoPlay) player?.play()
     }
     loadCoverBitmapAsync(currentMetadata.coverUrl)
     updateMediaSessionButtons()
