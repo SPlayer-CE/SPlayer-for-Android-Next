@@ -90,13 +90,17 @@ class AndroidNativePlaybackPlugin : Plugin() {
     }
   }
 
-  /** 播放指定索引的曲目（JS 点击任意歌曲的原生入口）。 */
+  /**
+   * 播放指定索引的曲目（JS 点击任意歌曲的原生入口）。
+   * preloadOnly=true：只装载并定位，保持暂停态（冷启动恢复用，避免用户没开自动播放却出声）。
+   */
   @PluginMethod
   fun playIndex(call: PluginCall) {
     val index = call.getInt("index", -1) ?: -1
     val positionMs = call.getDouble("positionMs", 0.0)?.toLong() ?: 0L
+    val preloadOnly = call.getBoolean("preloadOnly", false) ?: false
     resolveOnPlayback(call) {
-      PlaybackManager.getInstance(context).playIndexAt(index, positionMs)
+      PlaybackManager.getInstance(context).playIndexAt(index, positionMs, preloadOnly)
       JSObject()
     }
   }

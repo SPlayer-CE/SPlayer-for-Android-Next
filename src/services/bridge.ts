@@ -205,8 +205,15 @@ interface AndroidNativePlaybackPlugin {
   next: () => Promise<IpcResponse>;
   /** 切上一首（原生队列权威推进） */
   previous: () => Promise<IpcResponse>;
-  /** 播放指定索引的曲目（原生解析并开播；positionMs 为起播进度） */
-  playIndex: (options: { index: number; positionMs?: number }) => Promise<IpcResponse>;
+  /**
+   * 播放指定索引的曲目（原生解析并开播；positionMs 为起播进度）
+   * preloadOnly=true 时只装载并定位到 positionMs，不自动起播（冷启动保持暂停态用）
+   */
+  playIndex: (options: {
+    index: number;
+    positionMs?: number;
+    preloadOnly?: boolean;
+  }) => Promise<IpcResponse>;
   pause: () => Promise<IpcResponse>;
   stop: () => Promise<IpcResponse>;
   seek: (options: { positionMs: number }) => Promise<IpcResponse>;
@@ -2190,10 +2197,10 @@ const bridge = {
         ? getPlaybackPlugin().previous()
         : Promise.resolve({ success: true } as IpcResponse),
     /** 原生播放指定索引曲目（原生解析并开播；positionMs 为起播进度） */
-    playIndex: (index: number, positionMs = 0): Promise<IpcResponse> =>
+    playIndex: (index: number, positionMs = 0, preloadOnly = false): Promise<IpcResponse> =>
       isAndroidNative
         ? withBridgeTimeout(
-            getPlaybackPlugin().playIndex({ index, positionMs }),
+            getPlaybackPlugin().playIndex({ index, positionMs, preloadOnly }),
             PLAYBACK_CALL_TIMEOUT_MS,
             "playIndex",
           )

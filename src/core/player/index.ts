@@ -528,7 +528,9 @@ export const recoverFromSourceFailure = async (): Promise<void> => {
 export const play = async (): Promise<void> => {
   if (tryRemoteControl("play")) return;
   const status = useStatusStore();
-  if (status.state === "stopped" && status.currentTrack) {
+  // idle / stopped：播放器里没有有效曲目，直接调用 play() 是空操作，
+  // 必须先重新装载当前曲，否则表现为「点了播放没反应，得切一下歌」
+  if ((status.state === "stopped" || status.state === "idle") && status.currentTrack) {
     await loadTrack(status.currentTrack, status.currentPlaybackContext);
     return;
   }
@@ -1280,11 +1282,16 @@ export const restoreLastTrack = async (): Promise<void> => {
   // 进度恢复与桌面一致受 rememberLastTrack 门控
   if (isAndroidNative) {
     await mediaSessionManager.syncAndroidPlaybackContext();
+    const resumePosition = settings.system.player.rememberLastTrack ? lastPosition : 0;
     if (settings.system.player.autoPlay) {
-      const resumePosition = settings.system.player.rememberLastTrack ? lastPosition : 0;
       await bridge.android.playIndex(status.fmMode ? 0 : status.playIndex, resumePosition);
     } else {
-      status.state = "idle";
+      // 不自动播放也要先把当前曲装进原生播放器：
+      // 否则冷启动后原生侧 currentMediaItem 为空，用户点播放键时 play() 只作用于空播放器，
+      // 表现为「进去后播不了当前歌，必须切一下歌才正常」。这里以暂停态预载并定位进度，
+      // 之后点播放即可直接出声。
+      await bridge.android.playIndex(status.fmMode ? 0 : status.playIndex, resumePosition, true);
+      status.state = "paused";
     }
     return;
   }
